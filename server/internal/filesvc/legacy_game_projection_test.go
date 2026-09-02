@@ -1,20 +1,19 @@
 package filesvc
 
 import (
+	_ "embed"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 
 	"moesekai/server/internal/store"
 )
 
+//go:embed legacy_game_projection_550_v1.json
+var legacyGameProjection550V1 []byte
+
 func TestUpconvertLegacyPublication550RestoresGameVersion(t *testing.T) {
-	body, err := os.ReadFile(filepath.Join("testdata", "legacy_game_projection_550_v1.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	body := legacyGameProjection550V1
 	converted, versions, err := upconvertLegacyPublication(550, body)
 	if err != nil {
 		t.Fatal(err)
@@ -67,10 +66,7 @@ func TestUpconvertLegacyPublicationSkipsUnknownSongs(t *testing.T) {
 }
 
 func TestApplyLegacyGameProjectionsUpdatesIndex(t *testing.T) {
-	body, err := os.ReadFile(filepath.Join("testdata", "legacy_game_projection_550_v1.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	body := legacyGameProjection550V1
 	projected := map[string][]byte{"translation/lyrics/music_550.json": body}
 	songs := []store.PublicLyricsIndexSong{{
 		MusicID: 550, Revision: 5, State: store.PublicLyricsStateComplete,
