@@ -1,0 +1,985 @@
+{
+  "version": 1,
+  "musicId": 550,
+  "revision": 5,
+  "updatedAt": "2026-09-02T12:31:10Z",
+  "attribution": "雪莹ちゃん",
+  "attributions": [
+    {
+      "provider": "sekaipedia",
+      "title": "shake it!",
+      "revisionId": 344920,
+      "revisionUrl": "https://www.sekaipedia.org/wiki/shake_it%21?oldid=344920",
+      "licenseName": "CC BY-SA 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0/"
+    }
+  ],
+  "lines": [
+    {
+      "id": "line-1",
+      "order": 0,
+      "japanese": "寂しくて切ない一人の夜には",
+      "zh-CN": "寂寞难耐 独自一人的夜晚",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "寂しくて切ない一人の夜には",
+          "performerIds": [
+            22
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-2",
+      "order": 1,
+      "japanese": "消えたい言葉を捜して",
+      "zh-CN": "寻觅着想要抹去的话语",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "消えたい言葉を捜して",
+          "performerIds": [
+            22
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-3",
+      "order": 2,
+      "japanese": "秘密のドアを抜けてきて here we go",
+      "zh-CN": "穿过那扇秘密之门走出来吧 here we go",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "秘密のドアを抜けてきて here we go",
+          "performerIds": [
+            22
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-4",
+      "order": 3,
+      "japanese": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "zh-CN": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "oh yeah ",
+          "performerIds": [
+            22
+          ]
+        },
+        {
+          "text": "(oh yeah) ",
+          "performerIds": [
+            5,
+            6,
+            7,
+            8,
+            22
+          ]
+        },
+        {
+          "text": "oh yeah ",
+          "performerIds": [
+            22
+          ]
+        },
+        {
+          "text": "(oh yeah)",
+          "performerIds": [
+            5,
+            6,
+            7,
+            8,
+            22
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-5",
+      "order": 4,
+      "japanese": "目の前の扉を開ければ",
+      "zh-CN": "只要推开眼前的这扇门扉",
+      "en-US": "",
+      "stanzaBreakBefore": true,
+      "segments": [
+        {
+          "text": "目の前の扉を開ければ",
+          "performerIds": [
+            6
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-6",
+      "order": 5,
+      "japanese": "そう、終わりのない夜への始まりだ",
+      "zh-CN": "没错 这便是永无止境之夜的开端",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "そう、終わりのない夜への始まりだ",
+          "performerIds": [
+            6
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-7",
+      "order": 6,
+      "japanese": "気球状のフロアの影から",
+      "zh-CN": "从热气球般的舞池阴影中",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "気球状のフロアの影から",
+          "performerIds": [
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-8",
+      "order": 7,
+      "japanese": "四次元への旅が始まるよ",
+      "zh-CN": "通往四次元的旅程就要启程咯",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "四次元への旅が始まるよ",
+          "performerIds": [
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-9",
+      "order": 8,
+      "japanese": "流星の箱舟に乗って",
+      "zh-CN": "乘上流星构筑的方舟",
+      "en-US": "",
+      "stanzaBreakBefore": true,
+      "segments": [
+        {
+          "text": "流星の箱舟に乗って",
+          "performerIds": [
+            7
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-10",
+      "order": 9,
+      "japanese": "さぁ　時空旅行へと進んでいくのさ",
+      "zh-CN": "来吧 一同迈向时空穿梭之旅",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "さぁ　時空旅行へと進んでいくのさ",
+          "performerIds": [
+            7
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-11",
+      "order": 10,
+      "japanese": "天気予報は当てにならないから",
+      "zh-CN": "反正天气预报向来靠不住",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "天気予報は当てにならないから",
+          "performerIds": [
+            8
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-12",
+      "order": 11,
+      "japanese": "気の向くまま all right (all right)",
+      "zh-CN": "就随心所欲吧 all right (all right)",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "気の向くまま all right ",
+          "performerIds": [
+            8
+          ]
+        },
+        {
+          "text": "(all right)",
+          "performerIds": [
+            22
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-13",
+      "order": 12,
+      "japanese": "Today is All night be",
+      "zh-CN": "Today is All night be",
+      "en-US": "",
+      "stanzaBreakBefore": true,
+      "segments": [
+        {
+          "text": "Today is All night be",
+          "performerIds": [
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-14",
+      "order": 13,
+      "japanese": "funky funky funky night",
+      "zh-CN": "funky funky funky night",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "funky funky funky night",
+          "performerIds": [
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-15",
+      "order": 14,
+      "japanese": "You \u0026 I be together",
+      "zh-CN": "You \u0026 I be together",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "You \u0026 I be together",
+          "performerIds": [
+            8
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-16",
+      "order": 15,
+      "japanese": "funky funky funky night",
+      "zh-CN": "funky funky funky night",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "funky funky funky night",
+          "performerIds": [
+            8
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-17",
+      "order": 16,
+      "japanese": "Today is All night be",
+      "zh-CN": "Today is All night be",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "Today is All night be",
+          "performerIds": [
+            6
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-18",
+      "order": 17,
+      "japanese": "funky funky funky night",
+      "zh-CN": "funky funky funky night",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "funky funky funky night",
+          "performerIds": [
+            6
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-19",
+      "order": 18,
+      "japanese": "You \u0026 I funky night!",
+      "zh-CN": "You \u0026 I funky night!",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "You \u0026 I funky night!",
+          "performerIds": [
+            22
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-20",
+      "order": 19,
+      "japanese": "☆あげ↑てきな",
+      "zh-CN": "☆嗨起来吧↑",
+      "en-US": "",
+      "stanzaBreakBefore": true,
+      "segments": [
+        {
+          "text": "☆あげ↑てきな",
+          "performerIds": [
+            7
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-21",
+      "order": 20,
+      "japanese": "Dance Dance 君の瞳から 輝く金の流星が",
+      "zh-CN": "Dance Dance 从你的双眸中 闪烁出璀璨的金色流星",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "Dance Dance 君の瞳から ",
+          "performerIds": [
+            7
+          ]
+        },
+        {
+          "text": "輝く金の流星が",
+          "performerIds": [
+            22
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-22",
+      "order": 21,
+      "japanese": "秘密のドアを抜けてきて here we go",
+      "zh-CN": "穿过那扇秘密之门走出来吧 here we go",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "秘密のドアを抜けてきて here we go",
+          "performerIds": [
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-23",
+      "order": 22,
+      "japanese": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "zh-CN": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "oh yeah ",
+          "performerIds": [
+            5
+          ]
+        },
+        {
+          "text": "(oh yeah) ",
+          "performerIds": [
+            7,
+            22
+          ]
+        },
+        {
+          "text": "oh yeah ",
+          "performerIds": [
+            22
+          ]
+        },
+        {
+          "text": "(oh yeah)",
+          "performerIds": [
+            7,
+            22
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-24",
+      "order": 23,
+      "japanese": "yeah yeah yeah yeah",
+      "zh-CN": "yeah yeah yeah yeah",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "yeah yeah yeah yeah",
+          "performerIds": [
+            5,
+            7
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-25",
+      "order": 24,
+      "japanese": "Shake Shake 今夜は止まらない",
+      "zh-CN": "Shake Shake 今夜绝不停歇",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "Shake Shake 今夜は止まらない",
+          "performerIds": [
+            8
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-26",
+      "order": 25,
+      "japanese": "だから今は　oh　夢の中",
+      "zh-CN": "所以此刻就在 oh 梦境之中",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "だから今は　oh　夢の中",
+          "performerIds": [
+            8
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-27",
+      "order": 26,
+      "japanese": "ミラーボールが回りまわる hurry up",
+      "zh-CN": "霓虹球旋转不休 hurry up",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "ミラーボールが回りまわる hurry up",
+          "performerIds": [
+            6
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-28",
+      "order": 27,
+      "japanese": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "zh-CN": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "oh yeah ",
+          "performerIds": [
+            6
+          ]
+        },
+        {
+          "text": "(oh yeah) ",
+          "performerIds": [
+            7,
+            22
+          ]
+        },
+        {
+          "text": "oh yeah ",
+          "performerIds": [
+            22
+          ]
+        },
+        {
+          "text": "(oh yeah)",
+          "performerIds": [
+            7,
+            22
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-29",
+      "order": 28,
+      "japanese": "yeah yeah yeah yeah",
+      "zh-CN": "yeah yeah yeah yeah",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "yeah yeah yeah yeah",
+          "performerIds": [
+            6,
+            8
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-30",
+      "order": 29,
+      "japanese": "Dance Dance 君の瞳から…",
+      "zh-CN": "Dance Dance 从你的双眸中……",
+      "en-US": "",
+      "stanzaBreakBefore": true,
+      "segments": [
+        {
+          "text": "Dance Dance 君の瞳から…",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-31",
+      "order": 30,
+      "japanese": "Shake Shake 今夜は止まらない…",
+      "zh-CN": "Shake Shake 今夜绝不停歇……",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "Shake Shake 今夜は止まらない…",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-32",
+      "order": 31,
+      "japanese": "(止まらない) (止まらない) (止まらない) (止まらない)",
+      "zh-CN": "(停不下来) (停不下来) (停不下来) (停不下来)",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "(止まらない) (止まらない) (止まらない) (止まらない)",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-33",
+      "order": 32,
+      "japanese": "(止まらない) (止まらない) (止まらない) (止まらない)",
+      "zh-CN": "(停不下来) (停不下来) (停不下来) (停不下来)",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "(止まらない) (止まらない) (止まらない) (止まらない)",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-34",
+      "order": 33,
+      "japanese": "☆あげ↑てきな",
+      "zh-CN": "☆嗨起来吧↑",
+      "en-US": "",
+      "stanzaBreakBefore": true,
+      "segments": [
+        {
+          "text": "☆あげ↑てきな",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-35",
+      "order": 34,
+      "japanese": "Dance Dance 君の瞳から　輝く金の流星が",
+      "zh-CN": "Dance Dance 从你的双眸中　闪烁出璀璨的金色流星",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "Dance Dance 君の瞳から　輝く金の流星が",
+          "performerIds": [
+            22
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-36",
+      "order": 35,
+      "japanese": "秘密のドアを抜けてきて here we go",
+      "zh-CN": "穿过那扇秘密之门走出来吧 here we go",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "秘密のドアを抜けてきて here we go",
+          "performerIds": [
+            7
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-37",
+      "order": 36,
+      "japanese": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "zh-CN": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "oh yeah ",
+          "performerIds": [
+            7
+          ]
+        },
+        {
+          "text": "(oh yeah) ",
+          "performerIds": [
+            5,
+            7,
+            22
+          ]
+        },
+        {
+          "text": "oh yeah ",
+          "performerIds": [
+            22
+          ]
+        },
+        {
+          "text": "(oh yeah)",
+          "performerIds": [
+            5,
+            7,
+            22
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-38",
+      "order": 37,
+      "japanese": "yeah yeah yeah yeah",
+      "zh-CN": "yeah yeah yeah yeah",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "yeah yeah yeah yeah",
+          "performerIds": [
+            5,
+            7
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-39",
+      "order": 38,
+      "japanese": "Shake Shake 今夜は止まらない",
+      "zh-CN": "Shake Shake 今夜绝不停歇",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "Shake Shake 今夜は止まらない",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-40",
+      "order": 39,
+      "japanese": "だから今は　oh　夢の中",
+      "zh-CN": "所以此刻就在 oh 梦境之中",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "だから今は　oh　夢の中",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-41",
+      "order": 40,
+      "japanese": "ミラーボールが回りまわる hurry up",
+      "zh-CN": "霓虹球旋转不休 hurry up",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "ミラーボールが回りまわる hurry up",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-42",
+      "order": 41,
+      "japanese": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "zh-CN": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "oh yeah (oh yeah) oh yeah (oh yeah)",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-43",
+      "order": 42,
+      "japanese": "yeah yeah yeah yeah",
+      "zh-CN": "yeah yeah yeah yeah",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "yeah yeah yeah yeah",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-44",
+      "order": 43,
+      "japanese": "寂しくて切ない一人の夜には",
+      "zh-CN": "寂寞难耐 独自一人的夜晚",
+      "en-US": "",
+      "stanzaBreakBefore": true,
+      "segments": [
+        {
+          "text": "寂しくて切ない一人の夜には",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-45",
+      "order": 44,
+      "japanese": "消えたい言葉を捜して",
+      "zh-CN": "寻觅着想要抹去的话语",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "消えたい言葉を捜して",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-46",
+      "order": 45,
+      "japanese": "秘密のドアを抜けてきて here we go",
+      "zh-CN": "穿过那扇秘密之门走出来吧 here we go",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "秘密のドアを抜けてきて here we go",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-47",
+      "order": 46,
+      "japanese": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "zh-CN": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "oh yeah (oh yeah) oh yeah (oh yeah)",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-48",
+      "order": 47,
+      "japanese": "yeah yeah yeah yeah",
+      "zh-CN": "yeah yeah yeah yeah",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "yeah yeah yeah yeah",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-49",
+      "order": 48,
+      "japanese": "Shake Shake 今夜は止まらない",
+      "zh-CN": "Shake Shake 今夜绝不停歇",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "Shake Shake 今夜は止まらない",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-50",
+      "order": 49,
+      "japanese": "だから今は　oh　夢の中",
+      "zh-CN": "所以此刻就在 oh 梦境之中",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "だから今は　oh　夢の中",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-51",
+      "order": 50,
+      "japanese": "ミラーボールが回りまわる hurry up",
+      "zh-CN": "霓虹球旋转不休 hurry up",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "ミラーボールが回りまわる hurry up",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-52",
+      "order": 51,
+      "japanese": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "zh-CN": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "oh yeah (oh yeah) oh yeah (oh yeah)",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-53",
+      "order": 52,
+      "japanese": "yeah yeah yeah yeah",
+      "zh-CN": "yeah yeah yeah yeah",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "yeah yeah yeah yeah",
+          "performerIds": []
+        }
+      ]
+    },
+    {
+      "id": "line-54",
+      "order": 53,
+      "japanese": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "zh-CN": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "oh yeah ",
+          "performerIds": [
+            6
+          ]
+        },
+        {
+          "text": "(oh yeah) ",
+          "performerIds": [
+            22
+          ]
+        },
+        {
+          "text": "oh yeah ",
+          "performerIds": [
+            5
+          ]
+        },
+        {
+          "text": "(oh yeah)",
+          "performerIds": [
+            22
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-55",
+      "order": 54,
+      "japanese": "yeah yeah yeah yeah",
+      "zh-CN": "yeah yeah yeah yeah",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "yeah yeah yeah yeah",
+          "performerIds": [
+            5,
+            6,
+            7
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-56",
+      "order": 55,
+      "japanese": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "zh-CN": "oh yeah (oh yeah) oh yeah (oh yeah)",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "oh yeah ",
+          "performerIds": [
+            8
+          ]
+        },
+        {
+          "text": "(oh yeah) ",
+          "performerIds": [
+            22
+          ]
+        },
+        {
+          "text": "oh yeah ",
+          "performerIds": [
+            7
+          ]
+        },
+        {
+          "text": "(oh yeah)",
+          "performerIds": [
+            22
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-57",
+      "order": 56,
+      "japanese": "yeah yeah yeah yeah",
+      "zh-CN": "yeah yeah yeah yeah",
+      "en-US": "",
+      "segments": [
+        {
+          "text": "yeah yeah yeah yeah",
+          "performerIds": [
+            5,
+            6,
+            7,
+            8
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -771,6 +771,7 @@ func (svc *Service) overlayPublishedLyrics(bundle map[string][]byte) (map[string
 			HasDetail:         normalized.State == store.PublicLyricsStateComplete || normalized.State == store.PublicLyricsStateGameOnly,
 		}
 	}
+	applyLegacyGameProjections(projected, songs, provenance, dbOwned)
 
 	// Edited source-v3 rendition localizations overlay exactly like legacy
 	// database publications: newer complete entries own their index slot and
