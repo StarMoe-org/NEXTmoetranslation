@@ -1249,7 +1249,7 @@ func TestLyricsPublicationRejectsEncodedArtifactOverConsumerLimit(t *testing.T) 
 	}
 }
 
-func TestLyricsPublicationRequiresPerformerAndFreezesProvenance(t *testing.T) {
+func TestLyricsPublicationAllowsEmptyPerformersAndFreezesProvenance(t *testing.T) {
 	s := setupLyricsStore(t)
 	input := validLyrics()
 	input.SourcePageID = 10
@@ -1261,16 +1261,25 @@ func TestLyricsPublicationRequiresPerformerAndFreezesProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.PublishLyrics(saved.MusicID, saved.Revision)
-	var contractErr *LyricsContractError
-	if !errors.As(err, &contractErr) || contractErr.Code != "incomplete_publication" {
-		t.Fatalf("missing performer publication error = %#v", err)
+	published, err := s.PublishLyrics(saved.MusicID, saved.Revision)
+	if err != nil || published.Status != "published" {
+		t.Fatalf("empty performer publication = %+v err=%v", published, err)
+	}
+	_, details, err := s.PublishedLyrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := details[saved.MusicID]
+	if len(detail.Lines) != 1 || len(detail.Lines[0].Segments) != 2 ||
+		detail.Lines[0].Segments[0].PerformerIDs == nil || len(detail.Lines[0].Segments[0].PerformerIDs) != 0 {
+		t.Fatalf("empty performer public detail = %+v", detail)
 	}
 
 	drift := saved
 	drift.SourceRevisionID++
 	drift.SourceSHA1 = "1123456789abcdef0123456789abcdef01234567"
 	_, err = s.SaveLyrics(drift, "editor")
+	var contractErr *LyricsContractError
 	if !errors.As(err, &contractErr) || contractErr.Code != "source_drift" {
 		t.Fatalf("provenance drift error = %#v", err)
 	}

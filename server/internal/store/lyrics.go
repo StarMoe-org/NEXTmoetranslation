@@ -931,10 +931,6 @@ func validateLyrics(lyrics model.SongLyrics, performers map[int]bool, publishing
 				segmentDetails = append(segmentDetails, fmt.Sprintf("%s.segments[%d].ruby text must equal segment text", path, segmentIndex))
 			}
 			seenPerformers := map[int]bool{}
-			if publishing && len(segment.PerformerIDs) == 0 {
-				publicationDetails = append(publicationDetails,
-					fmt.Sprintf("%s.segments[%d] requires at least one performerId", path, segmentIndex))
-			}
 			for _, performerID := range segment.PerformerIDs {
 				if seenPerformers[performerID] {
 					performerDetails = append(performerDetails,
@@ -950,9 +946,6 @@ func validateLyrics(lyrics model.SongLyrics, performers map[int]bool, publishing
 		}
 		if concatenated.String() != line.Japanese {
 			segmentDetails = append(segmentDetails, path+".japanese must equal concatenated segment text")
-		}
-		if publishing && strings.TrimSpace(line.Japanese) == "" {
-			publicationDetails = append(publicationDetails, path+" requires japanese")
 		}
 	}
 	if totalBytes > maxLyricsDocumentBytes {

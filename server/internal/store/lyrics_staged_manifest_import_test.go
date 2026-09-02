@@ -936,9 +936,8 @@ func TestImportStagedLyricsManifestRejectsCatalogDriftAndProjectsDeclaredExterna
 		if err != nil {
 			t.Fatal(err)
 		}
-		code, _, _ := validateLyrics(results[0].Lyrics, validPerformers, true)
-		if code != "incomplete_publication" {
-			t.Fatalf("unknown external draft publication code=%q", code)
+		if code, details, _ := validateLyrics(results[0].Lyrics, validPerformers, true); code != "" {
+			t.Fatalf("unknown external draft publication code=%q details=%v", code, details)
 		}
 	})
 }
