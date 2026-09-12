@@ -16,7 +16,7 @@ const publicLyricsBundlePath = new URL('server/internal/publiclyricsbundle/publi
 const publicLyricsBundleSource = readFileSync(new URL('server/internal/publiclyricsbundle/bundle.go', root), 'utf8')
 const publicLyricsBundleBuilder = readFileSync(new URL('scripts/build-public-lyrics-v3-bundle.py', root), 'utf8')
 const publicLyricsBundle = readFileSync(publicLyricsBundlePath)
-const expectedPublicLyricsBundleSHA256 = '5d59f3f01aeff4ebb71ce8dcc741d0a30fbd3924f7448c6eae18bee649aa31bb'
+const expectedPublicLyricsBundleSHA256 = 'ed983c0d5735cbffd253081aae8925cc58ca3878aae02d8bf6701f847a8475f1'
 
 function stepSection(source, name, nextName) {
   const start = source.indexOf(`      - name: ${name}\n`)
