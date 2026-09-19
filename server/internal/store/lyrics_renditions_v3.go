@@ -975,6 +975,19 @@ func (s *Store) saveLyricsRenditionMutation(
 				return LyricsRenditionDocument{}, false, nil, err
 			}
 		}
+		// Reinstate the migration v27 immutability guards dropped above, in the
+		// same transaction, so the editor write is the only update they allow.
+		for _, statement := range []string{
+			`CREATE TRIGGER song_lyrics_source_documents_immutable_update BEFORE UPDATE ON song_lyrics_source_documents
+			BEGIN SELECT RAISE(ABORT, 'song lyrics source documents are immutable'); END`,
+			`CREATE TRIGGER song_lyrics_component_contributions_immutable_update
+			BEFORE UPDATE ON song_lyrics_component_contributions
+			BEGIN SELECT RAISE(ABORT, 'song lyrics component contributions are immutable'); END`,
+		} {
+			if _, err := tx.Exec(statement); err != nil {
+				return LyricsRenditionDocument{}, false, nil, err
+			}
+		}
 		bundle.documentSHA = newDocumentSHA
 	}
 	if !sourceChanged && reflect.DeepEqual(requested, stored) && equalLyricsRenditionSideTranslations(requestedSides, storedSides) {
