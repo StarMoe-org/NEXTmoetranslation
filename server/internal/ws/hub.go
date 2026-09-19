@@ -69,6 +69,10 @@ var (
 // holding h.mu, while Broadcast sends on c.ch under h.mu, so closing the channel
 // here would race those sends. The writer already exits on c.done, and the
 // channel is collected with the client.
+//
+// ws.Close writes a close frame under the connection's write mutex, so it blocks
+// on a stalled peer or an in-flight send. Callers must release h.mu first, or
+// every other hub operation queues behind that one socket write.
 func (c *client) disconnect() {
 	c.closeOnce.Do(func() {
 		close(c.done)
@@ -100,8 +104,8 @@ func NewHub(gate *editorgate.Gate) *Hub {
 // Broadcast sends a message to all connected WebSocket clients.
 func (h *Hub) Broadcast(event string, data any) {
 	msg := Message{Event: event, Data: data}
+	var stalled []*client
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	for _, c := range h.clients {
 		select {
 		case <-c.done:
@@ -111,8 +115,12 @@ func (h *Hub) Broadcast(event string, data any) {
 		select {
 		case c.ch <- msg:
 		default:
-			c.disconnect()
+			stalled = append(stalled, c)
 		}
+	}
+	h.mu.Unlock()
+	for _, c := range stalled {
+		c.disconnect()
 	}
 }
 
@@ -162,22 +170,29 @@ func (h *Hub) add(user string, ws *websocket.Conn) (*client, error) {
 
 func (h *Hub) remove(id uint64) {
 	h.mu.Lock()
-	if c, ok := h.clients[id]; ok {
+	c, ok := h.clients[id]
+	if ok {
 		delete(h.clients, id)
-		c.disconnect()
 	}
 	h.mu.Unlock()
+	if ok {
+		c.disconnect()
+	}
 }
 
 // RevokeUser closes WebSocket streams for a given user.
 func (h *Hub) RevokeUser(user string) {
 	h.mu.Lock()
+	revoked := make([]*client, 0, len(h.clients))
 	for _, c := range h.clients {
 		if c.user == user {
-			c.disconnect()
+			revoked = append(revoked, c)
 		}
 	}
 	h.mu.Unlock()
+	for _, c := range revoked {
+		c.disconnect()
+	}
 }
 
 // Close disconnects all WebSocket clients.
@@ -185,10 +200,14 @@ func (h *Hub) Close() {
 	h.closeOnce.Do(func() {
 		h.mu.Lock()
 		h.closed = true
+		active := make([]*client, 0, len(h.clients))
 		for _, c := range h.clients {
-			c.disconnect()
+			active = append(active, c)
 		}
 		h.mu.Unlock()
+		for _, c := range active {
+			c.disconnect()
+		}
 	})
 }
 

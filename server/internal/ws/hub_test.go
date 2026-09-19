@@ -1,6 +1,9 @@
 package ws
 
 import (
+	"bufio"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -210,4 +213,108 @@ func TestWebSocketHubBroadcastRacesClientDisconnect(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+// hijackedResponseWriter hands a caller-owned net.Conn to the WebSocket
+// handler, so the test decides when a server-side write completes.
+type hijackedResponseWriter struct {
+	conn   net.Conn
+	rw     *bufio.ReadWriter
+	header http.Header
+}
+
+func (w *hijackedResponseWriter) Header() http.Header { return w.header }
+
+func (w *hijackedResponseWriter) Write(body []byte) (int, error) { return w.conn.Write(body) }
+
+func (w *hijackedResponseWriter) WriteHeader(int) {}
+
+func (w *hijackedResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.conn, w.rw, nil
+}
+
+// A stalled peer must not freeze the hub. ws.Close writes a close frame under
+// the connection's write mutex, so a hub path that closes a client while
+// holding h.mu queues every other hub operation -- including Broadcast to
+// healthy clients and new /ws registrations -- behind that one socket write.
+func TestWebSocketHubOperationsProceedDuringSlowClientClose(t *testing.T) {
+	hub := NewHub(nil)
+	defer hub.Close()
+
+	// net.Pipe never buffers, so while nothing reads the client end every
+	// server-side write blocks, including the close frame.
+	serverEnd, clientEnd := net.Pipe()
+	defer clientEnd.Close()
+
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		reader := bufio.NewReader(serverEnd)
+		request, err := http.ReadRequest(reader)
+		if err != nil {
+			return
+		}
+		writer := &hijackedResponseWriter{
+			conn:   serverEnd,
+			rw:     bufio.NewReadWriter(reader, bufio.NewWriter(serverEnd)),
+			header: http.Header{},
+		}
+		hub.Handler(func(*http.Request) string { return "stalled" }, nil)(writer, request)
+	}()
+
+	config, err := websocket.NewConfig("ws://localhost/ws", "http://localhost/")
+	if err != nil {
+		t.Fatalf("websocket config: %v", err)
+	}
+	if _, err := websocket.NewClient(config, clientEnd); err != nil {
+		t.Fatalf("websocket handshake: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for hub.ClientCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	hub.mu.RLock()
+	var stalled *client
+	for _, c := range hub.clients {
+		stalled = c
+	}
+	hub.mu.RUnlock()
+	if stalled == nil {
+		t.Fatal("stalled client was not registered")
+	}
+
+	revokeDone := make(chan struct{})
+	go func() {
+		defer close(revokeDone)
+		hub.RevokeUser("stalled")
+	}()
+
+	probeDone := make(chan struct{})
+	defer func() {
+		// Let the close frame drain so the blocked teardown can finish.
+		go func() { _, _ = io.Copy(io.Discard, clientEnd) }()
+		<-revokeDone
+		<-probeDone
+		<-handlerDone
+	}()
+
+	// disconnect closes c.done immediately before the blocking ws.Close.
+	select {
+	case <-stalled.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("revoke never started tearing the stalled client down")
+	}
+
+	go func() {
+		defer close(probeDone)
+		hub.ClientCount()
+		hub.Broadcast(EventEntryUpdated, map[string]string{"key": "healthy"})
+	}()
+
+	select {
+	case <-probeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("hub operations blocked behind a slow client close")
+	}
 }
