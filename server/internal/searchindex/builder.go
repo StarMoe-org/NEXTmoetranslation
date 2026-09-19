@@ -243,14 +243,20 @@ func (b *Builder) loop() {
 	}
 }
 
+// wait sleeps out the retry backoff after a failed build.
+//
+// It deliberately does not consume triggerCh. Handing the wait over to the
+// debounce window would let steady editing postpone recovery indefinitely,
+// because every further trigger resets that window. The token stays in the
+// channel (capacity 1, so nothing is lost) for the next waitForWork, and
+// Trigger() has already bumped the generation, so no in-flight candidate can
+// publish a pre-change snapshot.
 func (b *Builder) wait(delay time.Duration) bool {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-b.ctx.Done():
 		return false
-	case <-b.triggerCh:
-		return b.waitForDebounce()
 	case <-timer.C:
 		return true
 	}
