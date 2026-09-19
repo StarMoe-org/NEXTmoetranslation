@@ -362,6 +362,40 @@ func TestMasterdataFallsBackToSecondarySource(t *testing.T) {
 	}
 }
 
+func TestRateLimitedMasterdataSourceIsRetried(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[{"id":1}]`)
+	}))
+	defer upstream.Close()
+
+	cfg := openTranslatorConfig(t)
+	cfg.Set(config.KeyUpstreamJPMasterdataURL, upstream.URL)
+	cfg.Set(config.KeyUpstreamJPMasterdataFallbackURL, upstream.URL)
+	tr := New(nil, nil, cfg)
+
+	items, err := tr.fetchMasterdata("events.json", "jp")
+	if err != nil {
+		t.Fatalf("rate-limited source was not retried: %v", err)
+	}
+	if len(items) != 1 || calls.Load() != 2 {
+		t.Fatalf("unexpected retry result: items=%v calls=%d", items, calls.Load())
+	}
+}
+
+// A rate-limited category must be skipped by cn-sync, not abort the whole run.
+func TestRateLimitedFailureIsTransient(t *testing.T) {
+	err := fmt.Errorf("GET https://upstream.invalid/events.json: http 429: %s", "slow down")
+	if !isTransientErr(err) {
+		t.Fatalf("http 429 is not classified as transient: %v", err)
+	}
+}
+
 func TestCNMasterdataFallsBackToSecondarySource(t *testing.T) {
 	var primaryCalls atomic.Int32
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -441,13 +441,13 @@ func joinSourceFailures(failures []sourceFailure) error {
 	return fmt.Errorf("all upstream sources failed: %s", strings.Join(parts, "; "))
 }
 
-// isTransientErr reports whether an error is worth retrying (network/5xx).
+// isTransientErr reports whether an error is worth retrying (network/429/5xx).
 func isTransientErr(err error) bool {
 	if err == nil {
 		return false
 	}
 	s := err.Error()
-	for _, code := range []string{"http 500", "http 502", "http 503", "http 504", "http 520", "http 521", "http 522", "http 523", "http 524", "http 525", "http 526", "http 527"} {
+	for _, code := range []string{"http 429", "http 500", "http 502", "http 503", "http 504", "http 520", "http 521", "http 522", "http 523", "http 524", "http 525", "http 526", "http 527"} {
 		if strings.Contains(s, code) {
 			return true
 		}
