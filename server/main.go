@@ -616,9 +616,7 @@ func lifecycleMiddleware(state *lifecycle.State, next http.Handler) http.Handler
 		if isLifecycleProbe(r) {
 			done, admitted := state.BeginProbe()
 			if !admitted {
-				setOperationalHeaders(w.Header())
-				w.WriteHeader(http.StatusServiceUnavailable)
-				fmt.Fprint(w, `{"status":"draining"}`)
+				writeDrainingResponse(w, r)
 				return
 			}
 			defer done()
@@ -627,14 +625,28 @@ func lifecycleMiddleware(state *lifecycle.State, next http.Handler) http.Handler
 		}
 		done, admitted := state.BeginRequest()
 		if !admitted {
-			setOperationalHeaders(w.Header())
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprint(w, `{"status":"draining"}`)
+			writeDrainingResponse(w, r)
 			return
 		}
 		defer done()
 		next.ServeHTTP(w, r)
 	})
+}
+
+func writeDrainingResponse(w http.ResponseWriter, r *http.Request) {
+	setOperationalHeaders(w.Header())
+	// corsMiddleware scopes its header to the console origin and skips the public
+	// file paths because their handlers set a permissive one. Those handlers never
+	// run while draining, so repeat it here or the caller sees an opaque failure.
+	if isPublicFilePath(r.URL.Path) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	}
+	w.WriteHeader(http.StatusServiceUnavailable)
+	fmt.Fprint(w, `{"status":"draining"}`)
+}
+
+func isPublicFilePath(path string) bool {
+	return strings.HasPrefix(path, "/files/") || strings.HasPrefix(path, "/translation/")
 }
 
 func isLifecycleProbe(r *http.Request) bool {
@@ -892,7 +904,7 @@ func isLoopbackOriginHost(host string) bool {
 func corsMiddleware(next http.Handler, origin string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// /files/* and /translation/* set their own permissive CORS; here we scope console API.
-		if !strings.HasPrefix(r.URL.Path, "/files/") && !strings.HasPrefix(r.URL.Path, "/translation/") {
+		if !isPublicFilePath(r.URL.Path) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")

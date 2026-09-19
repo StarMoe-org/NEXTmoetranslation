@@ -368,6 +368,28 @@ func TestDrainingResponseRetainsCORSLoggingAndMetrics(t *testing.T) {
 	}
 }
 
+func TestDrainingPublicFileResponsesKeepPermissiveCORS(t *testing.T) {
+	state := &lifecycle.State{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/files/", func(http.ResponseWriter, *http.Request) {})
+	mux.HandleFunc("/translation/", func(http.ResponseWriter, *http.Request) {})
+	handler := corsMiddleware(lifecycleMiddleware(state, preflightMiddleware(mux)), "https://console.example")
+	state.Drain()
+
+	for _, path := range []string{"/files/translation/cards.json", "/translation/cards.json"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Origin", "https://pjsk.moe")
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s status = %d, want %d", path, recorder.Code, http.StatusServiceUnavailable)
+		}
+		if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+			t.Fatalf("%s draining CORS = %q, want %q", path, got, "*")
+		}
+	}
+}
+
 func TestTokenTTLRejectsMalformedAndExcessiveValues(t *testing.T) {
 	for _, value := range []string{"", "0", "-1", "1.5", "abc", "0168", "+168", "721"} {
 		if _, err := parseTTL(value); err == nil {
