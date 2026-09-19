@@ -846,9 +846,15 @@ func (svc *Service) overlayPublishedLyrics(bundle map[string][]byte) (map[string
 	}
 	for musicID := range dbOwned {
 		key := fmt.Sprintf("translation/lyrics/music_%d.json", musicID)
-		if body, ok := projected[key]; ok {
+		// localizationBytes is only written where the localization layer won
+		// its index slot, and that loop skips anything already in dbOwned, so
+		// the two sources are disjoint. It has to be consulted first anyway:
+		// `projected` holds every published row including ones that lost, so a
+		// losing legacy row would otherwise supply the bytes for an index entry
+		// the localization layer owns.
+		if body, ok := localizationBytes[musicID]; ok {
 			merged[key] = body
-		} else if body, ok := localizationBytes[musicID]; ok {
+		} else if body, ok := projected[key]; ok {
 			merged[key] = body
 		} else {
 			delete(merged, key)
