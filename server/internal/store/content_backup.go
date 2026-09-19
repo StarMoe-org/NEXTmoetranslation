@@ -861,19 +861,6 @@ func (s *Store) ImportTranslationContentContext(ctx context.Context, entries []E
 	return nil
 }
 
-func rejectNativeSourceV3ContentRestoreTarget(ctx context.Context, tx *sql.Tx) error {
-	var musicID int
-	err := tx.QueryRowContext(ctx, `SELECT music_id FROM song_lyrics_source_documents
-		WHERE schema_version=3 ORDER BY music_id LIMIT 1`).Scan(&musicID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect native source-v3 restore target: %w", err)
-	}
-	return fmt.Errorf("content restore cannot replace immutable source-v3 lyrics for music %d; restore a full SQLite snapshot in isolation", musicID)
-}
-
 func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []EntryLocalizationRecord, events EventContentExport, lyrics LyricsContentExport) error {
 	catalogPerformers := newCatalogPerformerAliases()
 	sortedPerformers := append([]CatalogPerformerBackupRecord(nil), lyrics.Performers...)
@@ -1301,8 +1288,11 @@ func suspendLyricsSourceDocumentDeleteGuardsTx(ctx context.Context, tx *sql.Tx) 
 
 func restoreLyricsSourceDocumentDeleteGuardsTx(ctx context.Context, tx *sql.Tx) error {
 	for _, statement := range []string{
+		// Keep this the migration v27 definition; the v25 text it was copied from
+		// lacked the rendition-localization clause.
 		`CREATE TRIGGER song_lyrics_source_documents_immutable_delete BEFORE DELETE ON song_lyrics_source_documents
-		 WHEN EXISTS (SELECT 1 FROM song_lyrics WHERE music_id=OLD.music_id)
+		 WHEN EXISTS (SELECT 1 FROM song_lyrics WHERE music_id=OLD.music_id) OR
+		      EXISTS (SELECT 1 FROM song_lyrics_rendition_localizations WHERE document_id=OLD.document_id)
 		 BEGIN SELECT RAISE(ABORT, 'song lyrics source documents are immutable'); END`,
 		`CREATE TRIGGER song_lyrics_source_v3_reject_delete BEFORE DELETE ON song_lyrics_source_documents
 		 WHEN OLD.schema_version=3
