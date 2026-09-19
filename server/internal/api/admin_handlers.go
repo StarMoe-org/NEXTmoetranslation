@@ -69,9 +69,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if s.hub != nil {
-			s.hub.RevokeUser(req.Username)
-		}
+		s.revokeUser(req.Username)
 	}
 	if req.Role != "" {
 		if err := s.auth.SetRole(req.Username, req.Role); err != nil {
@@ -82,9 +80,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if s.hub != nil {
-			s.hub.RevokeUser(req.Username)
-		}
+		s.revokeUser(req.Username)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -110,9 +106,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if s.hub != nil {
-		s.hub.RevokeUser(username)
-	}
+	s.revokeUser(username)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

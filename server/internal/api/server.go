@@ -99,6 +99,7 @@ type Server struct {
 	wsHub interface {
 		Broadcast(event string, data any)
 		BroadcastGateStatus()
+		RevokeUser(user string)
 	}
 	collab *collab.Service
 }
@@ -106,6 +107,7 @@ type Server struct {
 func (s *Server) SetWsHub(w interface {
 	Broadcast(event string, data any)
 	BroadcastGateStatus()
+	RevokeUser(user string)
 }) {
 	s.wsHub = w
 }
@@ -279,6 +281,17 @@ func (s *Server) broadcast(event string, data any) {
 	if s.wsHub != nil {
 		s.wsHub.Broadcast(event, data)
 		s.wsHub.BroadcastGateStatus()
+	}
+}
+
+// revokeUser closes an account's live streams on both hubs after its token
+// generation changed. Either hub may be nil in tests.
+func (s *Server) revokeUser(user string) {
+	if s.hub != nil {
+		s.hub.RevokeUser(user)
+	}
+	if s.wsHub != nil {
+		s.wsHub.RevokeUser(user)
 	}
 }
 
