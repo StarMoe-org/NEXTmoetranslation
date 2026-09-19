@@ -67,7 +67,12 @@ func (m *Manager) backupGitContext(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	encryptionKey, _ := loadBackupEncryptionKey()
+	// An unset key yields (nil, nil); only a malformed one errors, and that must
+	// not silently fall through to the unencrypted path.
+	encryptionKey, err := loadBackupEncryptionKey()
+	if err != nil {
+		return err
+	}
 	defer clear(encryptionKey)
 	work := filepath.Join(m.workDir, "git-backup")
 	_ = os.RemoveAll(work)
@@ -238,7 +243,10 @@ func (m *Manager) prepareGitRestoreContext(ctx context.Context) (restoreCandidat
 	if err != nil {
 		return restoreCandidate{}, err
 	}
-	encryptionKey, _ := loadBackupEncryptionKey()
+	encryptionKey, err := loadBackupEncryptionKey()
+	if err != nil {
+		return restoreCandidate{}, err
+	}
 	defer clear(encryptionKey)
 	work := filepath.Join(m.workDir, "git-restore")
 	_ = os.RemoveAll(work)

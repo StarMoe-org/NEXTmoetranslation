@@ -167,7 +167,10 @@ func (m *Manager) prepareS3RestoreContext(ctx context.Context) (restoreCandidate
 	if err != nil {
 		return restoreCandidate{}, err
 	}
-	encryptionKey, _ := loadBackupEncryptionKey()
+	encryptionKey, err := loadBackupEncryptionKey()
+	if err != nil {
+		return restoreCandidate{}, err
+	}
 	defer clear(encryptionKey)
 	latestKey := fmt.Sprintf("%s/latest.tar.gz", cfg.prefix)
 	data, err := m.s3GetContext(ctx, cfg, latestKey)
