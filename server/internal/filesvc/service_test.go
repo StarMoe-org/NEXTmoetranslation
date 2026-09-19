@@ -2,6 +2,7 @@ package filesvc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -332,6 +333,43 @@ func TestLegacyPublicFileHTTPContract(t *testing.T) {
 	}
 	if bytes.Contains(localizedBody, []byte(`"revision"`)) {
 		t.Fatalf("authenticated event revision leaked into public bytes: %s", localizedBody)
+	}
+}
+
+// A cross-origin caller must be able to read the status: the site's lyrics
+// loader treats a readable 404 as "not published" and anything unreadable as a
+// retryable failure.
+func TestPublicFileErrorResponsesKeepCORS(t *testing.T) {
+	svc := setupLegacyFileService(t)
+	ts := httptest.NewServer(svc.Handler())
+	defer ts.Close()
+
+	missing, err := http.Get(ts.URL + "/files/translation/lyrics/music_999999.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing.Body.Close()
+	if missing.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing asset status = %d", missing.StatusCode)
+	}
+	if got := missing.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("404 CORS = %q", got)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/files/translation/cards.json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected.Body.Close()
+	if rejected.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("POST status = %d", rejected.StatusCode)
+	}
+	if got := rejected.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("405 CORS = %q", got)
 	}
 }
 
@@ -1157,6 +1195,46 @@ func TestIncrementalCategoryRebuild(t *testing.T) {
 	}
 	if !strings.Contains(string(full), "您好呀") {
 		t.Fatalf("expected '您好呀' in cards.full.json, got: %s", string(full))
+	}
+}
+
+func TestFullRebuildKeepsConcurrentIncrementalPublication(t *testing.T) {
+	svc := setupLegacyFileService(t)
+	read := func(path string) (string, int) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		svc.Handler().ServeHTTP(rec, req)
+		return rec.Body.String(), rec.Code
+	}
+
+	for attempt := 0; attempt < 5; attempt++ {
+		text := fmt.Sprintf("您好呀%d", attempt)
+		rebuilt := make(chan error, 1)
+		go func() { rebuilt <- svc.rebuildAssetsContext(context.Background()) }()
+
+		// The edit and its incremental publication land while the full rebuild
+		// is still generating from its earlier read.
+		if _, err := svc.store.UpdateEntry("cards", "prefix", "こんにちは", text, model.SourceHuman, "test-user"); err != nil {
+			t.Fatal(err)
+		}
+		if err := svc.RebuildCategory("cards"); err != nil {
+			t.Fatalf("RebuildCategory failed: %v", err)
+		}
+		if err := <-rebuilt; err != nil {
+			t.Fatalf("full rebuild failed: %v", err)
+		}
+
+		for _, path := range []string{
+			"/files/translation/cards.json",
+			"/files/translation/cards.full.json",
+			"/files/v2/zh-CN/translation/cards.json",
+		} {
+			body, status := read(path)
+			if status != http.StatusOK || !strings.Contains(body, text) {
+				t.Fatalf("attempt %d: full rebuild discarded the incremental publication of %s: status=%d body=%s",
+					attempt, path, status, body)
+			}
+		}
 	}
 }
 

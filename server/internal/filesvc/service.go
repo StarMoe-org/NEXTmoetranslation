@@ -89,12 +89,16 @@ type Service struct {
 	mu         sync.RWMutex
 	assets     map[string]asset // path key e.g. "translation/cards.json"
 	provenance map[int]SongProvenance
-	rebuildMu  sync.Mutex
-	statusMu   sync.RWMutex
-	status     ProjectionStatus
-	requested  uint64
-	published  uint64
-	running    bool
+	// assetEpoch orders incremental publications against a full rebuild, which
+	// generates from a read taken before it swaps its asset map in.
+	assetEpoch  uint64
+	incremental map[string]uint64 // asset key -> epoch of its last incremental publication
+	rebuildMu   sync.Mutex
+	statusMu    sync.RWMutex
+	status      ProjectionStatus
+	requested   uint64
+	published   uint64
+	running     bool
 
 	rebuildCh       chan struct{}
 	immediateCh     chan struct{}
@@ -150,6 +154,7 @@ func New(s *store.Store, es *store.EventStore, gen *files.Generator) *Service {
 		swr:             time.Hour,
 		debounce:        5 * time.Minute,
 		assets:          map[string]asset{},
+		incremental:     map[string]uint64{},
 		provenance:      initialProvenance,
 		status: ProjectionStatus{
 			LyricsSummary: initialSummary,
@@ -415,11 +420,7 @@ func (svc *Service) RebuildEventContext(ctx context.Context, eventID int) error 
 		updates[fmt.Sprintf("v2/%s/translation/eventStory/event_%d.json", locale, eventID)] = makeAsset(lb, "application/json; charset=utf-8", now)
 	}
 
-	svc.mu.Lock()
-	for k, v := range updates {
-		svc.assets[k] = v
-	}
-	svc.mu.Unlock()
+	svc.applyIncremental(updates)
 	return nil
 }
 
@@ -465,12 +466,21 @@ func (svc *Service) RebuildCategoryContext(ctx context.Context, category string)
 		updates[fmt.Sprintf("v2/%s/translation/%s.full.json", locale, category)] = makeAsset(lfull, "application/json; charset=utf-8", now)
 	}
 
+	svc.applyIncremental(updates)
+	return nil
+}
+
+// applyIncremental publishes single-entity updates and records the epoch they
+// were published at, so a full rebuild that started reading earlier cannot
+// swap them back to its older bytes.
+func (svc *Service) applyIncremental(updates map[string]asset) {
 	svc.mu.Lock()
-	for k, v := range updates {
-		svc.assets[k] = v
+	svc.assetEpoch++
+	for key, value := range updates {
+		svc.assets[key] = value
+		svc.incremental[key] = svc.assetEpoch
 	}
 	svc.mu.Unlock()
-	return nil
 }
 
 func (svc *Service) rebuild(ctx context.Context) error {
@@ -549,6 +559,10 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 		return err
 	}
 	defer releaseContent()
+
+	svc.mu.RLock()
+	startEpoch := svc.assetEpoch
+	svc.mu.RUnlock()
 
 	next := map[string]asset{}
 	now := time.Now()
@@ -659,6 +673,22 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 	for k, v := range svc.assets {
 		if _, ok := next[k]; !ok && (k == "data/search-index.json" || k == "v2/data/search-index.json" || strings.HasSuffix(k, "/data/search-index.json")) {
 			next[k] = v
+		}
+	}
+	// An incremental publication that landed after this rebuild started reading
+	// is newer than the bytes generated above, so it keeps its slot. The write
+	// behind it also bumped the requested generation, so the loop still runs the
+	// reconciling rebuild. Keys this rebuild dropped stay dropped.
+	for key, epoch := range svc.incremental {
+		if epoch <= startEpoch {
+			delete(svc.incremental, key)
+			continue
+		}
+		if _, ok := next[key]; !ok {
+			continue
+		}
+		if published, ok := svc.assets[key]; ok {
+			next[key] = published
 		}
 	}
 	svc.assets = next
@@ -1022,10 +1052,13 @@ func makeAssetWithSource(body []byte, contentType string, t time.Time, source as
 }
 
 // Handler serves GET /files/<path>. Path traversal is impossible because lookup
-// is a map key match, not a filesystem path.
+// is a map key match, not a filesystem path. Error responses repeat the
+// permissive CORS header so a cross-origin caller reads the status instead of
+// an opaque failure.
 func (svc *Service) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -1036,6 +1069,7 @@ func (svc *Service) Handler() http.HandlerFunc {
 		a, ok := svc.assets[key]
 		svc.mu.RUnlock()
 		if !ok {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
 			http.NotFound(w, r)
 			return
 		}
