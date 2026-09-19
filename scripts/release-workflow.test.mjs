@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import test from 'node:test'
+import { gunzipSync } from 'node:zlib'
 
 const root = new URL('../', import.meta.url)
 const workflow = readFileSync(new URL('.github/workflows/release-next.yml', root), 'utf8')
@@ -34,6 +35,21 @@ function assertActionsPinned(source, label) {
   }
 }
 
+// The bundle is a canonical GNU tar: regular files only, no long names, no
+// prefix field in use, so the 512-byte headers can be walked directly.
+function tarMembers(archive) {
+  const members = []
+  for (let offset = 0; offset + 512 <= archive.length; ) {
+    const header = archive.subarray(offset, offset + 512)
+    const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/s, '')
+    if (name === '') break
+    const size = Number.parseInt(header.subarray(124, 136).toString('ascii').replace(/\0.*$/s, '').trim(), 8)
+    members.push({ name, body: archive.subarray(offset + 512, offset + 512 + size) })
+    offset += 512 + Math.ceil(size / 512) * 512
+  }
+  return members
+}
+
 test('paired release workflow and runbook are retired by deletion', () => {
   assert.equal(existsSync(new URL('.github/workflows/release-paired.yml', root)), false)
   assert.equal(existsSync(new URL('PAIRED_RELEASE.md', root)), false)
@@ -50,6 +66,18 @@ test('the accepted public lyrics bundle is present and content-addressed', () =>
   assert.match(publicLyricsBundleSource, /go:embed public-v3\.tar\.gz/)
   assert.match(publicLyricsBundleBuilder, /EXPECTED_MANIFEST_SHA256 = \"b88f3076e40a6711b9e6a55321ede9da0aef0b69489a22b5b74fe468f5676d6f\"/)
   assert.match(publicLyricsBundleBuilder, /EXPECTED_RECEIPT_FILE_SHA256 = \"a4bf207f446feffd71f2e51ab1755ac3c9cd648b34fe72596f85de3c6a559deb\"/)
+})
+
+test('the public lyrics bundle builder pins the counts the accepted bundle actually has', () => {
+  const members = tarMembers(gunzipSync(publicLyricsBundle))
+  const index = members.find(member => member.name === 'index.json')
+  assert.ok(index, 'bundle has no index.json')
+  const catalog = JSON.parse(index.body.toString('utf8')).songs.length
+  const details = members.filter(member => /^music_[1-9][0-9]*\.json$/.test(member.name)).length
+  assert.equal(details + 1, members.length)
+  assert.match(publicLyricsBundleBuilder, new RegExp(`^EXPECTED_CATALOG = ${catalog}$`, 'm'))
+  assert.match(publicLyricsBundleBuilder, new RegExp(`^EXPECTED_DETAILS = ${details}$`, 'm'))
+  assert.match(publicLyricsBundleBuilder, new RegExp(`^EXPECTED_ASSETS = ${members.length}$`, 'm'))
 })
 
 test('Docker defaults to a standalone production target without workspace bytes', () => {
