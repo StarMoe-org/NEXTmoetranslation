@@ -1443,6 +1443,9 @@ type sourceArtifactIdentity struct {
 	renditionKey string
 }
 
+// repairMissingExportArtifactEvidenceLinks completes evidence links that are
+// derivable from each artifact's own fixed identity. It runs inside the
+// read-only export transaction and therefore only repairs the exported result.
 func repairMissingExportArtifactEvidenceLinks(ctx context.Context, tx *sql.Tx, lyrics *LyricsContentExport) error {
 	existingLinks := make(map[sourceArtifactIdentity]map[int]bool)
 	for _, record := range lyrics.SourceArtifactEvidence {
@@ -1479,14 +1482,6 @@ func repairMissingExportArtifactEvidenceLinks(ctx context.Context, tx *sql.Tx, l
 				existingLinks[id] = make(map[int]bool)
 			}
 			existingLinks[id][position] = true
-
-			if tx != nil {
-				_, _ = tx.ExecContext(ctx, `INSERT OR IGNORE INTO song_lyrics_source_artifact_index_evidence
-					(document_id, rendition_key, position, provider, evidence_id, sha256)
-					VALUES (?, ?, ?, ?, ?, ?)`,
-					linkRecord.DocumentID, linkRecord.RenditionKey, linkRecord.Position,
-					linkRecord.Provider, linkRecord.EvidenceID, linkRecord.SHA256)
-			}
 
 			evID := sourceEvidenceIdentity{provider: identity.Provider, evidenceID: ref.EvidenceID}
 			if !loadedEvidence[evID] && tx != nil {
