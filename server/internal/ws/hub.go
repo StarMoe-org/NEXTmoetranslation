@@ -63,11 +63,16 @@ var (
 	errUserHubCapacity = errors.New("WebSocket per-user connection limit reached")
 )
 
+// disconnect tears the connection down exactly once.
+//
+// c.ch is deliberately left open: the writer goroutine calls disconnect without
+// holding h.mu, while Broadcast sends on c.ch under h.mu, so closing the channel
+// here would race those sends. The writer already exits on c.done, and the
+// channel is collected with the client.
 func (c *client) disconnect() {
 	c.closeOnce.Do(func() {
 		close(c.done)
 		_ = c.ws.Close()
-		close(c.ch)
 	})
 }
 
@@ -218,10 +223,7 @@ func (h *Hub) Handler(usernameFn func(*http.Request) string, validFn func(*http.
 					select {
 					case <-c.done:
 						return
-					case msg, ok := <-c.ch:
-						if !ok {
-							return
-						}
+					case msg := <-c.ch:
 						_ = ws.SetWriteDeadline(time.Now().Add(websocketWriteTimeout))
 						if err := websocket.JSON.Send(ws, msg); err != nil {
 							c.disconnect()

@@ -448,6 +448,10 @@ func main() {
 			idx.Stop()
 			fileService.Stop()
 			hub.Close()
+			// Hijacked connections: http.Server.Close neither closes nor waits
+			// for them, and the lifecycle request count only drops when the
+			// handler returns, so the hub has to tear them down itself.
+			wsHub.Close()
 			appLifecycle.StopProbes()
 			if err := httpServer.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("force-close HTTP: %v", err)

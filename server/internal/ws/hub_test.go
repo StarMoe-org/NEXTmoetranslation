@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -154,4 +155,59 @@ func TestWebSocketHubDisconnectsClientThatDoesNotPong(t *testing.T) {
 	if pingCount == 0 {
 		t.Fatal("silent client was disconnected before receiving a heartbeat")
 	}
+}
+
+// A broadcast that races the writer goroutine's own teardown must not panic.
+// disconnect() runs without h.mu (writer goroutine) while Broadcast sends on
+// c.ch under h.mu, so closing c.ch in disconnect made this a send on a closed
+// channel -- fatal, and unrecovered when Broadcast is called from a background
+// goroutine such as the upstream sync callback.
+func TestWebSocketHubBroadcastRacesClientDisconnect(t *testing.T) {
+	hub := NewHub(nil)
+	defer hub.Close()
+
+	handler := hub.Handler(func(_ *http.Request) string { return "racer" }, nil)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	for i := 0; i < maxHubClientsPerUser; i++ {
+		conn, err := websocket.Dial(wsURL, "", "http://localhost/")
+		if err != nil {
+			t.Fatalf("dial %d: %v", i, err)
+		}
+		defer conn.Close()
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for hub.ClientCount() < maxHubClientsPerUser && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if hub.ClientCount() == 0 {
+		t.Fatal("no clients registered")
+	}
+
+	const rounds = 300
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			hub.Broadcast(EventEntryUpdated, map[string]string{"key": "racing"})
+		}
+	}()
+
+	for i := 0; i < rounds; i++ {
+		hub.mu.RLock()
+		targets := make([]*client, 0, len(hub.clients))
+		for _, c := range hub.clients {
+			targets = append(targets, c)
+		}
+		hub.mu.RUnlock()
+		for _, c := range targets {
+			c.disconnect()
+		}
+	}
+
+	wg.Wait()
 }
