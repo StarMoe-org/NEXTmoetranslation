@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -647,7 +648,8 @@ func writeLyricsSourceError(w http.ResponseWriter, err error) {
 		writeContractError(w, http.StatusUnprocessableEntity, "source_unsupported",
 			[]string{"the source lyrics cannot be extracted safely"}, nil)
 	default:
-		w.Header().Set("X-Moe-Debug-Error", err.Error())
+		// Transport failures carry the upstream URL and query; keep them server-side.
+		log.Printf("[lyrics-source] request failed: %v", err)
 		writeContractError(w, http.StatusBadGateway, "source_unavailable", nil, nil)
 	}
 }

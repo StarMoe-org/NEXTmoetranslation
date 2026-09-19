@@ -1659,6 +1659,13 @@ func TestLyricsSourceFailureIsSanitized(t *testing.T) {
 		!strings.Contains(string(body), "source_unavailable") {
 		t.Fatalf("sanitized source failure status=%d body=%s", response.StatusCode, body)
 	}
+	for header, values := range response.Header {
+		for _, value := range values {
+			if strings.Contains(value, "secret upstream response") {
+				t.Fatalf("upstream failure leaked through header %s: %q", header, value)
+			}
+		}
+	}
 }
 
 func TestLyricsImportGrantCatalogCurrentIncludesCredits(t *testing.T) {
