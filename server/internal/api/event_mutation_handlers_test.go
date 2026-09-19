@@ -1,6 +1,8 @@
 package api
 
 import (
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -40,5 +42,26 @@ func TestDecodeEventMutationRejectsOversizedClientID(t *testing.T) {
 	}
 	if recorder.Code != 400 || !strings.Contains(recorder.Body.String(), "clientId too long") {
 		t.Fatalf("oversized clientId response: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestPromoteEventStoryHumanReportsMissingStory(t *testing.T) {
+	h := setupLegacyAPI(t)
+	response := authorizedRequest(t, h, http.MethodPost, "/api/event-story/promote-human",
+		map[string]any{"eventId": 4242})
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusNotFound || !strings.Contains(string(body), "event story not found") {
+		t.Fatalf("promote of a missing story status=%d body=%s", response.StatusCode, body)
+	}
+	var promoted int
+	if err := h.db.QueryRow(`SELECT COUNT(*) FROM event_stories WHERE event_id=4242`).Scan(&promoted); err != nil {
+		t.Fatal(err)
+	}
+	if promoted != 0 {
+		t.Fatalf("missing story rows = %d", promoted)
 	}
 }

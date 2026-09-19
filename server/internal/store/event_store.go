@@ -953,10 +953,18 @@ func (s *EventStore) PromoteHuman(eventID int) error {
 		now, model.LocaleChinese, eventID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(
+	res, err := tx.Exec(
 		`UPDATE event_stories SET source = 'human', last_updated = ? WHERE event_id = ?`,
-		now, eventID); err != nil {
+		now, eventID)
+	if err != nil {
 		return err
+	}
+	// The other statements target child rows and legitimately match none; this
+	// one is the story itself, so no row means the story does not exist.
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return sql.ErrNoRows
 	}
 	if err := tx.Commit(); err != nil {
 		return err

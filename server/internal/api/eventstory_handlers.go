@@ -244,7 +244,10 @@ func (s *Server) handlePromoteEventStoryHuman(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	if err := s.eventStore.PromoteHuman(id); err != nil {
+	if err := s.eventStore.PromoteHuman(id); err == sql.ErrNoRows {
+		writeErr(w, http.StatusNotFound, "event story not found")
+		return
+	} else if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
