@@ -463,9 +463,6 @@ func (b *Builder) buildContext(ctx context.Context, reason string) (resultErr er
 	if err != nil {
 		return fmt.Errorf("marshal multilingual index: %w", err)
 	}
-	if err := b.persistCache(ctx, generation, buf, multilingualJSON, coverage); err != nil {
-		return fmt.Errorf("persist complete index: %w", err)
-	}
 	b.generationMu.Lock()
 	if generation != b.generation || ctx.Err() != nil {
 		b.generationMu.Unlock()
@@ -474,11 +471,7 @@ func (b *Builder) buildContext(ctx context.Context, reason string) (resultErr er
 		}
 		return errBuildSuperseded
 	}
-	b.files.SetAssets(map[string][]byte{
-		"data/search-index.json":          buf,
-		"v2/data/search-index.json":       multilingualJSON,
-		"v2/en-US/data/search-index.json": multilingualJSON,
-	}, "application/json; charset=utf-8")
+	b.files.SetAssets(searchAssets(buf, multilingualJSON), "application/json; charset=utf-8")
 	b.mu.Lock()
 	b.lastBuilt = time.Now()
 	b.lastResult = fmt.Sprintf("%d entries (%s)", len(index), reason)
@@ -486,6 +479,16 @@ func (b *Builder) buildContext(ctx context.Context, reason string) (resultErr er
 	b.mu.Unlock()
 	b.generationMu.Unlock()
 	log.Printf("[search-index] published %d entries (reason=%s)", len(index), reason)
+
+	// The cache is a restart shortcut, not a publication precondition: a full
+	// or read-only /data must not withhold an index that already validated.
+	// persistCache keeps its own generation guard, so a superseded candidate
+	// still cannot overwrite the persisted last-known-good copy.
+	if err := b.persistCache(ctx, generation, buf, multilingualJSON, coverage); err != nil {
+		if !errors.Is(err, errBuildSuperseded) && ctx.Err() == nil {
+			log.Printf("[search-index] persisting the index cache failed; serving from memory: %v", err)
+		}
+	}
 	return nil
 }
 
