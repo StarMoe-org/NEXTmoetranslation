@@ -335,6 +335,7 @@ func (a *Auth) GetUser(username string) (*User, error) {
 // ---- JWT ----
 
 type Claims struct {
+	UserID       int64  `json:"uid"`
 	Username     string `json:"username"`
 	Role         string `json:"role"`
 	TokenVersion int    `json:"ver"`
@@ -346,10 +347,10 @@ func (a *Auth) IssueToken(u *User) (string, time.Time, error) {
 	if u == nil || !ValidRole(u.Role) {
 		return "", time.Time{}, ErrInvalidRole
 	}
-	return a.issueToken(u.Username, u.Role, u.TokenVersion)
+	return a.issueToken(u.ID, u.Username, u.Role, u.TokenVersion)
 }
 
-func (a *Auth) issueToken(username, role string, tokenVersion int) (string, time.Time, error) {
+func (a *Auth) issueToken(userID int64, username, role string, tokenVersion int) (string, time.Time, error) {
 	if !ValidRole(role) {
 		return "", time.Time{}, ErrInvalidRole
 	}
@@ -358,6 +359,7 @@ func (a *Auth) issueToken(username, role string, tokenVersion int) (string, time
 	}
 	expiresAt := time.Now().Add(a.tokenTTL)
 	claims := Claims{
+		UserID:       userID,
 		Username:     username,
 		Role:         role,
 		TokenVersion: tokenVersion,
@@ -385,8 +387,8 @@ func (a *Auth) RefreshToken(claims *Claims) (string, time.Time, error) {
 	}
 	defer tx.Rollback()
 	result, err := tx.Exec(`UPDATE users SET token_version = token_version + 1
-		WHERE username = ? AND role = ? AND token_version = ?`,
-		claims.Username, claims.Role, claims.TokenVersion)
+		WHERE id = ? AND username = ? AND role = ? AND token_version = ?`,
+		claims.UserID, claims.Username, claims.Role, claims.TokenVersion)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -398,7 +400,7 @@ func (a *Auth) RefreshToken(claims *Claims) (string, time.Time, error) {
 	if refreshTokenValidatedHook != nil {
 		refreshTokenValidatedHook()
 	}
-	token, expiresAt, err := a.issueToken(claims.Username, claims.Role, claims.TokenVersion+1)
+	token, expiresAt, err := a.issueToken(claims.UserID, claims.Username, claims.Role, claims.TokenVersion+1)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -426,10 +428,13 @@ func (a *Auth) VerifyToken(tokenStr string) (*Claims, error) {
 	if !ValidRole(claims.Role) {
 		return nil, ErrInvalidCreds
 	}
-	var currentRole string
+	var currentUsername, currentRole string
 	var currentVersion int
-	if err := a.db.QueryRow(`SELECT role, token_version FROM users WHERE username=?`, claims.Username).
-		Scan(&currentRole, &currentVersion); err != nil || !ValidRole(currentRole) || currentRole != claims.Role || currentVersion != claims.TokenVersion {
+	// Look the row up by id: it is AUTOINCREMENT and therefore never reused, so
+	// recreating a deleted username cannot revive tokens issued to the old account.
+	if err := a.db.QueryRow(`SELECT username, role, token_version FROM users WHERE id=?`, claims.UserID).
+		Scan(&currentUsername, &currentRole, &currentVersion); err != nil || !ValidRole(currentRole) ||
+		currentUsername != claims.Username || currentRole != claims.Role || currentVersion != claims.TokenVersion {
 		return nil, ErrInvalidCreds
 	}
 	return claims, nil

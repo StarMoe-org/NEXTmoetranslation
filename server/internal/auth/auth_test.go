@@ -338,6 +338,31 @@ func TestRolePasswordAndDeleteRevokeIssuedTokens(t *testing.T) {
 	}
 }
 
+func TestRecreatingAUsernameDoesNotRestoreTheDeletedAccountTokens(t *testing.T) {
+	a := openTestAuth(t)
+	deleted, err := a.CreateUser("editor", "strong-password-123", RoleEditor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := a.IssueToken(deleted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.DeleteUser("editor"); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := a.CreateUser("editor", "another-strong-password", RoleEditor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.ID == deleted.ID {
+		t.Fatalf("recreated account reused id %d", replacement.ID)
+	}
+	if _, err := a.VerifyToken(token); err != ErrInvalidCreds {
+		t.Fatalf("token of the deleted account error = %v", err)
+	}
+}
+
 func TestRefreshTokenCannotBeReplayed(t *testing.T) {
 	a := openTestAuth(t)
 	user, err := a.CreateUser("editor", "strong-password-123", RoleEditor)
