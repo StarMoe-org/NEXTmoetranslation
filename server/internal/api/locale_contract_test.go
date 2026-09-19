@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -398,6 +399,23 @@ func TestExplicitChineseMutationsAuditWithoutChangingOmittedLegacyPath(t *testin
 	}
 	if err := h.db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='event.locale.update' AND detail LIKE 'locale=zh-CN %'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("explicit Chinese event audit count=%d err=%v", count, err)
+	}
+}
+
+func TestOmittedLocaleInternalFailureIsSanitized(t *testing.T) {
+	h := setupLegacyAPI(t)
+	if _, err := h.db.Exec(`DROP TABLE entries`); err != nil {
+		t.Fatal(err)
+	}
+	response := authorizedRequest(t, h, http.MethodGet, "/api/categories", nil)
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusInternalServerError || strings.Contains(string(body), "no such table") ||
+		!strings.Contains(string(body), `"error":"internal error"`) {
+		t.Fatalf("omitted-locale failure status=%d body=%s", response.StatusCode, body)
 	}
 }
 

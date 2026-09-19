@@ -1,7 +1,7 @@
 package api
 
 import (
-	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -27,9 +27,10 @@ func requestLocale(w http.ResponseWriter, r *http.Request, bodyLocale string) (s
 }
 
 func writeLocaleInternalError(w http.ResponseWriter, explicit bool, err error) {
+	log.Printf("[api] locale request failed: %v", err)
 	if explicit {
 		writeContractError(w, http.StatusInternalServerError, "internal_error", nil, nil)
 		return
 	}
-	writeErr(w, http.StatusInternalServerError, fmt.Sprint(err))
+	writeErr(w, http.StatusInternalServerError, "internal error")
 }
