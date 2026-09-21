@@ -42,6 +42,7 @@ var auditedExternal = []External{
 	{NumericID: 1017, SourceID: "外部歌唱者-17", Name: "SOLARIA", Aliases: []string{"SOLARIA"}},
 	{NumericID: 1018, SourceID: "外部歌唱者-18", Name: "Kotonoha Aoi", Color: "#4D8FCC", Aliases: []string{"Kotonoha Aoi", "Aoi Kotonoha", "琴葉葵"}},
 	{NumericID: 1019, SourceID: "外部歌唱者-19", Name: "Kotonoha Akane", Color: "#D75C58", Aliases: []string{"Kotonoha Akane", "Akane Kotonoha", "琴葉茜"}},
+	{NumericID: 1028, SourceID: "外部歌唱者-28", Name: "IA", Color: "#FFB1C4", Aliases: []string{"IA", "Ia"}},
 	{NumericID: 1030, SourceID: "外部歌唱者-30", Name: "HARU", Color: "#8EC31F", Aliases: []string{"HARU", "Haru", "羽累"}},
 	{NumericID: 1031, SourceID: "外部歌唱者-31", Name: "COKO", Color: "#00A3E0", Aliases: []string{"COKO", "Coko", "狐子"}},
 }
