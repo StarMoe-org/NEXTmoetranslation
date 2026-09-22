@@ -26,35 +26,10 @@ func BearerTokenFromRequest(r *http.Request) string {
 	return token
 }
 
-// WebSocketTokenFromRequest additionally accepts one query token because the
-// browser WebSocket API cannot set an Authorization header. Callers must scope
-// this extractor exclusively to the /ws handshake and connection revalidation.
-func WebSocketTokenFromRequest(r *http.Request) string {
-	if token := BearerTokenFromRequest(r); token != "" {
-		return token
-	}
-	values, ok := r.URL.Query()["token"]
-	if !ok || len(values) != 1 {
-		return ""
-	}
-	token := strings.TrimSpace(values[0])
-	if token == "" || strings.ContainsAny(token, " \t") {
-		return ""
-	}
-	return token
-}
-
 // RequireAuth wraps a handler, rejecting requests without a valid JWT and
 // attaching the claims to the request context.
 func (a *Auth) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return a.requireToken(BearerTokenFromRequest, next)
-}
-
-// RequireWebSocketAuth authenticates the /ws browser handshake. It is the only
-// middleware allowed to consume a query token; normal API and SSE routes remain
-// header-only through RequireAuth.
-func (a *Auth) RequireWebSocketAuth(next http.HandlerFunc) http.HandlerFunc {
-	return a.requireToken(WebSocketTokenFromRequest, next)
 }
 
 func (a *Auth) requireToken(extract func(*http.Request) string, next http.HandlerFunc) http.HandlerFunc {

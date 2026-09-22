@@ -73,8 +73,9 @@ func TestSSEBroadcastOnEdit(t *testing.T) {
 		"category": "cards", "field": "prefix", "key": "こんにちは",
 		"text": "你好（已校对）", "source": "human",
 	})
-	editReq, _ := http.NewRequest("PUT", ts.URL+"/api/entry", bytes.NewReader(body))
+	editReq, _ := http.NewRequest("PUT", ts.URL+"/api/editor/v1/entry", bytes.NewReader(body))
 	editReq.Header.Set("Authorization", "Bearer "+token)
+	editReq.Header.Set(loadedProducerStateHeader, loadedGateState(t, ts, token))
 	editResp, err := http.DefaultClient.Do(editReq)
 	if err != nil {
 		t.Fatal(err)
@@ -195,8 +196,11 @@ func TestLegacySSENoopDoesNotBroadcast(t *testing.T) {
 				return
 			}
 			if strings.HasPrefix(line, "event: ") {
-				events <- strings.TrimSpace(strings.TrimPrefix(line, "event: "))
-				return
+				// The connect-time producer status is not a mutation broadcast.
+				if event := strings.TrimSpace(strings.TrimPrefix(line, "event: ")); event != "gate.status" {
+					events <- event
+					return
+				}
 			}
 		}
 	}()
@@ -205,8 +209,9 @@ func TestLegacySSENoopDoesNotBroadcast(t *testing.T) {
 		"category": "cards", "field": "prefix", "key": "こんにちは",
 		"text": "你好", "source": "cn",
 	})
-	editReq, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/entry", bytes.NewReader(noopBody))
+	editReq, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/editor/v1/entry", bytes.NewReader(noopBody))
 	editReq.Header.Set("Authorization", "Bearer "+token)
+	editReq.Header.Set(loadedProducerStateHeader, loadedGateState(t, ts, token))
 	editResp, err := http.DefaultClient.Do(editReq)
 	if err != nil {
 		t.Fatal(err)
@@ -262,8 +267,9 @@ func TestLegacySSEEventStoryUpdatePayload(t *testing.T) {
 		"eventId": 1, "episodeNo": "1", "jpKey": "おはよう",
 		"cnText": "早安", "source": "human", "entryType": "talk",
 	})
-	editReq, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/event-story/update", bytes.NewReader(body))
+	editReq, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/editor/v1/event-story/update", bytes.NewReader(body))
 	editReq.Header.Set("Authorization", "Bearer "+token)
+	editReq.Header.Set(loadedProducerStateHeader, loadedGateState(t, ts, token))
 	editResp, err := http.DefaultClient.Do(editReq)
 	if err != nil {
 		t.Fatal(err)
@@ -317,11 +323,12 @@ func TestPromoteEventStoryBroadcastPreservesClientID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	promoteRequest, err := http.NewRequest(http.MethodPost, ts.URL+"/api/event-story/promote-human", bytes.NewReader(body))
+	promoteRequest, err := http.NewRequest(http.MethodPost, ts.URL+"/api/editor/v1/event-story/promote-human", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
 	promoteRequest.Header.Set("Authorization", "Bearer "+token)
+	promoteRequest.Header.Set(loadedProducerStateHeader, loadedGateState(t, ts, token))
 	promoteResponse, err := http.DefaultClient.Do(promoteRequest)
 	if err != nil {
 		t.Fatal(err)
@@ -463,7 +470,7 @@ func TestLyricsMutationsBroadcastCollaborationEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	savePayload["clientId"] = "save-window"
-	savedResponse := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", savePayload)
+	savedResponse := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", savePayload)
 	savedBody, err := io.ReadAll(savedResponse.Body)
 	savedResponse.Body.Close()
 	if err != nil || savedResponse.StatusCode != http.StatusOK || bytes.Contains(savedBody, []byte(`"clientId"`)) {
@@ -471,14 +478,14 @@ func TestLyricsMutationsBroadcastCollaborationEvents(t *testing.T) {
 	}
 	await("save-window", 1)
 	savePayload["revision"] = 1
-	noopSave := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", savePayload)
+	noopSave := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", savePayload)
 	noopSave.Body.Close()
 	if noopSave.StatusCode != http.StatusOK {
 		t.Fatalf("noop save status=%d", noopSave.StatusCode)
 	}
 	assertNoEvent("noop save")
 
-	published := authorizedRequest(t, h, http.MethodPost, "/api/lyrics/publish", map[string]any{
+	published := authorizedRequest(t, h, http.MethodPost, "/api/editor/v1/lyrics/publish", map[string]any{
 		"musicId": 10, "revision": 1, "clientId": "publish-window",
 	})
 	published.Body.Close()
@@ -486,7 +493,7 @@ func TestLyricsMutationsBroadcastCollaborationEvents(t *testing.T) {
 		t.Fatalf("publish status=%d", published.StatusCode)
 	}
 	await("publish-window", 1)
-	noopPublish := authorizedRequest(t, h, http.MethodPost, "/api/lyrics/publish", map[string]any{
+	noopPublish := authorizedRequest(t, h, http.MethodPost, "/api/editor/v1/lyrics/publish", map[string]any{
 		"musicId": 10, "revision": 1, "clientId": "noop-publish-window",
 	})
 	noopPublish.Body.Close()
@@ -495,7 +502,7 @@ func TestLyricsMutationsBroadcastCollaborationEvents(t *testing.T) {
 	}
 	assertNoEvent("noop publish")
 
-	unpublished := authorizedRequest(t, h, http.MethodPost, "/api/lyrics/unpublish", map[string]any{
+	unpublished := authorizedRequest(t, h, http.MethodPost, "/api/editor/v1/lyrics/unpublish", map[string]any{
 		"musicId": 10, "revision": 1, "clientId": "unpublish-window",
 	})
 	unpublished.Body.Close()
@@ -503,7 +510,7 @@ func TestLyricsMutationsBroadcastCollaborationEvents(t *testing.T) {
 		t.Fatalf("unpublish status=%d", unpublished.StatusCode)
 	}
 	await("unpublish-window", 1)
-	noopUnpublish := authorizedRequest(t, h, http.MethodPost, "/api/lyrics/unpublish", map[string]any{
+	noopUnpublish := authorizedRequest(t, h, http.MethodPost, "/api/editor/v1/lyrics/unpublish", map[string]any{
 		"musicId": 10, "revision": 1, "clientId": "noop-unpublish-window",
 	})
 	noopUnpublish.Body.Close()
@@ -523,7 +530,7 @@ func TestLyricsMutationsBroadcastCollaborationEvents(t *testing.T) {
 	firstSegment["performerIds"] = nil
 	savePayload["revision"] = 1
 	savePayload["clientId"] = "null-performers"
-	nullPerformers := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", savePayload)
+	nullPerformers := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", savePayload)
 	nullPerformersBody, err := io.ReadAll(nullPerformers.Body)
 	nullPerformers.Body.Close()
 	if err != nil || nullPerformers.StatusCode != http.StatusOK {
@@ -534,7 +541,7 @@ func TestLyricsMutationsBroadcastCollaborationEvents(t *testing.T) {
 	delete(firstSegment, "performerIds")
 	savePayload["revision"] = 2
 	savePayload["clientId"] = "omitted-performers"
-	omittedPerformers := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", savePayload)
+	omittedPerformers := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", savePayload)
 	omittedPerformers.Body.Close()
 	if omittedPerformers.StatusCode != http.StatusOK {
 		t.Fatalf("omitted performerIds retry status=%d", omittedPerformers.StatusCode)
@@ -542,12 +549,12 @@ func TestLyricsMutationsBroadcastCollaborationEvents(t *testing.T) {
 	assertNoEvent("omitted performerIds retry")
 
 	savePayload["revision"] = 0
-	failedSave := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", savePayload)
+	failedSave := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", savePayload)
 	failedSave.Body.Close()
 	if failedSave.StatusCode != http.StatusConflict {
 		t.Fatalf("failed save status=%d", failedSave.StatusCode)
 	}
-	failedPublish := authorizedRequest(t, h, http.MethodPost, "/api/lyrics/publish", map[string]any{
+	failedPublish := authorizedRequest(t, h, http.MethodPost, "/api/editor/v1/lyrics/publish", map[string]any{
 		"musicId": 10, "revision": 99, "clientId": "failed-window",
 	})
 	failedPublish.Body.Close()
@@ -558,5 +565,73 @@ func TestLyricsMutationsBroadcastCollaborationEvents(t *testing.T) {
 	case data := <-events:
 		t.Fatalf("failed lyrics mutation broadcast=%#v", data)
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// The console tracks producer runs over SSE, so the stream must carry the gate
+// status on connect and again on every producer transition.
+func TestSSECarriesEditorGateStatus(t *testing.T) {
+	h := setupLegacyAPI(t)
+	response, err := http.DefaultClient.Do(bearerSSERequest(t, h.server.URL, h.token))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("SSE status = %d", response.StatusCode)
+	}
+
+	gates := make(chan map[string]any, 4)
+	go func() {
+		reader := bufio.NewReader(response.Body)
+		var event string
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "event: ") {
+				event = strings.TrimPrefix(line, "event: ")
+			}
+			if event == "gate.status" && strings.HasPrefix(line, "data: ") {
+				var data map[string]any
+				if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &data) == nil {
+					gates <- data
+				}
+				event = ""
+			}
+		}
+	}()
+
+	await := func(step string) map[string]any {
+		t.Helper()
+		select {
+		case data := <-gates:
+			return data
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for the %s gate.status", step)
+			return nil
+		}
+	}
+
+	connected := await("connect")
+	if connected["running"] != false || connected["generation"] != float64(0) {
+		t.Fatalf("connect gate.status = %#v", connected)
+	}
+
+	release, err := h.api.editorGate.BeginProducer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := await("producer start")
+	if started["running"] != true || started["generation"] != float64(1) || started["completedGeneration"] != float64(0) {
+		t.Fatalf("producer start gate.status = %#v", started)
+	}
+
+	release()
+	finished := await("producer finish")
+	if finished["running"] != false || finished["completedGeneration"] != float64(1) {
+		t.Fatalf("producer finish gate.status = %#v", finished)
 	}
 }

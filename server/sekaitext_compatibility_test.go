@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -152,7 +153,7 @@ func TestSekaiTextCategorySaveToPublicFilesAndExistingBackups(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshotResponse.Body.Close()
-	batchResponse := compatibilityJSON(t, token, http.MethodPut, server.URL+"/api/category/batch", map[string]any{
+	batchResponse := compatibilityStrictJSON(t, token, http.MethodPut, server.URL, "/api/editor/v1/category/batch", map[string]any{
 		"category": "cards", "locale": model.LocaleChinese, "baseRevision": snapshot.Revision,
 		"clientId": "sekaitext-e2e", "updates": []map[string]string{{
 			"field": "prefix", "key": "source-key", "text": "saved through API", "source": "human",
@@ -223,7 +224,7 @@ func TestSekaiTextCategorySaveToPublicFilesAndExistingBackups(t *testing.T) {
 		t.Fatalf("lyrics index is not the accepted public v3 contract: %s", lyricsIndex)
 	}
 
-	backupResponse := compatibilityJSON(t, token, http.MethodPost, server.URL+"/api/backup/push", map[string]any{})
+	backupResponse := compatibilityStrictJSON(t, token, http.MethodPost, server.URL, "/api/editor/v1/backup/push", map[string]any{})
 	defer backupResponse.Body.Close()
 	if backupResponse.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(backupResponse.Body)
@@ -261,7 +262,26 @@ func compatibilityLogin(t *testing.T, baseURL string) string {
 	return login.Token
 }
 
-func compatibilityJSON(t *testing.T, token, method, url string, value any) *http.Response {
+// compatibilityStrictJSON adds the producer-state proof the v1 write routes
+// require, taken from the gate status a freshly loaded client would have seen.
+func compatibilityStrictJSON(t *testing.T, token, method, baseURL, path string, value any) *http.Response {
+	t.Helper()
+	gate := compatibilityJSON(t, token, http.MethodGet, baseURL+"/api/editor-gate/status", nil)
+	var status struct {
+		InstanceID          string `json:"instanceId"`
+		Revision            uint64 `json:"revision"`
+		CompletedGeneration uint64 `json:"completedGeneration"`
+	}
+	if err := json.NewDecoder(gate.Body).Decode(&status); err != nil {
+		gate.Body.Close()
+		t.Fatal(err)
+	}
+	gate.Body.Close()
+	return compatibilityJSON(t, token, method, baseURL+path, value,
+		fmt.Sprintf("%s:%d:%d", status.InstanceID, status.Revision, status.CompletedGeneration))
+}
+
+func compatibilityJSON(t *testing.T, token, method, url string, value any, producerState ...string) *http.Response {
 	t.Helper()
 	var body io.Reader
 	if value != nil {
@@ -277,6 +297,9 @@ func compatibilityJSON(t *testing.T, token, method, url string, value any) *http
 	}
 	if value != nil {
 		request.Header.Set("Content-Type", "application/json")
+	}
+	for _, state := range producerState {
+		request.Header.Set("X-Moe-Loaded-Producer-State", state)
 	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {

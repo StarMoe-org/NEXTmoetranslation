@@ -3,46 +3,22 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-type recordingWsHub struct {
-	mu      sync.Mutex
-	revoked []string
-}
-
-func (h *recordingWsHub) Broadcast(string, any) {}
-
-func (h *recordingWsHub) BroadcastGateStatus() {}
-
-func (h *recordingWsHub) RevokeUser(user string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.revoked = append(h.revoked, user)
-}
-
-func (h *recordingWsHub) calls() []string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return append([]string(nil), h.revoked...)
-}
-
-// A token generation change must close the account's WebSocket streams too, not
-// only its SSE streams: otherwise a deleted account keeps receiving broadcasts
-// until the next heartbeat revalidation.
-func TestTokenGenerationChangesRevokeWebSocketStreams(t *testing.T) {
+// A token generation change must close the account's live SSE streams, not only
+// reject its next request: otherwise a deleted account keeps receiving
+// broadcasts until the next heartbeat revalidation.
+func TestTokenGenerationChangesRevokeLiveStreams(t *testing.T) {
 	h := setupLegacyAPI(t)
-	hub := &recordingWsHub{}
-	h.api.SetWsHub(hub)
-
 	created := doJSON(t, http.MethodPost, h.server.URL+"/api/admin/users", h.token, map[string]string{
 		"username": "bob", "password": "another-strong-password", "role": "editor",
 	})
@@ -52,41 +28,76 @@ func TestTokenGenerationChangesRevokeWebSocketStreams(t *testing.T) {
 	}
 
 	for _, step := range []struct {
-		name string
-		do   func() *http.Response
-		want string
+		name     string
+		password string
+		do       func() *http.Response
 	}{
-		{"password change", func() *http.Response {
+		{"password change", "another-strong-password", func() *http.Response {
 			return doJSON(t, http.MethodPut, h.server.URL+"/api/admin/users", h.token, map[string]string{
 				"username": "bob", "password": "third-strong-password",
 			})
-		}, "bob"},
-		{"role change", func() *http.Response {
+		}},
+		{"role change", "third-strong-password", func() *http.Response {
 			return doJSON(t, http.MethodPut, h.server.URL+"/api/admin/users", h.token, map[string]string{
 				"username": "bob", "role": "admin",
 			})
-		}, "bob"},
-		{"delete", func() *http.Response {
+		}},
+		{"delete", "third-strong-password", func() *http.Response {
 			return doJSON(t, http.MethodDelete, h.server.URL+"/api/admin/users?username=bob", h.token, nil)
-		}, "bob"},
-		{"refresh", func() *http.Response {
+		}},
+		{"refresh", "", func() *http.Response {
 			return doJSON(t, http.MethodPost, h.server.URL+"/api/auth/refresh", h.token, nil)
-		}, "alice"},
+		}},
 	} {
-		before := len(hub.calls())
-		response := step.do()
-		response.Body.Close()
-		if response.StatusCode != http.StatusOK {
-			t.Fatalf("%s status = %d", step.name, response.StatusCode)
-		}
-		calls := hub.calls()
-		if len(calls) <= before {
-			t.Fatalf("%s did not revoke any WebSocket stream", step.name)
-		}
-		if got := calls[len(calls)-1]; got != step.want {
-			t.Fatalf("%s revoked %q, want %q", step.name, got, step.want)
-		}
+		t.Run(step.name, func(t *testing.T) {
+			token := h.token
+			if step.password != "" {
+				token = loginToken(t, h, "bob", step.password)
+			}
+			stream, err := http.DefaultClient.Do(bearerSSERequest(t, h.server.URL, token))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Body.Close()
+			if stream.StatusCode != http.StatusOK {
+				t.Fatalf("SSE status = %d", stream.StatusCode)
+			}
+			closed := make(chan struct{})
+			go func() {
+				_, _ = io.ReadAll(stream.Body)
+				close(closed)
+			}()
+
+			response := step.do()
+			response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("%s status = %d", step.name, response.StatusCode)
+			}
+			select {
+			case <-closed:
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s left the revoked account's SSE stream open", step.name)
+			}
+		})
 	}
+}
+
+func loginToken(t *testing.T, h *legacyAPIHarness, username, password string) string {
+	t.Helper()
+	response := doJSON(t, http.MethodPost, h.server.URL+"/api/auth/login", "", map[string]string{
+		"username": username, "password": password,
+	})
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("login %s status = %d", username, response.StatusCode)
+	}
+	var login struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&login); err != nil {
+		t.Fatal(err)
+	}
+	return login.Token
 }
 
 // A token generation change must also close the account's collaboration rooms:

@@ -15,6 +15,7 @@ import (
 	"moesekai/server/internal/auth"
 	"moesekai/server/internal/config"
 	"moesekai/server/internal/db"
+	"moesekai/server/internal/editorgate"
 	"moesekai/server/internal/model"
 	"moesekai/server/internal/sse"
 	"moesekai/server/internal/store"
@@ -77,6 +78,19 @@ func setup(t *testing.T) (*httptest.Server, string) {
 	return ts, lr.Token
 }
 
+// loadedGateState reads the producer-state proof the v1 routes require for the
+// harnesses that expose only a server and a token.
+func loadedGateState(t *testing.T, ts *httptest.Server, token string) string {
+	t.Helper()
+	response := authGET(t, ts, token, "/api/editor-gate/status")
+	defer response.Body.Close()
+	var status editorgate.Status
+	if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	return loadedState(status)
+}
+
 func authGET(t *testing.T, ts *httptest.Server, token, path string) *http.Response {
 	req, _ := http.NewRequest("GET", ts.URL+path, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -122,12 +136,13 @@ func TestJSONMutationBodiesRejectUnknownAndTrailingValues(t *testing.T) {
 		`{"musicId":10,"revision":1,"clientId":"tab"}{"second":true}`,
 		`{"musicId":10,"musicId":11,"revision":1,"clientId":"tab"}`,
 	} {
-		request, err := http.NewRequest(http.MethodPost, h.server.URL+"/api/lyrics/publish", strings.NewReader(raw))
+		request, err := http.NewRequest(http.MethodPost, h.server.URL+"/api/editor/v1/lyrics/publish", strings.NewReader(raw))
 		if err != nil {
 			t.Fatal(err)
 		}
 		request.Header.Set("Authorization", "Bearer "+h.token)
 		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set(loadedProducerStateHeader, loadedState(h.api.editorGate.Status()))
 		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			t.Fatal(err)
@@ -142,12 +157,13 @@ func TestJSONMutationBodiesRejectUnknownAndTrailingValues(t *testing.T) {
 func TestJSONMutationBodiesRejectNestedDuplicateKeys(t *testing.T) {
 	h := setupLegacyAPI(t)
 	raw := `{"musicId":10,"revision":0,"status":"draft","attribution":"team","lines":[{"id":"line-1","order":0,"japanese":"歌","chinese":"","english":"","stanzaBreakBefore":false,"segments":[{"text":"歌","text":"改ざん","performerIds":[]}]}]}`
-	request, err := http.NewRequest(http.MethodPut, h.server.URL+"/api/lyrics/save", strings.NewReader(raw))
+	request, err := http.NewRequest(http.MethodPut, h.server.URL+"/api/editor/v1/lyrics/save", strings.NewReader(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
 	request.Header.Set("Authorization", "Bearer "+h.token)
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(loadedProducerStateHeader, loadedState(h.api.editorGate.Status()))
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +176,7 @@ func TestJSONMutationBodiesRejectNestedDuplicateKeys(t *testing.T) {
 
 func TestLyricsPluralSaveRejectsClientClaimedMutationTarget(t *testing.T) {
 	h := setupLegacyAPI(t)
-	response := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", map[string]any{
+	response := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", map[string]any{
 		"musicId": 765, "status": "draft", "revision": 1, "updatedAt": "2026-08-14T00:00:00Z",
 		"renditions": []any{}, "clientId": "tab", "renditionKey": "sekai", "side": "game", "locale": "zh-CN",
 	})
@@ -411,8 +427,9 @@ func TestEventStoryUpdate(t *testing.T) {
 		"eventId": 1, "episodeNo": "1", "jpKey": "おはよう",
 		"cnText": "早安", "source": "human", "entryType": "talk",
 	})
-	req, _ := http.NewRequest("PUT", ts.URL+"/api/event-story/update", bytes.NewReader(body))
+	req, _ := http.NewRequest("PUT", ts.URL+"/api/editor/v1/event-story/update", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set(loadedProducerStateHeader, loadedGateState(t, ts, token))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

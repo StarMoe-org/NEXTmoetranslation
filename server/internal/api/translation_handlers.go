@@ -77,7 +77,7 @@ func (s *Server) handleEntries(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateEntry updates one translation entry.
 //
-// PUT /api/entry {category, field, key, text, source}
+// PUT /api/editor/v1/entry {category, field, key, text, source}
 func (s *Server) handleUpdateEntry(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")

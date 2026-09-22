@@ -33,7 +33,7 @@ func TestLyricsTranslationEditionEditorRoutesAndFailClosedSelection(t *testing.T
 		t.Fatalf("initial edition selector=%+v", initial)
 	}
 
-	createdResponse := authorizedRequest(t, h, http.MethodPost, "/api/lyrics/translation-editions", map[string]any{
+	createdResponse := authorizedRequest(t, h, http.MethodPost, "/api/editor/v1/lyrics/translation-editions", map[string]any{
 		"musicId": 765, "revision": initial.Revision, "operation": "create",
 		"editionKey": "alternate", "label": "另一译本", "clientId": "edition-window",
 	})
@@ -146,7 +146,7 @@ func TestLyricsTranslationEditionMetadataBroadcastIsSongLevel(t *testing.T) {
 	}()
 	time.Sleep(100 * time.Millisecond)
 
-	created := authorizedRequest(t, h, http.MethodPost, "/api/lyrics/translation-editions", map[string]any{
+	created := authorizedRequest(t, h, http.MethodPost, "/api/editor/v1/lyrics/translation-editions", map[string]any{
 		"musicId": 766, "revision": initial.Revision, "operation": "create",
 		"editionKey": "alternate", "label": "另一译本", "clientId": "metadata-window",
 	})
@@ -175,7 +175,7 @@ func TestLegacyLyricsRejectExplicitTranslationEditionSelection(t *testing.T) {
 	h := setupLegacyAPI(t)
 	seedLyricsCatalog(t, h)
 
-	saved := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", apiLyrics())
+	saved := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", apiLyrics())
 	saved.Body.Close()
 	if saved.StatusCode != http.StatusOK {
 		t.Fatalf("legacy save status=%d", saved.StatusCode)

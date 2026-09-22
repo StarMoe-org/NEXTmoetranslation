@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -41,7 +42,7 @@ func (w *blockingSSEWriter) SetWriteDeadline(time.Time) error {
 func TestStreamClosesAtTokenExpiry(t *testing.T) {
 	hub := NewHub()
 	server := httptest.NewServer(hub.Handler(func(*http.Request) string { return "editor" },
-		func(*http.Request) bool { return true }, func(*http.Request) time.Time { return time.Now().Add(40 * time.Millisecond) }))
+		func(*http.Request) bool { return true }, func(*http.Request) time.Time { return time.Now().Add(40 * time.Millisecond) }, nil))
 	defer server.Close()
 	response, err := http.Get(server.URL)
 	if err != nil {
@@ -66,7 +67,7 @@ func TestHeartbeatArrivesBeforeShortIntermediaryIdleTimeout(t *testing.T) {
 	}
 	hub := NewHub()
 	hub.heartbeatInterval = 10 * time.Millisecond
-	server := httptest.NewServer(hub.Handler(nil, nil, nil))
+	server := httptest.NewServer(hub.Handler(nil, nil, nil, nil))
 	defer server.Close()
 	response, err := http.Get(server.URL)
 	if err != nil {
@@ -108,7 +109,7 @@ func TestHeartbeatArrivesBeforeShortIntermediaryIdleTimeout(t *testing.T) {
 
 func TestCloseDisconnectsStreamsAndRejectsNewClients(t *testing.T) {
 	hub := NewHub()
-	server := httptest.NewServer(hub.Handler(nil, nil, nil))
+	server := httptest.NewServer(hub.Handler(nil, nil, nil, nil))
 	defer server.Close()
 	response, err := http.Get(server.URL)
 	if err != nil {
@@ -175,7 +176,7 @@ func TestOverflowInterruptsBlockedTransportWrite(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		hub.Handler(func(*http.Request) string { return "slow-editor" }, nil, nil)(writer, httptest.NewRequest(http.MethodGet, "/sse", nil))
+		hub.Handler(func(*http.Request) string { return "slow-editor" }, nil, nil, nil)(writer, httptest.NewRequest(http.MethodGet, "/sse", nil))
 		close(done)
 	}()
 	select {
@@ -213,5 +214,31 @@ func TestHubEnforcesPerUserAndGlobalConnectionLimits(t *testing.T) {
 	}
 	if _, err := hub.add("one-more-user"); !errors.Is(err, errHubCapacity) {
 		t.Fatalf("global overflow error = %v", err)
+	}
+}
+
+func TestHandlerWritesInitialEventsOnConnect(t *testing.T) {
+	hub := NewHub()
+	server := httptest.NewServer(hub.Handler(nil, nil, nil, func() []Message {
+		return []Message{{Event: EventGateStatus, Data: map[string]any{"running": true}}}
+	}))
+	defer server.Close()
+	response, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	reader := bufio.NewReader(response.Body)
+	event, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(event) != "event: "+EventGateStatus || strings.TrimSpace(data) != `data: {"running":true}` {
+		t.Fatalf("initial frame = %q %q", event, data)
 	}
 }

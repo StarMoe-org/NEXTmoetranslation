@@ -266,20 +266,6 @@ test("SSE gaps lock writes until authoritative reconciliation completes", async 
   assert.match(editor, /reloadAuthoritative[\s\S]*setPendingTransition\(null\)/);
 });
 
-test("WebSocket heartbeats reply with pong without reaching UI handlers or requesting gate status", async () => {
-  const ws = await read("src/lib/ws.ts");
-  const heartbeatStart = ws.indexOf('if (parsed.event === "ping")');
-  const forwardedEvent = ws.indexOf("handlerRef.current(parsed.event as SSEEvent", heartbeatStart);
-
-  assert.ok(heartbeatStart >= 0, "missing WebSocket ping handling");
-  assert.ok(forwardedEvent > heartbeatStart, "missing WebSocket event forwarding after heartbeat handling");
-  const heartbeat = ws.slice(heartbeatStart, forwardedEvent);
-  assert.match(heartbeat, /ws\.readyState === WebSocket\.OPEN/);
-  assert.match(heartbeat, /ws\.send\(JSON\.stringify\(\{ type: "pong" \}\)\)/);
-  assert.match(heartbeat, /return;/);
-  assert.doesNotMatch(heartbeat, /handlerRef\.current|check_sync|gate\.status/);
-});
-
 test("stale conflict resolution revalidates proof and live SSE before releasing the write fence", async () => {
   const consoleSource = await read("src/components/Console.tsx");
   const reconcile = consoleSource.slice(consoleSource.indexOf("const reconcileContent = async"), consoleSource.indexOf("reconcileContentRef.current = reconcileContent"));

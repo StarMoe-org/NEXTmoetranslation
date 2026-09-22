@@ -28,14 +28,14 @@ func TestEditorsCannotTriggerAdministrativeOperations(t *testing.T) {
 		method string
 		path   string
 	}{
-		{http.MethodPost, "/api/event-story/promote-human"},
+		{http.MethodPost, "/api/editor/v1/event-story/promote-human"},
 		{http.MethodPost, "/api/event-story/retry"},
 		{http.MethodPost, "/api/event-story/reorder"},
 		{http.MethodPost, "/api/translate/cn-sync"},
 		{http.MethodPost, "/api/translate/ai"},
 		{http.MethodPost, "/api/translate/ai-all"},
 		{http.MethodPost, "/api/translate/ai-story"},
-		{http.MethodPost, "/api/backup/push"},
+		{http.MethodPost, "/api/editor/v1/backup/push"},
 		{http.MethodGet, "/api/lyrics/source/search"},
 		{http.MethodPost, "/api/lyrics/source/preview"},
 		{http.MethodGet, "/api/admin/lyrics-source-reviews"},

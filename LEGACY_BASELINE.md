@@ -7,8 +7,9 @@ This baseline characterizes the pre-locale, pre-lyrics behavior without changing
 | Surface | Executable coverage |
 | --- | --- |
 | `GET /api/categories`, `GET /api/entries` | `server/internal/api/legacy_contract_test.go` and `server/internal/api/testdata/legacy/` |
-| `PUT /api/entry` ok, noop, error, insertion, arbitrary v1 field/source, actor and ID preservation | `server/internal/api/legacy_contract_test.go` |
+| `PUT /api/editor/v1/entry` ok, noop, error, insertion, arbitrary v1 field/source, actor and ID preservation | `server/internal/api/legacy_contract_test.go` |
 | Event summary/detail/update/error | `server/internal/api/legacy_contract_test.go` and its event fixtures |
+| Deleted legacy write routes now answering the JSON API 404 | `server/internal/api/routes_contract_test.go` |
 | First-run setup, login, `/me`, refresh | Normalized golden responses in `server/internal/api/testdata/legacy/`; JWT values and expiration timestamps are type-checked before normalization |
 | SSE authentication, headers, entry update, event update, and noop suppression | `server/internal/api/sse_test.go` |
 | Flat/full category bytes and event-story bytes | `server/internal/files/legacy_golden_test.go` and `server/internal/files/testdata/legacy/` |
@@ -26,12 +27,13 @@ This baseline characterizes the pre-locale, pre-lyrics behavior without changing
 
 The tests describe current behavior, including behavior that a later migration may deliberately fix:
 
+- The legacy unversioned write routes (`PUT /api/entry`, `PUT /api/category/batch`, `PUT /api/lyrics/save`, `POST /api/lyrics/translation-editions`, `POST /api/lyrics/publish`, `POST /api/lyrics/unpublish`, `PUT /api/event-story/update`, `POST /api/event-story/promote-human`, `POST /api/backup/push`) were removed; the frozen response bodies above are now characterized through their `/api/editor/v1/*` twins, which additionally require `X-Moe-Loaded-Producer-State`. `POST /api/admin/lyrics-source-reviews/import` is the one remaining lenient-gate write route, kept until SekaiText-Moe sends that header.
 - Official non-empty CN text overwrites `human`, `llm`, `unknown`, and existing `cn` rows. Only `pinned` is protected; an empty official value preserves existing non-empty text. This is kept behavior, not a pending fix: editors pin (控制台「锁定」) a manual translation to protect it from the next official CN sync.
 - Mysekai `tag` propagation overwrites a matching `flavorText` value and source without checking the flavorText source, so pinning the `flavorText` entry does not protect it; only the `tag` entry's own source decides what is propagated.
 - V1 entry updates accept arbitrary field and source strings and insert a missing row inside a supported category.
 - Event public JSON omits title source, talk sources, talk order, and speaker names. A legacy backup/restore therefore preserves public bytes but restores line sources from story metadata and loses title provenance and speakers.
 - API event updates always return `{"status":"ok"}` on an existing target, blank source becomes `human`, and entry noops do not emit SSE.
-- Entry updates without a `response` query retain the exact status-only legacy body for both canonical and strict-alias routes. The additive `response=correlated-v1` selector does not redefine or replace this frozen default.
+- Entry updates without a `response` query retain the exact status-only legacy body. The additive `response=correlated-v1` selector does not redefine or replace this frozen default.
 - Search output remains the compact Chinese schema `{id,n,g,c?,cn?}`; `cn` is omitted for empty or source-identical translations.
 
 ## Fixture Policy

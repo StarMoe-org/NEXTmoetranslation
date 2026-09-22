@@ -12,7 +12,7 @@ import (
 
 func TestPresenceSnapshotAndMembershipLifecycle(t *testing.T) {
 	hub := NewHub()
-	server := httptest.NewServer(hub.Handler(func(r *http.Request) string { return r.Header.Get("X-Test-User") }, nil, nil))
+	server := httptest.NewServer(hub.Handler(func(r *http.Request) string { return r.Header.Get("X-Test-User") }, nil, nil, nil))
 	defer server.Close()
 
 	alice := openPresenceStream(t, server.URL, "alice")
@@ -30,7 +30,7 @@ func TestPresenceSnapshotAndMembershipLifecycle(t *testing.T) {
 
 func TestPresenceDeduplicatesMultipleTabsForOneUser(t *testing.T) {
 	hub := NewHub()
-	server := httptest.NewServer(hub.Handler(func(r *http.Request) string { return r.Header.Get("X-Test-User") }, nil, nil))
+	server := httptest.NewServer(hub.Handler(func(r *http.Request) string { return r.Header.Get("X-Test-User") }, nil, nil, nil))
 	defer server.Close()
 
 	alice := openPresenceStream(t, server.URL, "alice")

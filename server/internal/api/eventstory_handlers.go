@@ -116,7 +116,7 @@ func (s *Server) handleEventEpisodeSnapshot(w http.ResponseWriter, r *http.Reque
 
 // handleUpdateEventStory updates one talk line or episode title.
 //
-// PUT /api/event-story/update {eventId, episodeNo, jpKey, cnText, source, entryType}
+// PUT /api/editor/v1/event-story/update {eventId, episodeNo, jpKey, cnText, source, entryType}
 func (s *Server) handleUpdateEventStory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -234,7 +234,7 @@ func (s *Server) handleUpdateEventStory(w http.ResponseWriter, r *http.Request) 
 
 // handlePromoteEventStoryHuman marks an entire story as human-edited.
 //
-// POST /api/event-story/promote-human {eventId, clientId}
+// POST /api/editor/v1/event-story/promote-human {eventId, clientId}
 func (s *Server) handlePromoteEventStoryHuman(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")

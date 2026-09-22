@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"moesekai/server/internal/auth"
+	"moesekai/server/internal/sse"
 )
 
 // RegisterRoutes mounts all console API routes on mux. Every route except login
@@ -20,39 +21,31 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	// Translations
 	mux.HandleFunc("/api/editor-gate/status", s.auth.RequireAuth(s.handleEditorGateStatus))
-	mux.HandleFunc("/api/categories", s.auth.RequireAuth(s.handleCategories))
-	mux.HandleFunc("/api/entries", s.auth.RequireAuth(s.handleEntries))
-	mux.HandleFunc("/api/entry", s.auth.RequireAuth(s.contentMutation(s.handleUpdateEntry)))
+	mux.HandleFunc("/api/categories", s.auth.RequireAuth(getOnly(s.handleCategories)))
+	mux.HandleFunc("/api/entries", s.auth.RequireAuth(getOnly(s.handleEntries)))
 	mux.HandleFunc("/api/category/snapshot", s.auth.RequireAuth(s.handleCategorySnapshot))
-	mux.HandleFunc("/api/category/batch", s.auth.RequireAuth(s.contentMutation(s.handleCategoryBatch)))
 	mux.HandleFunc("/api/projection/status", s.auth.RequireAuth(s.handleProjectionStatus))
 	mux.HandleFunc("/api/projection/publish", s.auth.RequireAuth(s.handleProjectionPublish))
-	mux.HandleFunc("/api/search/status", s.auth.RequireAuth(s.handleSearchStatus))
+	mux.HandleFunc("/api/search/status", s.auth.RequireAuth(getOnly(s.handleSearchStatus)))
 
 	// Stable masterdata catalog and manual lyrics workflow.
 	mux.HandleFunc("/api/catalog/music", s.auth.RequireAuth(s.handleCatalogMusic))
 	mux.HandleFunc("/api/catalog/characters", s.auth.RequireAuth(s.handleCatalogCharacters))
 	mux.HandleFunc("/api/lyrics", s.auth.RequireAuth(s.handleLyricsList))
 	mux.HandleFunc("/api/lyrics/detail", s.auth.RequireAuth(s.handleLyricsDetail))
-	mux.HandleFunc("/api/lyrics/save", s.auth.RequireAuth(s.contentMutation(s.handleLyricsSave)))
-	mux.HandleFunc("/api/lyrics/translation-editions", s.auth.RequireAuth(s.contentMutation(s.handleLyricsTranslationEditions)))
-	mux.HandleFunc("/api/lyrics/publish", s.auth.RequireAdmin(s.contentMutation(s.handleLyricsPublish)))
-	mux.HandleFunc("/api/lyrics/unpublish", s.auth.RequireAdmin(s.contentMutation(s.handleLyricsUnpublish)))
 	mux.HandleFunc("/api/lyrics/source/search", s.auth.RequireAdmin(s.handleLyricsSourceSearch))
 	mux.HandleFunc("/api/lyrics/source/preview", s.auth.RequireAdmin(s.handleLyricsSourcePreview))
 
 	// Event stories and stable event-to-content relations.
 	mux.HandleFunc("/api/event-associations", s.auth.RequireAuth(s.handleEventAssociations))
-	mux.HandleFunc("/api/event-stories", s.auth.RequireAuth(s.handleEventStories))
-	mux.HandleFunc("/api/event-story", s.auth.RequireAuth(s.handleEventStory))
+	mux.HandleFunc("/api/event-stories", s.auth.RequireAuth(getOnly(s.handleEventStories)))
+	mux.HandleFunc("/api/event-story", s.auth.RequireAuth(getOnly(s.handleEventStory)))
 	mux.HandleFunc("/api/event-story/episode-snapshot", s.auth.RequireAuth(s.handleEventEpisodeSnapshot))
-	mux.HandleFunc("/api/event-story/update", s.auth.RequireAuth(s.contentMutation(s.handleUpdateEventStory)))
-	mux.HandleFunc("/api/event-story/promote-human", s.auth.RequireAdmin(s.contentMutation(s.handlePromoteEventStoryHuman)))
 	mux.HandleFunc("/api/event-story/retry", s.auth.RequireAdmin(s.handleRetryEventStory))
 	mux.HandleFunc("/api/event-story/reorder", s.auth.RequireAdmin(s.handleReorderEventStory))
 
 	// Translation engine
-	mux.HandleFunc("/api/translate/status", s.auth.RequireAuth(s.handleTranslateStatus))
+	mux.HandleFunc("/api/translate/status", s.auth.RequireAuth(getOnly(s.handleTranslateStatus)))
 	mux.HandleFunc("/api/translate/cn-sync", s.auth.RequireAdmin(s.handleCNSync))
 	mux.HandleFunc("/api/translate/ai", s.auth.RequireAdmin(s.handleTranslateAI))
 	mux.HandleFunc("/api/translate/ai-all", s.auth.RequireAdmin(s.handleTranslateAIAll))
@@ -70,15 +63,16 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/lyrics-source-reviews/detail", s.auth.RequireAdmin(s.handleLyricsSourceReviewDetail))
 	mux.HandleFunc("/api/admin/lyrics-source-reviews/decision", s.auth.RequireAdmin(s.handleLyricsSourceReviewDecision))
 	mux.HandleFunc("/api/admin/lyrics-source-reviews/candidate-selection", s.auth.RequireAdmin(s.handleLyricsSourceCandidateSelection))
+	// SekaiText-Moe still calls this legacy path and does not yet send
+	// X-Moe-Loaded-Producer-State; it keeps the lenient gate until it switches to
+	// the v1 twin below.
 	mux.HandleFunc("/api/admin/lyrics-source-reviews/import", s.auth.RequireAdmin(s.contentMutation(s.handleLyricsSourceReviewImport)))
 
 	// Backup status is readable by editors; push and restore are admin operations.
-	mux.HandleFunc("/api/backup/status", s.auth.RequireAuth(s.handleBackupStatus))
-	mux.HandleFunc("/api/backup/push", s.auth.RequireAdmin(s.editorMutation(s.handleBackupPush)))
+	mux.HandleFunc("/api/backup/status", s.auth.RequireAuth(getOnly(s.handleBackupStatus)))
 	mux.HandleFunc("/api/backup/restore", s.auth.RequireAdmin(s.handleBackupRestore))
 
-	// Strict single-instance aliases used by the producer-aware editor. The
-	// canonical routes above remain compatible for existing clients.
+	// Every content write goes through the producer-aware v1 routes.
 	mux.HandleFunc("/api/editor/v1/entry", s.auth.RequireAuth(s.strictContentMutation(s.handleUpdateEntry)))
 	mux.HandleFunc("/api/editor/v1/category/batch", s.auth.RequireAuth(s.strictContentMutation(s.handleCategoryBatch)))
 	mux.HandleFunc("/api/editor/v1/event-story/update", s.auth.RequireAuth(s.strictContentMutation(s.handleUpdateEventStory)))
@@ -87,6 +81,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/editor/v1/lyrics/translation-editions", s.auth.RequireAuth(s.strictContentMutation(s.handleLyricsTranslationEditions)))
 	mux.HandleFunc("/api/editor/v1/lyrics/publish", s.auth.RequireAdmin(s.strictContentMutation(s.handleLyricsPublish)))
 	mux.HandleFunc("/api/editor/v1/lyrics/unpublish", s.auth.RequireAdmin(s.strictContentMutation(s.handleLyricsUnpublish)))
+	mux.HandleFunc("/api/editor/v1/admin/lyrics-source-reviews/import", s.auth.RequireAdmin(s.strictContentMutation(s.handleLyricsSourceReviewImport)))
 	if s.collab != nil {
 		mux.HandleFunc("/api/editor/v1/lyrics/{musicId}/collab-ticket", s.auth.RequireAuth(s.strictEditorMutation(s.handleLyricsCollabTicket)))
 		mux.HandleFunc("/api/editor/v1/lyrics/{musicId}/checkpoint", s.auth.RequireAuth(s.strictContentMutation(s.handleLyricsCheckpoint)))
@@ -105,18 +100,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 				return time.Time{}
 			}
 			return claims.ExpiresAt.Time
+		}, func() []sse.Message {
+			return []sse.Message{{Event: sse.EventGateStatus, Data: s.editorGate.Status()}}
 		})))
-	}
-
-	if s.wsHub != nil {
-		if wsHandler, ok := s.wsHub.(interface {
-			Handler(func(*http.Request) string, func(*http.Request) bool) http.HandlerFunc
-		}); ok {
-			mux.HandleFunc("/ws", s.auth.RequireWebSocketAuth(wsHandler.Handler(currentUser, func(r *http.Request) bool {
-				_, err := s.auth.VerifyToken(auth.WebSocketTokenFromRequest(r))
-				return err == nil
-			})))
-		}
 	}
 
 	// Keep unknown API paths inside the JSON API contract instead of falling

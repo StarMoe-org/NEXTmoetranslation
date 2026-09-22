@@ -172,7 +172,7 @@ func TestCategorySnapshotBatchAuditSSEAndProjectionContract(t *testing.T) {
 		}
 	}()
 
-	batch := authorizedRequest(t, h, http.MethodPut, "/api/category/batch", map[string]any{
+	batch := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/category/batch", map[string]any{
 		"category": "cards", "locale": model.LocaleEnglish, "baseRevision": snapshot.Revision,
 		"clientId": "sekaitext-window", "updates": []map[string]string{
 			{"field": "prefix", "key": "cn-key", "text": "Official", "source": "human"},
@@ -208,7 +208,7 @@ func TestCategorySnapshotBatchAuditSSEAndProjectionContract(t *testing.T) {
 		}
 	}
 
-	stale := authorizedRequest(t, h, http.MethodPut, "/api/category/batch", map[string]any{
+	stale := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/category/batch", map[string]any{
 		"category": "cards", "locale": model.LocaleEnglish, "baseRevision": snapshot.Revision,
 		"updates": []map[string]string{{"field": "prefix", "key": "pinned-key", "text": "stale", "source": "human"}},
 	})
@@ -269,7 +269,7 @@ func TestEventLocaleRevisionRejectsCompetingTranslationEdit(t *testing.T) {
 		"sourceHash": target.SourceHash, "cnText": "First English", "source": "human",
 		"entryType": "talk", "locale": model.LocaleEnglish, "revision": target.Revision,
 	}
-	first := authorizedRequest(t, h, http.MethodPut, "/api/event-story/update", request)
+	first := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/event-story/update", request)
 	if first.StatusCode != http.StatusOK {
 		t.Fatalf("first revision update status = %d", first.StatusCode)
 	}
@@ -285,7 +285,7 @@ func TestEventLocaleRevisionRejectsCompetingTranslationEdit(t *testing.T) {
 		t.Fatalf("revision update response = %+v", saved)
 	}
 	request["cnText"] = "Stale overwrite"
-	stale := authorizedRequest(t, h, http.MethodPut, "/api/event-story/update", request)
+	stale := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/event-story/update", request)
 	defer stale.Body.Close()
 	if stale.StatusCode != http.StatusConflict {
 		t.Fatalf("stale revision status = %d", stale.StatusCode)

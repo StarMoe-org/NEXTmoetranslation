@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -183,5 +184,49 @@ func TestGateCountersNeverExceedJavaScriptSafeInteger(t *testing.T) {
 	}
 	if after := gate.Status(); after != status {
 		t.Fatalf("exhausted gate changed status: before=%+v after=%+v", status, after)
+	}
+}
+
+func TestOnChangeObservesProducerTransitions(t *testing.T) {
+	g := MustNew()
+	var mu sync.Mutex
+	var seen []Status
+	g.OnChange(func(status Status) {
+		mu.Lock()
+		seen = append(seen, status)
+		mu.Unlock()
+	})
+
+	release, err := g.BeginProducer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	release()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 {
+		t.Fatalf("observed transitions = %+v, want one start and one finish", seen)
+	}
+	if !seen[0].Running || seen[0].Generation != 1 || seen[0].CompletedGeneration != 0 {
+		t.Fatalf("start transition = %+v", seen[0])
+	}
+	if seen[1].Running || seen[1].Generation != 1 || seen[1].CompletedGeneration != 1 || seen[1].LastRun == "" {
+		t.Fatalf("finish transition = %+v", seen[1])
+	}
+}
+
+func TestOnChangeRunsOutsideTheGateLock(t *testing.T) {
+	g := MustNew()
+	var observed Status
+	g.OnChange(func(Status) { observed = g.Status() })
+	release, err := g.BeginProducer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if !observed.Running {
+		t.Fatalf("hook could not read the gate status it was told about: %+v", observed)
 	}
 }

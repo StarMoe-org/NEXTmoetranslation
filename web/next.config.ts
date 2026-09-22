@@ -18,7 +18,6 @@ const nextConfig: NextConfig = {
           return [
             { source: "/api/:path*", destination: `${backend}/api/:path*` },
             { source: "/sse", destination: `${backend}/sse` },
-            { source: "/ws", destination: `${backend}/ws` },
             { source: "/yjs/:path*", destination: `${backend}/yjs/:path*` },
             { source: "/files/:path*", destination: `${backend}/files/:path*` },
           ];

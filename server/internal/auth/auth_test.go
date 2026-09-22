@@ -169,39 +169,6 @@ func TestRequireAuthAcceptsOnlyBearerHeader(t *testing.T) {
 	}
 }
 
-func TestRequireWebSocketAuthScopesQueryTokensToWebSocketMiddleware(t *testing.T) {
-	a := openTestAuth(t)
-	user, err := a.CreateUser("websocket", "strong-password-123", RoleEditor)
-	if err != nil {
-		t.Fatal(err)
-	}
-	token, _, err := a.IssueToken(user)
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler := a.RequireWebSocketAuth(func(w http.ResponseWriter, r *http.Request) {
-		claims, ok := FromContext(r.Context())
-		if !ok || claims.Username != user.Username {
-			t.Fatalf("claims = %+v, ok = %v", claims, ok)
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	query := httptest.NewRequest(http.MethodGet, "/ws?token="+token, nil)
-	queryResponse := httptest.NewRecorder()
-	handler(queryResponse, query)
-	if queryResponse.Code != http.StatusNoContent {
-		t.Fatalf("query token status = %d", queryResponse.Code)
-	}
-
-	duplicate := httptest.NewRequest(http.MethodGet, "/ws?token="+token+"&token="+token, nil)
-	duplicateResponse := httptest.NewRecorder()
-	handler(duplicateResponse, duplicate)
-	if duplicateResponse.Code != http.StatusUnauthorized {
-		t.Fatalf("duplicate query token status = %d", duplicateResponse.Code)
-	}
-}
-
 func TestExpiredToken(t *testing.T) {
 	database, _ := db.Open(t.TempDir() + "/exp.db")
 	defer database.Close()

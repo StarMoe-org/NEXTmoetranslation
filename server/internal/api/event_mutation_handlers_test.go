@@ -47,7 +47,7 @@ func TestDecodeEventMutationRejectsOversizedClientID(t *testing.T) {
 
 func TestPromoteEventStoryHumanReportsMissingStory(t *testing.T) {
 	h := setupLegacyAPI(t)
-	response := authorizedRequest(t, h, http.MethodPost, "/api/event-story/promote-human",
+	response := authorizedRequest(t, h, http.MethodPost, "/api/editor/v1/event-story/promote-human",
 		map[string]any{"eventId": 4242})
 	defer response.Body.Close()
 	body, err := io.ReadAll(response.Body)

@@ -23,7 +23,7 @@ func (s *Server) handleBackupStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleBackupPush triggers an immediate backup to all enabled targets.
 //
-// POST /api/backup/push
+// POST /api/editor/v1/backup/push
 func (s *Server) handleBackupPush(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")

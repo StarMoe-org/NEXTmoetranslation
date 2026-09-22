@@ -160,7 +160,7 @@ func TestStrictEditorRevisionOnlyMismatchReturns409WithoutMutation(t *testing.T)
 	}
 }
 
-func TestProducerRejectsStrictAndCanonicalEditors(t *testing.T) {
+func TestProducerRejectsStrictEditors(t *testing.T) {
 	h := setupLegacyAPI(t)
 	loaded := h.api.editorGate.Status()
 	releaseProducer, err := h.api.editorGate.BeginProducer()
@@ -185,13 +185,6 @@ func TestProducerRejectsStrictAndCanonicalEditors(t *testing.T) {
 		t.Fatalf("strict conflict producer status = %#v", conflict)
 	}
 
-	canonical := doJSON(t, http.MethodPut, h.server.URL+"/api/entry", h.token, map[string]string{
-		"category": "cards", "field": "prefix", "key": "cn-key", "text": "canonical edit", "source": model.SourceHuman,
-	})
-	canonical.Body.Close()
-	if canonical.StatusCode != http.StatusConflict {
-		t.Fatalf("canonical producer conflict status = %d", canonical.StatusCode)
-	}
 	releaseProducer()
 
 	stale := strictRequest(t, h, http.MethodPut, "/api/editor/v1/entry", map[string]string{}, []string{loadedState(loaded)})
@@ -236,7 +229,7 @@ func TestTranslationProducerCompletesGateWithoutChangingTranslateStatusShape(t *
 func TestInvalidTranslationSourcesNeverPersist(t *testing.T) {
 	h := setupLegacyAPI(t)
 
-	entry := authorizedRequest(t, h, http.MethodPut, "/api/entry", map[string]string{
+	entry := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/entry", map[string]string{
 		"category": "cards", "field": "prefix", "key": "cn-key", "text": "invalid entry", "source": "official_cn",
 	})
 	entry.Body.Close()
@@ -255,7 +248,7 @@ func TestInvalidTranslationSourcesNeverPersist(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshotResponse.Body.Close()
-	batch := authorizedRequest(t, h, http.MethodPut, "/api/category/batch", map[string]any{
+	batch := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/category/batch", map[string]any{
 		"category": "cards", "locale": model.LocaleEnglish, "baseRevision": snapshot.Revision,
 		"updates": []map[string]string{
 			{"field": "prefix", "key": "cn-key", "text": "valid-looking", "source": model.SourceHuman},
@@ -271,7 +264,7 @@ func TestInvalidTranslationSourcesNeverPersist(t *testing.T) {
 		t.Fatalf("invalid batch persisted rows=%d err=%v", localized, err)
 	}
 
-	event := authorizedRequest(t, h, http.MethodPut, "/api/event-story/update", map[string]any{
+	event := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/event-story/update", map[string]any{
 		"eventId": 42, "episodeNo": "1", "jpKey": "二", "cnText": "invalid event", "source": "official_cn", "entryType": "talk",
 	})
 	event.Body.Close()
@@ -289,7 +282,18 @@ func loadedState(status editorgate.Status) string {
 		strconv.FormatUint(status.CompletedGeneration, 10)
 }
 
+// strictAs sends a v1 mutation as token with the current producer-state proof.
+func strictAs(t *testing.T, h *legacyAPIHarness, method, path, token string, body any) *http.Response {
+	t.Helper()
+	return strictRequestAs(t, h, method, path, token, body, []string{loadedState(h.api.editorGate.Status())})
+}
+
 func strictRequest(t *testing.T, h *legacyAPIHarness, method, path string, body any, headerValues []string) *http.Response {
+	t.Helper()
+	return strictRequestAs(t, h, method, path, h.token, body, headerValues)
+}
+
+func strictRequestAs(t *testing.T, h *legacyAPIHarness, method, path, token string, body any, headerValues []string) *http.Response {
 	t.Helper()
 	var reader io.Reader
 	if body != nil {
@@ -303,7 +307,7 @@ func strictRequest(t *testing.T, h *legacyAPIHarness, method, path string, body 
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Authorization", "Bearer "+h.token)
+	request.Header.Set("Authorization", "Bearer "+token)
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}

@@ -37,6 +37,7 @@ type Gate struct {
 	status   Status
 	editors  uint64
 	draining bool
+	hooks    []func(Status)
 }
 
 func New() (*Gate, error) {
@@ -64,6 +65,26 @@ func (g *Gate) Status() Status {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.status
+}
+
+// OnChange registers an observer of producer transitions. Hooks run outside the
+// gate lock, so a slow observer cannot block editors or producers.
+func (g *Gate) OnChange(hook func(Status)) {
+	if hook == nil {
+		return
+	}
+	g.mu.Lock()
+	g.hooks = append(g.hooks, hook)
+	g.mu.Unlock()
+}
+
+func (g *Gate) notify(status Status) {
+	g.mu.Lock()
+	hooks := g.hooks
+	g.mu.Unlock()
+	for _, hook := range hooks {
+		hook(status)
+	}
 }
 
 // Drain permanently rejects new producer jobs. An already admitted producer is
@@ -169,7 +190,14 @@ func (g *Gate) BeginProducerContext(ctx context.Context) (func(), error) {
 	g.status.Generation++
 	g.status.Revision++
 	g.status.Running = true
+	started := g.status
 	g.cond.Broadcast()
+	// New editors are already rejected by the published running state, so the
+	// lock can be released to announce the transition before draining editors.
+	g.mu.Unlock()
+	g.notify(started)
+
+	g.mu.Lock()
 	stopWake := context.AfterFunc(ctx, func() {
 		g.mu.Lock()
 		g.cond.Broadcast()
@@ -180,7 +208,9 @@ func (g *Gate) BeginProducerContext(ctx context.Context) (func(), error) {
 		if err := ctx.Err(); err != nil {
 			stopWake()
 			g.finishProducerLocked()
+			canceled := g.status
 			g.mu.Unlock()
+			g.notify(canceled)
 			return nil, err
 		}
 	}
@@ -192,7 +222,9 @@ func (g *Gate) BeginProducerContext(ctx context.Context) (func(), error) {
 		once.Do(func() {
 			g.mu.Lock()
 			g.finishProducerLocked()
+			finished := g.status
 			g.mu.Unlock()
+			g.notify(finished)
 		})
 	}, nil
 }

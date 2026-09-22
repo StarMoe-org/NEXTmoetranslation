@@ -213,7 +213,7 @@ func TestLyricsAPIContractAndRBAC(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	save := doJSON(t, http.MethodPut, h.server.URL+"/api/lyrics/save", editorLogin.Token, apiLyrics())
+	save := strictAs(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", editorLogin.Token, apiLyrics())
 	defer save.Body.Close()
 	if save.StatusCode != http.StatusOK {
 		t.Fatalf("editor save status = %d", save.StatusCode)
@@ -226,7 +226,7 @@ func TestLyricsAPIContractAndRBAC(t *testing.T) {
 		t.Fatalf("saved lyrics = %+v", saved)
 	}
 
-	editorPublish := doJSON(t, http.MethodPost, h.server.URL+"/api/lyrics/publish", editorLogin.Token, map[string]int{
+	editorPublish := strictAs(t, h, http.MethodPost, "/api/editor/v1/lyrics/publish", editorLogin.Token, map[string]int{
 		"musicId": 10, "revision": 1,
 	})
 	defer editorPublish.Body.Close()
@@ -234,7 +234,7 @@ func TestLyricsAPIContractAndRBAC(t *testing.T) {
 		t.Fatalf("editor publish status = %d", editorPublish.StatusCode)
 	}
 
-	adminPublish := authorizedRequest(t, h, http.MethodPost, "/api/lyrics/publish", map[string]int{
+	adminPublish := authorizedRequest(t, h, http.MethodPost, "/api/editor/v1/lyrics/publish", map[string]int{
 		"musicId": 10, "revision": 1,
 	})
 	defer adminPublish.Body.Close()
@@ -275,7 +275,7 @@ func TestLyricsPublicationTriggersProjectionPublishNow(t *testing.T) {
 	h := setupLegacyAPI(t)
 	seedLyricsCatalog(t, h)
 
-	save := doJSON(t, http.MethodPut, h.server.URL+"/api/lyrics/save", h.token, apiLyrics())
+	save := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", apiLyrics())
 	save.Body.Close()
 	if save.StatusCode != http.StatusOK {
 		t.Fatalf("save status = %d", save.StatusCode)
@@ -284,7 +284,7 @@ func TestLyricsPublicationTriggersProjectionPublishNow(t *testing.T) {
 	fake := &fakeFileService{}
 	h.api.SetFileService(fake)
 
-	published := authorizedRequest(t, h, http.MethodPost, "/api/lyrics/publish", map[string]int{
+	published := authorizedRequest(t, h, http.MethodPost, "/api/editor/v1/lyrics/publish", map[string]int{
 		"musicId": 10, "revision": 1,
 	})
 	published.Body.Close()
@@ -296,7 +296,7 @@ func TestLyricsPublicationTriggersProjectionPublishNow(t *testing.T) {
 	}
 
 	// A no-op publication of the same revision does not request another rebuild.
-	noop := authorizedRequest(t, h, http.MethodPost, "/api/lyrics/publish", map[string]int{
+	noop := authorizedRequest(t, h, http.MethodPost, "/api/editor/v1/lyrics/publish", map[string]int{
 		"musicId": 10, "revision": 1,
 	})
 	noop.Body.Close()
@@ -307,7 +307,7 @@ func TestLyricsPublicationTriggersProjectionPublishNow(t *testing.T) {
 		t.Fatalf("PublishNow calls after noop publish = %d, want 1", fake.publishNowCalls)
 	}
 
-	unpublished := authorizedRequest(t, h, http.MethodPost, "/api/lyrics/unpublish", map[string]int{
+	unpublished := authorizedRequest(t, h, http.MethodPost, "/api/editor/v1/lyrics/unpublish", map[string]int{
 		"musicId": 10, "revision": 1,
 	})
 	unpublished.Body.Close()
@@ -380,7 +380,7 @@ func TestLyricsAPIOrdinarySaveRejectsManagedSourceURLWithoutImportGrant(t *testi
 	} {
 		draft := apiLyrics()
 		draft.SourceURL = sourceURL
-		response := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", draft)
+		response := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", draft)
 		defer response.Body.Close()
 		if response.StatusCode != http.StatusUnprocessableEntity {
 			body, _ := io.ReadAll(response.Body)
@@ -396,7 +396,7 @@ func TestLyricsAPIOrdinarySaveRejectsManagedSourceURLWithoutImportGrant(t *testi
 
 	external := apiLyrics()
 	external.SourceURL = "https://projectsekai.fandom.com/wiki/Song"
-	response := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", external)
+	response := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", external)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(response.Body)
@@ -407,12 +407,12 @@ func TestLyricsAPIOrdinarySaveRejectsManagedSourceURLWithoutImportGrant(t *testi
 func TestLyricsAPIConflictAndValidationShapes(t *testing.T) {
 	h := setupLegacyAPI(t)
 	seedLyricsCatalog(t, h)
-	first := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", apiLyrics())
+	first := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", apiLyrics())
 	first.Body.Close()
 
 	stale := apiLyrics()
 	stale.Lines[0].English = "changed"
-	conflict := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", stale)
+	conflict := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", stale)
 	defer conflict.Body.Close()
 	if conflict.StatusCode != http.StatusConflict {
 		t.Fatalf("conflict status = %d", conflict.StatusCode)
@@ -431,7 +431,7 @@ func TestLyricsAPIConflictAndValidationShapes(t *testing.T) {
 	mismatch := apiLyrics()
 	mismatch.MusicID = 20
 	mismatch.Lines[0].Segments[1].Text = "wrong"
-	invalid := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", mismatch)
+	invalid := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", mismatch)
 	defer invalid.Body.Close()
 	if invalid.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("validation status = %d", invalid.StatusCode)
@@ -514,11 +514,6 @@ func TestLyricsSourcePreviewContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	importDraft["sourceImportToken"] = result.ImportToken
-	canonical := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", importDraft)
-	canonical.Body.Close()
-	if canonical.StatusCode != http.StatusPreconditionRequired {
-		t.Fatalf("canonical import save status=%d, want 428", canonical.StatusCode)
-	}
 	save := strictLyricsSave(t, h, h.token, importDraft)
 	defer save.Body.Close()
 	if save.StatusCode != http.StatusOK {
@@ -548,7 +543,7 @@ func TestLyricsSourcePreviewContract(t *testing.T) {
 	frozen.Lines[0].ID = "replacement-line"
 	frozen.Lines[0].Japanese = "別の歌詞"
 	frozen.Lines[0].Segments[0].Text = "別の歌詞"
-	frozenSave := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", frozen)
+	frozenSave := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", frozen)
 	defer frozenSave.Body.Close()
 	if frozenSave.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("saved source identity was not frozen, status=%d", frozenSave.StatusCode)
@@ -713,7 +708,7 @@ func TestLyricsSaveRejectsUnverifiedOrTamperedSourceProvenance(t *testing.T) {
 	draft.SourceSHA1 = sourceSHA1
 	draft.SourceFetchedAt = "2026-07-22T12:00:00Z"
 	draft.Lines = []model.LyricLine{{ID: "wiki-12-34-1", Order: 0, Japanese: "歌詞", Segments: []model.LyricSegment{{Text: "歌詞", Ruby: []model.LyricRubySpan{{Text: "歌詞"}}}}}}
-	unverified := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", draft)
+	unverified := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", draft)
 	unverified.Body.Close()
 	if unverified.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("unverified source save status = %d", unverified.StatusCode)
@@ -721,7 +716,7 @@ func TestLyricsSaveRejectsUnverifiedOrTamperedSourceProvenance(t *testing.T) {
 	for _, fetchedAt := range []string{"1970-01-01T00:00:00Z", "1969-12-31T23:59:59Z"} {
 		bypass := draft
 		bypass.SourceFetchedAt = fetchedAt
-		response := authorizedRequest(t, h, http.MethodPut, "/api/lyrics/save", bypass)
+		response := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", bypass)
 		response.Body.Close()
 		if response.StatusCode != http.StatusUnprocessableEntity {
 			t.Fatalf("unverified source save with sourceFetchedAt=%q status = %d", fetchedAt, response.StatusCode)
@@ -1715,12 +1710,13 @@ func TestConsoleJSONPayloadIsBounded(t *testing.T) {
 	h := setupLegacyAPI(t)
 	body := `{"category":"cards","field":"prefix","key":"large","text":"` +
 		strings.Repeat("x", maxJSONBodyBytes) + `","source":"human"}`
-	request, err := http.NewRequest(http.MethodPut, h.server.URL+"/api/entry", strings.NewReader(body))
+	request, err := http.NewRequest(http.MethodPut, h.server.URL+"/api/editor/v1/entry", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
 	request.Header.Set("Authorization", "Bearer "+h.token)
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(loadedProducerStateHeader, loadedState(h.api.editorGate.Status()))
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)

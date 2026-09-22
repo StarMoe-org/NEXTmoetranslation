@@ -96,20 +96,7 @@ type Server struct {
 	search interface {
 		Status() searchindex.Status
 	}
-	wsHub interface {
-		Broadcast(event string, data any)
-		BroadcastGateStatus()
-		RevokeUser(user string)
-	}
 	collab *collab.Service
-}
-
-func (s *Server) SetWsHub(w interface {
-	Broadcast(event string, data any)
-	BroadcastGateStatus()
-	RevokeUser(user string)
-}) {
-	s.wsHub = w
 }
 
 func (s *Server) SetCollab(service *collab.Service) {
@@ -263,6 +250,13 @@ func NewServer(s *store.Store, es *store.EventStore, a *auth.Auth, cfg *config.C
 	} else {
 		log.Printf("[lyrics] source registry unavailable; falling back to vocaloid_fandom: %v", err)
 	}
+	if hub != nil {
+		// Producer transitions are the one piece of editor state a client cannot
+		// derive from the mutation events it receives.
+		gate.OnChange(func(status editorgate.Status) {
+			hub.Broadcast(sse.EventGateStatus, status)
+		})
+	}
 	return &Server{
 		store: s, eventStore: es, auth: a, cfg: cfg, hub: hub, translator: tr,
 		upstream: up, backup: bk, lyricsSrc: lyricsSrc,
@@ -273,26 +267,19 @@ func NewServer(s *store.Store, es *store.EventStore, a *auth.Auth, cfg *config.C
 	}
 }
 
-// broadcast sends an SSE/WS event if a hub is configured (it may be nil in tests).
+// broadcast sends an SSE event if a hub is configured (it may be nil in tests).
 func (s *Server) broadcast(event string, data any) {
 	if s.hub != nil {
 		s.hub.Broadcast(event, data)
 	}
-	if s.wsHub != nil {
-		s.wsHub.Broadcast(event, data)
-		s.wsHub.BroadcastGateStatus()
-	}
 }
 
-// revokeUser closes an account's live streams on both hubs and its
-// collaboration rooms after its token generation changed. Either hub and the
-// collaboration service may be nil in tests.
+// revokeUser closes an account's live streams and its collaboration rooms after
+// its token generation changed. The hub and the collaboration service may be
+// nil in tests.
 func (s *Server) revokeUser(user string) {
 	if s.hub != nil {
 		s.hub.RevokeUser(user)
-	}
-	if s.wsHub != nil {
-		s.wsHub.RevokeUser(user)
 	}
 	if s.collab != nil {
 		s.collab.RevokeUser(user)
@@ -474,14 +461,15 @@ func (s *Server) contentMutation(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (s *Server) editorMutation(next http.HandlerFunc) http.HandlerFunc {
+// getOnly rejects write methods on read-only endpoints, which otherwise answer
+// 200 to any method because their handlers never inspect r.Method.
+func getOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		release, err := s.editorGate.BeginEditorContext(r.Context())
-		if err != nil {
-			writeEditorAdmissionError(w, err)
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		defer release()
 		next(w, r)
 	}
 }

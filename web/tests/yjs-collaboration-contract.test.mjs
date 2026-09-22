@@ -202,9 +202,10 @@ test("single-editor rooms force a 15 second Yjs resync", () => {
   assert.match(source, /new WebsocketProvider\(websocketServerURL\(\),\s*String\(this\.options\.musicId\)/s);
 });
 
-test("the Next development proxy forwards both websocket control planes", () => {
-  assert.match(nextConfigSource, /source:\s*"\/ws"[\s\S]*destination:\s*`\$\{backend\}\/ws`/);
+test("the Next development proxy forwards the event stream and the Yjs websocket", () => {
+  assert.match(nextConfigSource, /source:\s*"\/sse"[\s\S]*destination:\s*`\$\{backend\}\/sse`/);
   assert.match(nextConfigSource, /source:\s*"\/yjs\/:path\*"[\s\S]*destination:\s*`\$\{backend\}\/yjs\/:path\*`/);
+  assert.doesNotMatch(nextConfigSource, /source:\s*"\/ws"/);
 });
 
 test("canonical room changes discard the stale epoch document and clean up providers", async () => {

@@ -32,7 +32,7 @@ const SSE_BASE = process.env.NEXT_PUBLIC_API_BASE
 
 const SSE_EVENTS = new Set<SSEEvent>([
   "entry.updated", "entry.locale.updated", "eventstory.updated", "eventstory.locale.updated", "lyrics.updated", "sync.progress",
-  "translate.progress", "content.restored", "presence.snapshot", "presence.joined", "presence.left", "ping",
+  "translate.progress", "content.restored", "presence.snapshot", "presence.joined", "presence.left", "gate.status", "ping",
 ]);
 
 function sessionVersion(): string {

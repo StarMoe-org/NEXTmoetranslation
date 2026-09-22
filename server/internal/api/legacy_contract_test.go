@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,7 +139,7 @@ func TestLegacyEntryUpdateContractGolden(t *testing.T) {
 		"category": "cards", "field": "prefix", "key": "cn-key",
 		"text": "人工修订", "source": "human",
 	}
-	resp := authorizedRequest(t, h, http.MethodPut, "/api/entry", update)
+	resp := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/entry", update)
 	defer resp.Body.Close()
 	assertLegacyAPIResponse(t, resp, http.StatusOK, "entry-ok.json")
 	if changes != 1 {
@@ -153,7 +154,7 @@ func TestLegacyEntryUpdateContractGolden(t *testing.T) {
 		t.Fatalf("persisted row = text:%q source:%q ids:%q user:%q", text, source, ids, updatedBy)
 	}
 
-	noop := authorizedRequest(t, h, http.MethodPut, "/api/entry", update)
+	noop := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/entry", update)
 	defer noop.Body.Close()
 	assertLegacyAPIResponse(t, noop, http.StatusOK, "entry-noop.json")
 	if changes != 1 {
@@ -162,7 +163,7 @@ func TestLegacyEntryUpdateContractGolden(t *testing.T) {
 
 	// Stale source identities are rejected instead of creating a row in the
 	// currently selected destination field.
-	insert := authorizedRequest(t, h, http.MethodPut, "/api/entry", map[string]string{
+	insert := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/entry", map[string]string{
 		"category": "cards", "field": "legacy-field", "key": "new-key",
 		"text": "legacy text", "source": "human",
 	})
@@ -176,7 +177,7 @@ func TestLegacyEntryUpdateContractGolden(t *testing.T) {
 		t.Fatalf("stale insert count=%d err=%v", inserted, err)
 	}
 
-	bad := authorizedRequest(t, h, http.MethodPut, "/api/entry", map[string]string{
+	bad := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/entry", map[string]string{
 		"category": "eventStory", "field": "title", "key": "x",
 	})
 	defer bad.Body.Close()
@@ -185,7 +186,7 @@ func TestLegacyEntryUpdateContractGolden(t *testing.T) {
 
 func TestLegacyEventUpdateContractGolden(t *testing.T) {
 	h := setupLegacyAPI(t)
-	resp := authorizedRequest(t, h, http.MethodPut, "/api/event-story/update", map[string]any{
+	resp := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/event-story/update", map[string]any{
 		"eventId": 42, "episodeNo": "1", "jpKey": "二",
 		"cnText": "第二句校对", "source": "", "entryType": "talk",
 	})
@@ -203,7 +204,7 @@ func TestLegacyEventUpdateContractGolden(t *testing.T) {
 		t.Fatalf("blank source defaulted to %q, want human", got)
 	}
 
-	missing := authorizedRequest(t, h, http.MethodPut, "/api/event-story/update", map[string]any{
+	missing := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/event-story/update", map[string]any{
 		"eventId": 42, "episodeNo": "1", "jpKey": "missing",
 		"cnText": "x", "source": "human", "entryType": "talk",
 	})
@@ -266,8 +267,13 @@ func normalizeAuthResponse(t *testing.T, resp *http.Response, fixture string) st
 	return token
 }
 
+// authorizedRequest sends the producer-state proof the v1 routes require, taken
+// from the gate status a freshly loaded client would have seen.
 func authorizedRequest(t *testing.T, h *legacyAPIHarness, method, path string, body any) *http.Response {
 	t.Helper()
+	if strings.HasPrefix(path, "/api/editor/v1/") {
+		return strictRequest(t, h, method, path, body, []string{loadedState(h.api.editorGate.Status())})
+	}
 	return doJSON(t, method, h.server.URL+path, h.token, body)
 }
 

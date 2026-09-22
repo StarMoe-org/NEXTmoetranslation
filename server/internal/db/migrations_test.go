@@ -93,7 +93,7 @@ func TestMigrationsAfterV34MustNotMutateContentTables(t *testing.T) {
 			}
 			for _, pattern := range patterns {
 				if strings.Contains(normalized, pattern) {
-					t.Fatalf("migration %d (%s) modifies content table %q via %q; content mutations must go through /api/lyrics/save or /api/lyrics/translation-editions, not schema migrations",
+					t.Fatalf("migration %d (%s) modifies content table %q via %q; content mutations must go through /api/editor/v1/lyrics/save or /api/editor/v1/lyrics/translation-editions, not schema migrations",
 						m.version, m.name, table, pattern)
 				}
 			}

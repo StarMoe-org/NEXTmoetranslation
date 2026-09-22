@@ -30,6 +30,7 @@ const (
 	EventPresenceSnapshot   = "presence.snapshot"
 	EventPresenceJoined     = "presence.joined"
 	EventPresenceLeft       = "presence.left"
+	EventGateStatus         = "gate.status"
 	EventPing               = "ping"
 )
 
@@ -228,7 +229,9 @@ func (h *Hub) RevokeUser(user string) {
 // auth middleware (the username is read from the request context if present).
 // The initial roster snapshot is written privately; joined/left notifications
 // are sent only when a username gains or loses its last active connection.
-func (h *Hub) Handler(usernameFn func(*http.Request) string, validFn func(*http.Request) bool, expiresAtFn func(*http.Request) time.Time) http.HandlerFunc {
+// initialFn supplies state a fresh client cannot reconstruct from later
+// broadcasts alone; it is written privately right after the roster snapshot.
+func (h *Hub) Handler(usernameFn func(*http.Request) string, validFn func(*http.Request) bool, expiresAtFn func(*http.Request) time.Time, initialFn func() []Message) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -259,6 +262,15 @@ func (h *Hub) Handler(usernameFn func(*http.Request) string, validFn func(*http.
 		if user != "" && strings.TrimSpace(r.Header.Get("X-SSE-Presence")) == "1" {
 			if !writeEvent(w, Message{Event: EventPresenceSnapshot, Data: map[string]any{"users": users}}) {
 				return
+			}
+			flusher.Flush()
+		}
+
+		if initialFn != nil {
+			for _, msg := range initialFn() {
+				if !writeEvent(w, msg) {
+					return
+				}
 			}
 			flusher.Flush()
 		}

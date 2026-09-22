@@ -38,7 +38,6 @@ import (
 	"moesekai/server/internal/translator"
 	"moesekai/server/internal/upstream"
 	"moesekai/server/internal/workspaceverify"
-	"moesekai/server/internal/ws"
 )
 
 // runtimeProfile is overridden only in the standalone production binary via
@@ -291,11 +290,9 @@ func main() {
 	if err != nil {
 		fatal("init editor gate", err)
 	}
-	wsHub := ws.NewHub(editorGate)
 	tr := translator.New(st, es, cfg, editorGate)
 	tr.SetProgress(func(stage, detail string, cur, total int) {
 		hub.Broadcast(stage, map[string]any{"detail": detail, "current": cur, "total": total})
-		wsHub.Broadcast(stage, map[string]any{"detail": detail, "current": cur, "total": total})
 	})
 
 	// Upstream watcher: polls current_version.json directly (not GitHub REST API),
@@ -334,7 +331,6 @@ func main() {
 	})
 
 	apiServer := api.NewServer(st, es, authSvc, cfg, hub, tr, watcher, backupMgr, editorGate)
-	apiServer.SetWsHub(wsHub)
 	apiServer.SetCollab(collabService)
 	apiServer.SetFileService(fileService)
 	apiServer.SetSearchStatus(idx)
@@ -448,10 +444,6 @@ func main() {
 			idx.Stop()
 			fileService.Stop()
 			hub.Close()
-			// Hijacked connections: http.Server.Close neither closes nor waits
-			// for them, and the lifecycle request count only drops when the
-			// handler returns, so the hub has to tear them down itself.
-			wsHub.Close()
 			appLifecycle.StopProbes()
 			if err := httpServer.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("force-close HTTP: %v", err)
@@ -546,11 +538,11 @@ func registerOperationalRoutesWithProviders(mux *http.ServeMux, database *db.DB,
 }, search interface {
 	Status() searchindex.Status
 }) {
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/healthz", operationalGetOnly(func(w http.ResponseWriter, r *http.Request) {
 		setOperationalHeaders(w.Header())
 		fmt.Fprint(w, `{"status":"ok"}`)
-	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/readyz", operationalGetOnly(func(w http.ResponseWriter, r *http.Request) {
 		setOperationalHeaders(w.Header())
 		if draining != nil && draining.IsDraining() {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -591,7 +583,7 @@ func registerOperationalRoutesWithProviders(mux *http.ServeMux, database *db.DB,
 			return
 		}
 		fmt.Fprint(w, `{"status":"ready"}`)
-	})
+	}))
 	details := authSvc.RequireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		detail := map[string]any{
 			"status": "ok",
@@ -605,10 +597,25 @@ func registerOperationalRoutesWithProviders(mux *http.ServeMux, database *db.DB,
 		}
 		_ = json.NewEncoder(w).Encode(detail)
 	})
-	mux.HandleFunc("/healthz/details", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/healthz/details", operationalGetOnly(func(w http.ResponseWriter, r *http.Request) {
 		setOperationalHeaders(w.Header())
 		details(w, r)
-	})
+	}))
+}
+
+// operationalGetOnly mirrors the console API's getOnly for the lifecycle probes,
+// which main cannot import from package api.
+func operationalGetOnly(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			setOperationalHeaders(w.Header())
+			w.Header().Set("Allow", "GET, HEAD")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			fmt.Fprint(w, `{"error":"method not allowed"}`)
+			return
+		}
+		next(w, r)
+	}
 }
 
 func lifecycleMiddleware(state *lifecycle.State, next http.Handler) http.Handler {
@@ -917,6 +924,13 @@ func corsMiddleware(next http.Handler, origin string) http.Handler {
 func preflightMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
+			// corsMiddleware skips the public file paths because their handlers
+			// set a permissive header, but no handler runs for a preflight.
+			if isPublicFilePath(r.URL.Path) {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+				w.Header().Set("Access-Control-Max-Age", "86400")
+			}
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
