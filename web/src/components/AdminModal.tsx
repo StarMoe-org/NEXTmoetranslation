@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useToast } from "@/app/providers";
 import { Modal } from "@/components/Modal";
+import { LyricsProviderTargets } from "@/components/admin/LyricsProviderTargets";
 import {
   APIError, BackupStatus, ProjectionStatus, UpstreamStatus, User,
   checkUpstream, clearSession, createUser, deleteUser, getBackupStatus, getProjectionStatus, getSettings,
@@ -91,6 +92,7 @@ export function AdminModal({ open, onClose, guardProducerMutation }: {
       <div className="modal-cards">
         <ProjectionCard show={show} />
         <UsersCard show={show} />
+        <LyricsProviderTargets show={show} />
         <SettingsCard title="LLM 翻译" keys={LLM_KEYS} show={show} />
         <UpstreamCard show={show} guardProducerMutation={guardProducerMutation} />
         <SettingsCard title="上游更新检测" keys={UPSTREAM_KEYS} show={show} />

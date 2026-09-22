@@ -59,6 +59,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/settings", s.auth.RequireAdmin(s.handleSettingsRouter))
 	mux.HandleFunc("/api/admin/upstream", s.auth.RequireAdmin(s.handleUpstreamStatus))
 	mux.HandleFunc("/api/admin/upstream/check", s.auth.RequireAdmin(s.handleUpstreamCheck))
+	mux.HandleFunc("/api/admin/lyrics-providers/sekaipedia/targets", s.auth.RequireAdmin(getOnly(s.handleLyricsProviderTargets)))
+	mux.HandleFunc("/api/admin/lyrics-providers/sekaipedia/targets/{musicId}", s.auth.RequireAdmin(s.handleLyricsProviderTarget))
 	mux.HandleFunc("/api/admin/lyrics-source-reviews", s.auth.RequireAdmin(s.handleLyricsSourceReviews))
 	mux.HandleFunc("/api/admin/lyrics-source-reviews/detail", s.auth.RequireAdmin(s.handleLyricsSourceReviewDetail))
 	mux.HandleFunc("/api/admin/lyrics-source-reviews/decision", s.auth.RequireAdmin(s.handleLyricsSourceReviewDecision))

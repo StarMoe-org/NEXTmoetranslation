@@ -16,7 +16,7 @@ import (
 	"moesekai/server/internal/store"
 )
 
-const recoveryPublicCandidateMaximumCompatibleRuntimeSchema = 35
+const recoveryPublicCandidateMaximumCompatibleRuntimeSchema = 36
 
 type options struct {
 	databasePath            string
@@ -39,7 +39,7 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 	var opts options
 	flags := flag.NewFlagSet("lyrics-recovery-public-candidate", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	flags.StringVar(&opts.databasePath, "database", "", "existing standalone recovery SQLite database with contiguous schema v27 through v35")
+	flags.StringVar(&opts.databasePath, "database", "", "existing standalone recovery SQLite database with contiguous schema v27 through v36")
 	flags.StringVar(&opts.batchSHA256, "batch-sha256", "", "exact lowercase recovery batch SHA-256")
 	flags.StringVar(&opts.outputDirectory, "output-directory", "", "new immutable local strict Public v3 candidate directory")
 	flags.StringVar(&opts.v2CompatOutputDirectory, "v2-compat-output-directory", "", "optional separate immutable lossless Public v2 compatibility directory")

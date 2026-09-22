@@ -770,6 +770,20 @@ func NewRegistry(configs ...ProviderConfig) (*Registry, error) {
 	return &Registry{providers: providers, order: order}, nil
 }
 
+// SekaipediaTargets reports the reviewed page-target map this registry was
+// built from, so a caller that swapped the registry can observe which plan is
+// installed.
+func (registry *Registry) SekaipediaTargets() []SekaipediaPageTarget {
+	if registry == nil {
+		return nil
+	}
+	provider, _ := registry.providers[ProviderSekaipedia].(*sekaipediaProvider)
+	if provider == nil {
+		return nil
+	}
+	return cloneSekaipediaPageTargets(provider.config.SekaipediaTargets)
+}
+
 func newRegistryWithProviders(providers ...sourceProvider) (*Registry, error) {
 	registry := &Registry{providers: map[model.LyricsSourceProvider]sourceProvider{}}
 	for _, provider := range providers {

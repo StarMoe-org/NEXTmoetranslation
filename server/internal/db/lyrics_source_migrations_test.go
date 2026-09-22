@@ -4,6 +4,7 @@ import (
 	"database/sql"
 
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -32,9 +33,10 @@ func TestLyricsSourceMigrationsAppendAfterPinnedV12(t *testing.T) {
 		33: "song_682_translation_qed_correction",
 		34: "song_682_translation_mirror_sync",
 		35: "song_lyrics_public_withdrawals",
+		36: "lyrics_provider_page_targets",
 	}
-	if latest := migrations[len(migrations)-1]; latest.version != 35 || latest.name != wantNames[35] {
-		t.Fatalf("latest migration=%d/%q want=35/%q", latest.version, latest.name, wantNames[35])
+	if latest := migrations[len(migrations)-1]; latest.version != 36 || latest.name != wantNames[36] {
+		t.Fatalf("latest migration=%d/%q want=36/%q", latest.version, latest.name, wantNames[36])
 	}
 	for version, name := range wantNames {
 		migration := migrations[version-1]
@@ -655,5 +657,92 @@ func TestV18StructuredLyricsAnalysisEvidenceIsStrictAndAdditive(t *testing.T) {
 	var checksum string
 	if err := raw.QueryRow(`SELECT checksum FROM schema_migrations WHERE version=18`).Scan(&checksum); err != nil || checksum != "9ef12f0d266c281cfae1b76f80a61eb6c5142fd64ea9a45d7b97e327216031ff" {
 		t.Fatalf("v18 checksum=%q err=%v", checksum, err)
+	}
+}
+
+func TestV36SeedsTheReviewedSekaipediaProviderMapsInMusicIDOrder(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "provider-targets.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	rows, err := database.Query(`SELECT music_id,page_title,resolved_page_title,updated_at,updated_by
+		FROM lyrics_provider_page_targets WHERE provider='sekaipedia' ORDER BY rowid`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	type seededTarget struct {
+		musicID                        int
+		pageTitle, resolved, updatedBy string
+		updatedAt                      int64
+	}
+	var targets []seededTarget
+	for rows.Next() {
+		var target seededTarget
+		if err := rows.Scan(&target.musicID, &target.pageTitle, &target.resolved, &target.updatedAt, &target.updatedBy); err != nil {
+			t.Fatal(err)
+		}
+		targets = append(targets, target)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 37 {
+		t.Fatalf("seeded page targets=%d want=37", len(targets))
+	}
+	previousMusicID := 0
+	for _, target := range targets {
+		if target.musicID <= previousMusicID || target.updatedBy != "migration-v36" || target.updatedAt != 1790000000 {
+			t.Fatalf("seeded target=%+v previous=%d", target, previousMusicID)
+		}
+		previousMusicID = target.musicID
+	}
+	if targets[0].musicID != 50 || targets[0].pageTitle != "Blessing" || targets[0].resolved != "" {
+		t.Fatalf("first seeded target=%+v", targets[0])
+	}
+	if targets[6].musicID != 148 || targets[6].pageTitle != "ray" || targets[6].resolved != "Ray" {
+		t.Fatalf("resolved-title seeded target=%+v", targets[6])
+	}
+	if targets[36].musicID != 789 || targets[36].pageTitle != "Tenbin, Yubisaki de Furete" {
+		t.Fatalf("last seeded target=%+v", targets[36])
+	}
+
+	aliasRows, err := database.Query(`SELECT music_id,updated_at,updated_by
+		FROM lyrics_provider_contributor_aliases WHERE provider='sekaipedia' ORDER BY rowid`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer aliasRows.Close()
+	aliases := 0
+	previousMusicID = 0
+	for aliasRows.Next() {
+		var musicID int
+		var updatedAt int64
+		var updatedBy string
+		if err := aliasRows.Scan(&musicID, &updatedAt, &updatedBy); err != nil {
+			t.Fatal(err)
+		}
+		if musicID < previousMusicID || updatedBy != "migration-v36" || updatedAt != 1790000000 {
+			t.Fatalf("seeded alias music=%d updatedAt=%d updatedBy=%q previous=%d", musicID, updatedAt, updatedBy, previousMusicID)
+		}
+		previousMusicID = musicID
+		aliases++
+	}
+	if err := aliasRows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if aliases != 26 {
+		t.Fatalf("seeded aliases=%d want=26", aliases)
+	}
+	var vampire, alias string
+	if err := database.QueryRow(`SELECT page_title FROM lyrics_provider_page_targets
+		WHERE provider='sekaipedia' AND music_id=334`).Scan(&vampire); err != nil || vampire != "Vampire's ∞ pathoS" {
+		t.Fatalf("escaped page title=%q err=%v", vampire, err)
+	}
+	if err := database.QueryRow(`SELECT provider_contributor FROM lyrics_provider_contributor_aliases
+		WHERE provider='sekaipedia' AND music_id=334 AND catalog_contributor='やま△'`).Scan(&alias); err != nil || alias != "Yama△" {
+		t.Fatalf("seeded alias=%q err=%v", alias, err)
 	}
 }

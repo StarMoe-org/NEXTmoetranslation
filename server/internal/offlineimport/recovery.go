@@ -29,11 +29,13 @@ const (
 	// encoded by the existing recovery/staging input contracts. Schema v28 adds
 	// the editor-seed ledger, v29 adds peer-side translation storage, v30 adds
 	// lazily materialized translation editions, v31 adds yjs collaboration,
-	// v32-v34 adds multi-edition translations for song 682, and v35 adds the
-	// public withdrawal markers. None changes those inputs or their catalog
-	// identity, so reviewed imports may run on any contiguous v27-v35 database.
+	// v32-v34 adds multi-edition translations for song 682, v35 adds the
+	// public withdrawal markers, and v36 moves the reviewed Sekaipedia
+	// provider maps into the database. None changes those inputs or their
+	// catalog identity, so reviewed imports may run on any contiguous v27-v36
+	// database.
 	lyricsRecoveryImportRuntimeSchema          = 27
-	lyricsImportMaximumCompatibleRuntimeSchema = 35
+	lyricsImportMaximumCompatibleRuntimeSchema = 36
 )
 
 var ErrLyricsRecoveryImportDrift = errors.New("lyrics recovery import no longer matches its catalog, root, or evidence pack")

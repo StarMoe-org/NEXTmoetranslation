@@ -1024,6 +1024,34 @@ export const getSettings = () => apiFetch<{ settings: Record<string, string>; ha
 export const updateSettings = (patch: Record<string, string>) =>
   apiFetch<{ status: string; applied: number }>("/admin/settings", { method: "PUT", body: JSON.stringify(patch) });
 
+export interface LyricsProviderContributorAlias {
+  catalogContributor: string;
+  providerContributor: string;
+}
+
+export interface LyricsProviderTarget {
+  musicId: number;
+  pageTitle: string;
+  resolvedPageTitle: string;
+  aliases: LyricsProviderContributorAlias[];
+  updatedAt: number;
+  updatedBy: string;
+}
+
+export const getLyricsProviderTargets = () =>
+  apiFetch<{ items: LyricsProviderTarget[] }>("/admin/lyrics-providers/sekaipedia/targets");
+export const putLyricsProviderTarget = (
+  musicId: number,
+  target: { pageTitle: string; resolvedPageTitle?: string; aliases?: LyricsProviderContributorAlias[] },
+) =>
+  apiFetch<LyricsProviderTarget>(`/admin/lyrics-providers/sekaipedia/targets/${musicId}`, {
+    method: "PUT", body: JSON.stringify(target),
+  });
+export const deleteLyricsProviderTarget = (musicId: number) =>
+  apiFetch<{ musicId: number; deleted: boolean }>(`/admin/lyrics-providers/sekaipedia/targets/${musicId}`, {
+    method: "DELETE",
+  });
+
 export const getUpstreamStatus = () => apiFetch<UpstreamStatus>("/admin/upstream");
 export const checkUpstream = (force = false) =>
   apiFetch<UpstreamStatus>("/admin/upstream/check", { method: "POST", body: JSON.stringify({ force }) });

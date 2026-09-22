@@ -78,6 +78,8 @@ type Server struct {
 	upstream                *upstream.Watcher
 	backup                  *backup.Manager
 	lyricsSrc               lyricsSourceClient
+	lyricsRegistry          *lyricsSourceRegistry
+	lyricsProviderMu        sync.Mutex
 	authAttempts            *authAttemptLimiter
 	editorGate              *editorgate.Gate
 	lyricsImportMu          sync.Mutex
@@ -169,83 +171,12 @@ func NewServer(s *store.Store, es *store.EventStore, a *auth.Auth, cfg *config.C
 	}
 	var lyricsSrc lyricsSourceClient = lyricssource.New()
 	// The online editor tries Sekaipedia first, then the legacy fallback
-	// providers. The reviewed Sekaipedia authority is compiled in, together with
-	// the reviewed music-ID-to-page-title and contributor-alias maps. Music 728
-	// has a Sekaipedia page, but that revision's lyrics table is empty, so it
-	// stays out of the compiled editor target-map.
-	sekaipediaConfigs := []lyricssource.ProviderConfig{
-		lyricssource.ReviewedSekaipediaProviderConfig(
-			[]lyricssource.SekaipediaPageTarget{
-				{MusicID: 50, PageTitle: "Blessing"},
-				{MusicID: 69, PageTitle: "Fragile"},
-				{MusicID: 95, PageTitle: "Ifuudoudou"},
-				{MusicID: 131, PageTitle: "Hatsune Miku no Gekishou"},
-				{MusicID: 138, PageTitle: "KING"},
-				{MusicID: 141, PageTitle: "Gunjou Sanka"},
-				{MusicID: 148, PageTitle: "ray", ResolvedPageTitle: "Ray"},
-				{MusicID: 186, PageTitle: "Hatsune Tenchikaibyaku Shinwa"},
-				{MusicID: 222, PageTitle: "Piano×Forte×Scandal"},
-				{MusicID: 245, PageTitle: "Aun no Beats"},
-				{MusicID: 295, PageTitle: "Float Planner"},
-				{MusicID: 334, PageTitle: "Vampire's ∞ pathoS"},
-				{MusicID: 353, PageTitle: "Kitty"},
-				{MusicID: 386, PageTitle: "Kirapipi★Kirapika"},
-				{MusicID: 402, PageTitle: "Envy Baby"},
-				{MusicID: 475, PageTitle: "Chigau!!!"},
-				{MusicID: 499, PageTitle: "Konton Boogie"},
-				{MusicID: 515, PageTitle: "Igaku"},
-				{MusicID: 555, PageTitle: "Fusion"},
-				{MusicID: 560, PageTitle: "Eyelid"},
-				{MusicID: 562, PageTitle: "Ángel"},
-				{MusicID: 583, PageTitle: "Accelerate"},
-				{MusicID: 592, PageTitle: "Queen of Hearts (song)"},
-				{MusicID: 608, PageTitle: "Hoshizora Melancholia"},
-				{MusicID: 621, PageTitle: "Tokyo Summer Session"},
-				{MusicID: 635, PageTitle: "Ari no Mama no Story o"},
-				{MusicID: 647, PageTitle: "SANchi Chokusou"},
-				{MusicID: 649, PageTitle: "Sayonara Tengoku Mata Kite Jigoku"},
-				{MusicID: 682, PageTitle: "Anata Shika Mienai no"},
-				{MusicID: 692, PageTitle: "Vocalo-Colosseum"},
-				{MusicID: 750, PageTitle: "Losstime Memory"},
-				{MusicID: 751, PageTitle: "Additional Memory"},
-				{MusicID: 752, PageTitle: "Ayano no Koufuku Riron"},
-				{MusicID: 753, PageTitle: "Kuusou Forest"},
-				{MusicID: 756, PageTitle: "Gimme more!"},
-				{MusicID: 764, PageTitle: "Otsukimi Recital"},
-				{MusicID: 789, PageTitle: "Tenbin, Yubisaki de Furete"},
-			},
-			[]lyricssource.ProviderContributorAlias{
-				{MusicID: 69, CatalogContributor: "ぬゆり", ProviderContributor: "nulut"},
-				{MusicID: 95, CatalogContributor: "梅とら", ProviderContributor: "Umetora"},
-				{MusicID: 131, CatalogContributor: "cosMo@暴走P", ProviderContributor: "cosMo@BousouP"},
-				{MusicID: 148, CatalogContributor: "藤原 基央", ProviderContributor: "Motoo Fujiwara"},
-				{MusicID: 186, CatalogContributor: "cosMo@暴走P", ProviderContributor: "cosMo@BousouP"},
-				{MusicID: 245, CatalogContributor: "羽生まゐご", ProviderContributor: "Hanyuu Maigo"},
-				{MusicID: 334, CatalogContributor: "ひとしずく", ProviderContributor: "Hitoshizuku"},
-				{MusicID: 334, CatalogContributor: "やま△", ProviderContributor: "Yama△"},
-				{MusicID: 353, CatalogContributor: "ツミキ", ProviderContributor: "Tsumiki"},
-				{MusicID: 386, CatalogContributor: "nyanyannya(大天才P)", ProviderContributor: "nyanyannya"},
-				{MusicID: 475, CatalogContributor: "カルロス袴田(サイゼP)", ProviderContributor: "Carlos Hakamada"},
-				{MusicID: 515, CatalogContributor: "原口沙輔", ProviderContributor: "Haraguchi Sasuke"},
-				{MusicID: 555, CatalogContributor: "DECO*27 (OTOIRO)", ProviderContributor: "DECO*27"},
-				{MusicID: 555, CatalogContributor: "tepe (OTOIRO)", ProviderContributor: "tepe"},
-				{MusicID: 560, CatalogContributor: "ぬゆり", ProviderContributor: "nulut"},
-				{MusicID: 562, CatalogContributor: "かいりきベア", ProviderContributor: "Kairiki Bear"},
-				{MusicID: 583, CatalogContributor: "吉田夜世", ProviderContributor: "Yoshida Yasei"},
-				{MusicID: 592, CatalogContributor: "奏音69", ProviderContributor: "Kanon69"},
-				{MusicID: 635, CatalogContributor: "のぼる↑", ProviderContributor: "Noboru↑"},
-				{MusicID: 750, CatalogContributor: "じん", ProviderContributor: "JIN"},
-				{MusicID: 751, CatalogContributor: "じん", ProviderContributor: "JIN"},
-				{MusicID: 752, CatalogContributor: "じん", ProviderContributor: "JIN"},
-				{MusicID: 753, CatalogContributor: "じん", ProviderContributor: "JIN"},
-				{MusicID: 756, CatalogContributor: "めろくる", ProviderContributor: "Mellowcle"},
-				{MusicID: 764, CatalogContributor: "じん", ProviderContributor: "JIN"},
-				{MusicID: 789, CatalogContributor: "卯花ロク", ProviderContributor: "Uka Roku"},
-			},
-		),
-	}
-	configs := append(sekaipediaConfigs, lyricssource.DefaultProviderConfigs()...)
-	if registry, err := lyricssource.NewRegistry(configs...); err == nil {
+	// providers. The reviewed Sekaipedia authority is compiled in; its
+	// music-ID-to-page-title and contributor-alias maps are schema-v36 database
+	// data an admin can edit without a redeploy.
+	registry := &lyricsSourceRegistry{}
+	if storedRegistry, err := loadSekaipediaRegistry(s); err == nil {
+		registry.set(storedRegistry)
 		lyricsSrc = registry
 	} else {
 		log.Printf("[lyrics] source registry unavailable; falling back to vocaloid_fandom: %v", err)
@@ -259,7 +190,7 @@ func NewServer(s *store.Store, es *store.EventStore, a *auth.Auth, cfg *config.C
 	}
 	return &Server{
 		store: s, eventStore: es, auth: a, cfg: cfg, hub: hub, translator: tr,
-		upstream: up, backup: bk, lyricsSrc: lyricsSrc,
+		upstream: up, backup: bk, lyricsSrc: lyricsSrc, lyricsRegistry: registry,
 		authAttempts:            newAuthAttemptLimiter(10, 5*time.Minute, 8192),
 		editorGate:              gate,
 		lyricsImports:           map[string]lyricsImportGrant{},
