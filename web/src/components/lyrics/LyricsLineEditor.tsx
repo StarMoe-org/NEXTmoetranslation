@@ -16,6 +16,8 @@ interface LyricRubySpanEditorProps {
   segmentNumber: number;
   rubyIndex: number;
   span: LyricRubySpan;
+  sourceMutable: boolean;
+  writeLocked: boolean;
   onChange: (patch: { text?: string; reading?: string }) => void;
   onSplit: () => void;
   onMergeWithPrevious: () => void;
@@ -26,31 +28,34 @@ function LyricRubySpanEditor({
   segmentNumber,
   rubyIndex,
   span,
+  sourceMutable,
+  writeLocked,
   onChange,
   onSplit,
   onMergeWithPrevious,
 }: LyricRubySpanEditorProps) {
   const rubyNumber = rubyIndex + 1;
+  const rubyLocked = !sourceMutable || writeLocked;
   return (
     <div className="lyric-ruby-span">
       <input
         aria-label={`第 ${lineNumber} 行分段 ${segmentNumber} ruby ${rubyNumber} 原文`}
         lang="ja"
         value={span.text}
-        readOnly={true}
+        readOnly={rubyLocked}
         onChange={(event) => onChange({ text: event.target.value })}
       />
       <input
         aria-label={`第 ${lineNumber} 行分段 ${segmentNumber} ruby ${rubyNumber} 注音`}
         lang="ja"
         value={span.reading || ""}
-        readOnly={true}
-        placeholder="注音（已锁死）"
+        readOnly={rubyLocked}
+        placeholder={rubyLocked ? "注音（已锁死）" : "注音"}
         onChange={(event) => onChange({ reading: event.target.value })}
       />
       <span className="lyric-ruby-actions">
-        <button type="button" className="btn btn-ghost btn-sm" onClick={onSplit} disabled={true}>拆分 ruby</button>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={onMergeWithPrevious} disabled={true}>与上一 ruby 合并</button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onSplit} disabled={rubyLocked}>拆分 ruby</button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onMergeWithPrevious} disabled={rubyLocked || rubyIndex === 0}>与上一 ruby 合并</button>
       </span>
     </div>
   );
@@ -111,7 +116,7 @@ function LyricSegmentEditor({
         aria-label={`第 ${lineNumber} 行分段 ${segmentNumber}`}
         lang="ja"
         value={segment.text}
-        readOnly={true}
+        readOnly={!sourceMutable || writeLocked}
         onChange={(event) => onChange(event.target.value)}
         ref={registerInput}
       />
@@ -148,6 +153,8 @@ function LyricSegmentEditor({
             segmentNumber={segmentNumber}
             rubyIndex={rubyIndex}
             span={span}
+            sourceMutable={sourceMutable}
+            writeLocked={writeLocked}
             onChange={(patch) => onRubyChange(rubyIndex, patch)}
             onSplit={() => onSplitRuby(rubyIndex)}
             onMergeWithPrevious={() => onMergeRubyWithPrevious(rubyIndex)}
@@ -174,7 +181,6 @@ export interface LyricsLineEditorProps {
   lineIndex: number;
   lineCount: number;
   sourceMutable: boolean;
-  sourceLocked: boolean;
   writeLocked: boolean;
   showPerformerSegmentation: boolean;
   performers: LyricsPerformerOption[];

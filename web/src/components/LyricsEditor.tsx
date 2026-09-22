@@ -1974,7 +1974,6 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
                   lineIndex={lineIndex}
                   lineCount={activeLines.length}
                   sourceMutable={activeSideSourceMutable}
-                  sourceLocked={activeSourceFactsReadOnly}
                   writeLocked={writeLocked || activeSideReadOnly}
                   showPerformerSegmentation={hasPerformerSegmentation}
                   performers={activePerformerOptions}
