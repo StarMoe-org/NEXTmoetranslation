@@ -945,6 +945,17 @@ func (s *Store) saveLyricsRenditionMutation(
 	if err != nil {
 		return LyricsRenditionDocument{}, false, nil, err
 	}
+	// A recovery-imported document is owned by the immutable recovery ledger:
+	// its contributions live in lyrics_recovery_import_component_contributions
+	// and its recovery item pins document_sha256. Rewriting the source layer
+	// below would leave the ledger pointing at a document that no longer
+	// exists, so only the translation layer stays editable here.
+	if sourceChanged && bundle.recoveryProvenance {
+		return LyricsRenditionDocument{}, false, nil, &LyricsRenditionContractError{
+			Code:    "source_drift",
+			Details: []string{"recovery-imported source documents are immutable; only translations are editable"},
+		}
+	}
 	if sourceChanged {
 		newDocumentJSON, err := json.Marshal(bundle.document)
 		if err != nil {
