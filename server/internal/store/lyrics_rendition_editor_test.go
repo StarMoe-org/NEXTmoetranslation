@@ -15,8 +15,6 @@ import (
 	"time"
 
 	"moesekai/server/internal/lyricscontract"
-	"moesekai/server/internal/lyricsrecoveryimport"
-	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
 )
 
@@ -624,7 +622,7 @@ type recoveryRenditionV3EditorFixture struct {
 	store     *Store
 	batchSHA  string
 	document  model.LyricsSourceDocument
-	artifacts []lyricsstaging.Artifact
+	artifacts []recoveryImportArtifact
 }
 
 func TestRecoveryImportedV3EditorReadsRecoveryGraphSavesAndSurvivesBackup(t *testing.T) {
@@ -918,16 +916,16 @@ func setupRecoveryRenditionV3EditorFixture(t *testing.T) recoveryRenditionV3Edit
 	t.Helper()
 	s := setupLyricsStore(t)
 	document, evidenceByIdentity := renditionV3PersistenceDocument(t)
-	artifacts := make([]lyricsstaging.Artifact, len(document.FixedIdentities))
+	artifacts := make([]recoveryImportArtifact, len(document.FixedIdentities))
 	for index, identity := range document.FixedIdentities {
-		artifact, err := lyricsstaging.NewRecoveryArtifact(identity, evidenceByIdentity[index][0].Raw)
+		artifact, err := newRecoveryImportArtifact(identity, evidenceByIdentity[index][0].Raw)
 		if err != nil {
 			t.Fatalf("build recovery v3 artifact %q: %v", identity.RenditionKey, err)
 		}
 		artifacts[index] = artifact
 	}
 	fingerprint := recoveryRenditionTestCatalogFingerprint(t, s, 10)
-	draft, err := lyricsstaging.BuildRecoveryPeerDraft(10, "新曲", fingerprint, 10, []int{}, document, artifacts, nil)
+	draft, err := buildRecoveryImportDraft(document, artifacts)
 	if err != nil {
 		t.Fatalf("build recovery v3 draft: %v", err)
 	}
@@ -1002,7 +1000,7 @@ func setupRecoveryRenditionV3EditorFixture(t *testing.T) recoveryRenditionV3Edit
 			}
 		}
 	}
-	item := lyricsrecoveryimport.Item{
+	item := recoveryImportItem{
 		MusicID: 10, JapaneseTitle: "新曲", CatalogFingerprint: fingerprint, TargetMusicID: 10,
 		AssociationMusicIDs: []int{}, State: lyricscontract.CoverageComplete,
 		ResultSHA256: recoveryEditorTestSHA("result-10"), Draft: &draft,
@@ -1023,7 +1021,7 @@ func setupRecoveryRenditionV3EditorFixture(t *testing.T) recoveryRenditionV3Edit
 		ReasonCode:      model.LyricsSourceVersionReasonVersionConflict,
 		FixedIdentities: []model.LyricsSourceFixedIdentity{},
 	}
-	missingSHA, err := lyricsrecoveryimport.AvailabilityDocumentSHA256(missingAvailability)
+	missingSHA, err := availabilityDocumentSHA256(missingAvailability)
 	if err != nil {
 		t.Fatal(rollback(err))
 	}
@@ -1031,7 +1029,7 @@ func setupRecoveryRenditionV3EditorFixture(t *testing.T) recoveryRenditionV3Edit
 	if err != nil {
 		t.Fatal(rollback(err))
 	}
-	missingItem := lyricsrecoveryimport.Item{
+	missingItem := recoveryImportItem{
 		MusicID: 20, JapaneseTitle: "旧曲", CatalogFingerprint: recoveryRenditionTestCatalogFingerprint(t, s, 20), TargetMusicID: 20,
 		AssociationMusicIDs: []int{}, State: lyricscontract.CoverageMissing,
 		ResultSHA256: recoveryEditorTestSHA("result-20"), Availability: &missingAvailability,

@@ -6,20 +6,131 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
+	"unicode/utf8"
 
 	"moesekai/server/internal/lyricscontract"
-	"moesekai/server/internal/lyricsrecoveryimport"
 	"moesekai/server/internal/lyricssource"
-	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
 )
 
 // Test seeds for the recovery-import provenance graph. The offline importer
-// (internal/offlineimport) owns the production write path; these helpers write
-// the same rows so store tests can exercise readers of a recovery-imported song
-// without importing that package.
+// owns the production write path; these helpers write the same rows so store
+// tests can exercise readers of a recovery-imported song without importing the
+// offline module. The fixture types below mirror the offline manifest shapes
+// (artifact, draft, item) closely enough to fill the same columns.
+
+type recoveryImportArtifact struct {
+	Identity             model.LyricsSourceFixedIdentity `json:"identity"`
+	RawWikitextByteCount int                             `json:"rawWikitextByteCount"`
+	RawWikitextSHA256    string                          `json:"rawWikitextSha256"`
+	ArtifactSHA256       string                          `json:"artifactSha256"`
+}
+
+type recoveryImportDraft struct {
+	Document              model.LyricsSourceDocument            `json:"document"`
+	DocumentSHA256        string                                `json:"documentSha256"`
+	DraftSHA256           string                                `json:"draftSha256"`
+	RenditionTranslations []lyricscontract.RenditionTranslation `json:"renditionTranslations,omitempty"`
+	Artifacts             []recoveryImportArtifact              `json:"artifacts"`
+}
+
+type recoveryImportItem struct {
+	MusicID                    int
+	JapaneseTitle              string
+	CatalogFingerprint         string
+	TargetMusicID              int
+	AssociationMusicIDs        []int
+	State                      lyricscontract.CoverageState
+	ResultSHA256               string
+	Draft                      *recoveryImportDraft
+	Availability               *model.LyricsAvailabilityDocument
+	AvailabilityDocumentSHA256 string
+	Artifacts                  []recoveryImportArtifact
+}
+
+func newRecoveryImportArtifact(identity model.LyricsSourceFixedIdentity, raw []byte) (recoveryImportArtifact, error) {
+	if err := model.ValidateLyricsSourceFixedIdentity(identity); err != nil {
+		return recoveryImportArtifact{}, err
+	}
+	if len(raw) == 0 || !utf8.Valid(raw) {
+		return recoveryImportArtifact{}, errors.New("recovery artifact raw bytes are invalid")
+	}
+	rawDigest := sha256.Sum256(raw)
+	artifact := recoveryImportArtifact{
+		Identity: identity, RawWikitextByteCount: len(raw), RawWikitextSHA256: hex.EncodeToString(rawDigest[:]),
+	}
+	body, err := json.Marshal(artifact)
+	if err != nil {
+		return recoveryImportArtifact{}, err
+	}
+	artifactDigest := sha256.Sum256(body)
+	artifact.ArtifactSHA256 = hex.EncodeToString(artifactDigest[:])
+	return artifact, nil
+}
+
+// buildRecoveryImportDraft canonicalises a source-v3 document the way the
+// offline stager does (persisted performer metadata, ruby generator version)
+// and pins the document and draft digests the store reads back.
+func buildRecoveryImportDraft(document model.LyricsSourceDocument, artifacts []recoveryImportArtifact) (recoveryImportDraft, error) {
+	if document.SchemaVersion != model.LyricsSourceDocumentSchemaVersionV3 || len(artifacts) == 0 {
+		return recoveryImportDraft{}, errors.New("recovery draft requires a source v3 document with artifacts")
+	}
+	document.FixedIdentities = append([]model.LyricsSourceFixedIdentity(nil), document.FixedIdentities...)
+	document.Renditions = model.CloneLyricsSourceRenditions(document.Renditions)
+	for index := range document.Renditions {
+		for _, target := range []**model.LyricsSourceFull{&document.Renditions[index].Full, &document.Renditions[index].Game} {
+			if *target == nil {
+				continue
+			}
+			canonical, err := lyricscontract.NormalizePersistedPerformerMetadata(**target)
+			if err != nil {
+				return recoveryImportDraft{}, err
+			}
+			canonical.RubyGeneratorVersion, err = lyricssource.RecoveryPersistedRubyGeneratorVersion(canonical.RubyGeneratorVersion)
+			if err != nil {
+				return recoveryImportDraft{}, err
+			}
+			*target = &canonical
+		}
+	}
+	if err := model.ValidateLyricsSourceDocument(document); err != nil {
+		return recoveryImportDraft{}, err
+	}
+	sorted := append([]recoveryImportArtifact(nil), artifacts...)
+	sort.Slice(sorted, func(left, right int) bool {
+		return sorted[left].Identity.RenditionKey < sorted[right].Identity.RenditionKey
+	})
+	documentJSON, err := json.Marshal(document)
+	if err != nil {
+		return recoveryImportDraft{}, err
+	}
+	documentDigest := sha256.Sum256(documentJSON)
+	draft := recoveryImportDraft{
+		Document: document, DocumentSHA256: hex.EncodeToString(documentDigest[:]), Artifacts: sorted,
+	}
+	draftJSON, err := json.Marshal(draft)
+	if err != nil {
+		return recoveryImportDraft{}, err
+	}
+	draftDigest := sha256.Sum256(draftJSON)
+	draft.DraftSHA256 = hex.EncodeToString(draftDigest[:])
+	return draft, nil
+}
+
+func availabilityDocumentSHA256(document model.LyricsAvailabilityDocument) (string, error) {
+	if err := model.ValidateLyricsAvailabilityDocument(document); err != nil {
+		return "", err
+	}
+	body, err := json.Marshal(document)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(body)
+	return hex.EncodeToString(digest[:]), nil
+}
 
 func seedRecoveryEvidenceTx(ctx context.Context, tx *sql.Tx, ref lyricscontract.EvidenceRef,
 	evidence lyricssource.IndexEvidence, now int64,
@@ -53,7 +164,7 @@ func seedRecoveryEvidenceTx(ctx context.Context, tx *sql.Tx, ref lyricscontract.
 }
 
 func seedRecoveryImportItemTx(ctx context.Context, tx *sql.Tx, batchSHA256 string,
-	item lyricsrecoveryimport.Item, now int64,
+	item recoveryImportItem, now int64,
 ) error {
 	associationsJSON, err := json.Marshal(item.AssociationMusicIDs)
 	if err != nil {
@@ -75,7 +186,7 @@ func seedRecoveryImportItemTx(ctx context.Context, tx *sql.Tx, batchSHA256 strin
 // seedRecoveryV3DraftItemTx persists the item's source-v3 document and its
 // rendition localizations exactly as a recovery import would.
 func seedRecoveryV3DraftItemTx(ctx context.Context, tx *sql.Tx, batchSHA256 string,
-	item lyricsrecoveryimport.Item, now int64,
+	item recoveryImportItem, now int64,
 ) error {
 	if item.Draft == nil || item.Draft.Document.SchemaVersion != model.LyricsSourceDocumentSchemaVersionV3 {
 		return fmt.Errorf("music %d v3 Draft is missing", item.MusicID)
@@ -109,7 +220,7 @@ func seedRecoveryV3DraftItemTx(ctx context.Context, tx *sql.Tx, batchSHA256 stri
 }
 
 func seedRecoveryAvailabilityItemTx(ctx context.Context, tx *sql.Tx, batchSHA256 string,
-	item lyricsrecoveryimport.Item, documentJSON string, now int64,
+	item recoveryImportItem, documentJSON string, now int64,
 ) error {
 	document := item.Availability
 	_, err := tx.ExecContext(ctx, `INSERT INTO song_lyrics_availability_documents
@@ -122,7 +233,7 @@ func seedRecoveryAvailabilityItemTx(ctx context.Context, tx *sql.Tx, batchSHA256
 // seedRecoveryProvenanceGraphTx writes the batch-scoped artifacts, their
 // evidence links, and the component contributions of one recovery item.
 func seedRecoveryProvenanceGraphTx(ctx context.Context, tx *sql.Tx, batchSHA256 string,
-	item lyricsrecoveryimport.Item, now int64,
+	item recoveryImportItem, now int64,
 ) error {
 	artifacts := item.Artifacts
 	if item.Draft != nil {
@@ -157,7 +268,7 @@ func seedRecoveryProvenanceGraphTx(ctx context.Context, tx *sql.Tx, batchSHA256 
 }
 
 func seedRecoveryArtifactTx(ctx context.Context, tx *sql.Tx, batchSHA256 string, musicID int,
-	artifact lyricsstaging.Artifact, now int64,
+	artifact recoveryImportArtifact, now int64,
 ) error {
 	identityJSON, err := json.Marshal(artifact.Identity)
 	if err != nil {
