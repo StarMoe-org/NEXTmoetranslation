@@ -900,6 +900,9 @@ func (s *EventStore) UpdateLine(eventID int, episodeNo, jpKey, cnText, source, e
 	if _, err := tx.Exec(`UPDATE event_stories SET last_updated = ? WHERE event_id = ?`, now, eventID); err != nil {
 		return err
 	}
+	if err := touchEventLocaleMetaTx(tx, eventID, now); err != nil {
+		return err
+	}
 	// Keep the additive zh-CN projection synchronized with the legacy row.
 	kind := "talk"
 	if entryType == "title" {
@@ -966,11 +969,24 @@ func (s *EventStore) PromoteHuman(eventID int) error {
 	} else if n == 0 {
 		return sql.ErrNoRows
 	}
+	if err := touchEventLocaleMetaTx(tx, eventID, now); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 	s.InvalidateSummaryCache()
 	return nil
+}
+
+// touchEventLocaleMetaTx bumps the zh-CN locale metadata timestamp. The summary
+// reads it in preference to event_stories.last_updated, so a human edit that
+// only bumped the legacy row would otherwise report the last AI run.
+func touchEventLocaleMetaTx(tx *sql.Tx, eventID int, now int64) error {
+	_, err := tx.Exec(`INSERT INTO event_story_locale_meta(event_id, locale, last_updated) VALUES (?, ?, ?)
+		ON CONFLICT(event_id, locale) DO UPDATE SET last_updated=excluded.last_updated`,
+		eventID, model.LocaleChinese, now)
+	return err
 }
 
 // Exists reports whether an event story is present.

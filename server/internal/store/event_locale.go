@@ -245,11 +245,11 @@ func (s *EventStore) UpdateLineLocaleRevision(eventID int, episodeNo, jpKey, seg
 			return ErrEventRevisionConflict
 		}
 	}
-	if locale != model.LocaleChinese {
-		if _, err := tx.Exec(`INSERT INTO event_story_locale_meta(event_id, locale, last_updated) VALUES (?, ?, ?)
-			ON CONFLICT(event_id, locale) DO UPDATE SET last_updated=excluded.last_updated`, eventID, locale, now); err != nil {
-			return err
-		}
+	// The summary reads this timestamp in preference to event_stories.last_updated
+	// for every locale, zh-CN included.
+	if _, err := tx.Exec(`INSERT INTO event_story_locale_meta(event_id, locale, last_updated) VALUES (?, ?, ?)
+		ON CONFLICT(event_id, locale) DO UPDATE SET last_updated=excluded.last_updated`, eventID, locale, now); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(`INSERT INTO audit_log(ts, user, action, detail) VALUES (?, ?, 'event.locale.update', ?)`,
 		now, user, eventLocaleAuditDetail(locale, eventID, entryType)); err != nil {
