@@ -3,6 +3,7 @@ package collab
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -298,5 +299,70 @@ func TestRetiringRoomRejectsAuthorizedLateLoad(t *testing.T) {
 		t.Fatal("failed retired-room load left a resident placeholder")
 	}
 	capture.release()
-	fixture.service.untrack(ticket.Room)
+	fixture.service.untrack(ticket.Room, fixture.claims.Username)
+}
+
+func TestRevokeUserClosesLiveConnectionAndReleasesEditorGate(t *testing.T) {
+	fixture := setupContractService(t)
+	ticket, err := fixture.service.IssueTicket(t.Context(), fixture.claims, fixture.bearer, 42, fixture.service.gate.Status())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/yjs/lyrics/{musicId}", fixture.service)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/yjs/lyrics/42?ticket=" + url.QueryEscape(ticket.Ticket)
+	connection, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		if response != nil {
+			response.Body.Close()
+		}
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for fixture.service.server.GetDoc(ticket.Room) == nil && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if fixture.service.server.GetDoc(ticket.Room) == nil {
+		t.Fatal("active WebSocket did not register its collaboration room")
+	}
+
+	fixture.service.RevokeUser(fixture.claims.Username)
+
+	// The revalidation ticker only fires every 20 seconds; revocation must not
+	// wait for it.
+	if err := connection.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, _, err := connection.ReadMessage(); err != nil {
+			// gorilla replaces the deadline error with its own net.Error, so the
+			// still-open case is recognised by Timeout rather than by identity.
+			var readErr net.Error
+			if errors.As(err, &readErr) && readErr.Timeout() {
+				t.Fatal("revoked account kept its collaboration connection open")
+			}
+			break
+		}
+	}
+	producerAcquired := make(chan func(), 1)
+	go func() {
+		release, beginErr := fixture.service.gate.BeginProducer()
+		if beginErr != nil {
+			producerAcquired <- nil
+			return
+		}
+		producerAcquired <- release
+	}()
+	select {
+	case release := <-producerAcquired:
+		if release == nil {
+			t.Fatal("producer acquisition failed")
+		}
+		release()
+	case <-time.After(2 * time.Second):
+		t.Fatal("revoked collaboration connection kept the editor gate slot")
+	}
 }

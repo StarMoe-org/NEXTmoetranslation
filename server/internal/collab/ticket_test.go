@@ -17,7 +17,7 @@ func requireTicketQueryRejectedAndConsumed(t *testing.T, fixture contractService
 	request.SetPathValue("musicId", "42")
 	if _, accepted := fixture.service.authorize(request); accepted {
 		for _, ticket := range tickets {
-			fixture.service.untrack(ticket.Room)
+			fixture.service.untrack(ticket.Room, fixture.claims.Username)
 		}
 		t.Fatal("invalid collaboration ticket query was accepted")
 	}
@@ -35,7 +35,7 @@ func requireTicketQueryRejectedAndConsumed(t *testing.T, fixture contractService
 		replay := httptest.NewRequest("GET", "http://example.test/yjs/lyrics/42?ticket="+url.QueryEscape(ticket.Ticket), nil)
 		replay.SetPathValue("musicId", "42")
 		if _, accepted := fixture.service.authorize(replay); accepted {
-			fixture.service.untrack(ticket.Room)
+			fixture.service.untrack(ticket.Room, fixture.claims.Username)
 			t.Fatalf("ticket %q was replayable after a rejected query", ticket.Ticket)
 		}
 	}

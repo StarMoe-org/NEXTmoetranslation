@@ -284,14 +284,18 @@ func (s *Server) broadcast(event string, data any) {
 	}
 }
 
-// revokeUser closes an account's live streams on both hubs after its token
-// generation changed. Either hub may be nil in tests.
+// revokeUser closes an account's live streams on both hubs and its
+// collaboration rooms after its token generation changed. Either hub and the
+// collaboration service may be nil in tests.
 func (s *Server) revokeUser(user string) {
 	if s.hub != nil {
 		s.hub.RevokeUser(user)
 	}
 	if s.wsHub != nil {
 		s.wsHub.RevokeUser(user)
+	}
+	if s.collab != nil {
+		s.collab.RevokeUser(user)
 	}
 }
 

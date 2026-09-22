@@ -63,9 +63,10 @@ type ticketGrant struct {
 }
 
 type authCapture struct {
-	room    string
-	bearer  string
-	release func()
+	room     string
+	username string
+	bearer   string
+	release  func()
 }
 
 type authCaptureKey struct{}
@@ -83,6 +84,7 @@ type Service struct {
 
 	activeMu  sync.Mutex
 	active    map[string]int
+	userRooms map[string]map[string]int
 	resident  map[string]struct{}
 	opMu      sync.Mutex
 	closeRoom func(string, bool) error
@@ -96,7 +98,8 @@ func New(database *db.DB, lyricsStore *store.Store, authService *auth.Auth, gate
 	service := &Service{
 		auth: authService, gate: gate, store: lyricsStore, persistence: persistence,
 		tickets: make(map[string]ticketGrant), retiring: make(map[string]struct{}),
-		active: make(map[string]int), resident: make(map[string]struct{}),
+		active: make(map[string]int), userRooms: make(map[string]map[string]int),
+		resident: make(map[string]struct{}),
 	}
 	server := ygws.NewServerWithPersistence(persistence)
 	server.Authorize = service.authorize
@@ -272,10 +275,10 @@ func (s *Service) authorize(r *http.Request) (ygws.ConnectionConfig, bool) {
 	// the value consumed by ygo after the strict equality check above.
 	r.SetPathValue("room", grant.room)
 	if capture, ok := r.Context().Value(authCaptureKey{}).(*authCapture); ok {
-		capture.room, capture.bearer, capture.release = grant.room, grant.bearer, releaseEditor
+		capture.room, capture.username, capture.bearer, capture.release = grant.room, grant.username, grant.bearer, releaseEditor
 		releaseNeeded = false
 	}
-	s.track(grant.room)
+	s.track(grant.room, grant.username)
 	go s.revalidateConnection(r.Context(), grant)
 	return ygws.ConnectionConfig{}, true
 }
@@ -300,7 +303,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		capture.release()
 	}
 	if capture.room != "" {
-		s.untrack(capture.room)
+		s.untrack(capture.room, capture.username)
 	}
 }
 
@@ -323,20 +326,59 @@ func (s *Service) revalidateConnection(ctx context.Context, grant ticketGrant) {
 	}
 }
 
-func (s *Service) track(room string) {
+func (s *Service) track(room, username string) {
 	s.activeMu.Lock()
 	s.active[room]++
+	rooms := s.userRooms[username]
+	if rooms == nil {
+		rooms = make(map[string]int)
+		s.userRooms[username] = rooms
+	}
+	rooms[room]++
 	s.activeMu.Unlock()
 }
 
-func (s *Service) untrack(room string) {
+func (s *Service) untrack(room, username string) {
 	s.activeMu.Lock()
 	if s.active[room] <= 1 {
 		delete(s.active, room)
 	} else {
 		s.active[room]--
 	}
+	if rooms := s.userRooms[username]; rooms != nil {
+		if rooms[room] <= 1 {
+			delete(rooms, room)
+		} else {
+			rooms[room]--
+		}
+		if len(rooms) == 0 {
+			delete(s.userRooms, username)
+		}
+	}
 	s.activeMu.Unlock()
+}
+
+// RevokeUser closes every collaboration room the account is connected to, so a
+// deleted, demoted, or re-tokenized account stops writing immediately instead of
+// at the next revalidation tick. ygo closes rooms, not individual peers, so
+// co-editors of those rooms reconnect too. The forced close ends the peer's
+// request, which releases its editor gate slot. Unused tickets need no cleanup:
+// authorize re-verifies the bearer against the users table.
+func (s *Service) RevokeUser(username string) {
+	if strings.TrimSpace(username) == "" {
+		return
+	}
+	s.activeMu.Lock()
+	rooms := make([]string, 0, len(s.userRooms[username]))
+	for room := range s.userRooms[username] {
+		rooms = append(rooms, room)
+	}
+	s.activeMu.Unlock()
+	for _, room := range rooms {
+		if err := s.closeRetiredRoom(room); err != nil {
+			log.Printf("[collab] close revoked room %s: %v", room, err)
+		}
+	}
 }
 
 func (s *Service) markResident(room string) bool {
