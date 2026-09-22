@@ -142,6 +142,12 @@ type LyricsPublicationBackupRecord struct {
 	PayloadJSON string `json:"payloadJson"`
 }
 
+type LyricsPublicWithdrawalBackupRecord struct {
+	MusicID     int    `json:"musicId"`
+	WithdrawnAt int64  `json:"withdrawnAt"`
+	WithdrawnBy string `json:"withdrawnBy"`
+}
+
 type LyricsSourceDocumentBackupRecord struct {
 	DocumentID                   int64  `json:"documentId"`
 	MusicID                      int    `json:"musicId"`
@@ -282,6 +288,7 @@ type LyricsContentExport struct {
 	Lines                           []LyricsLineBackupRecord                           `json:"lines"`
 	Segments                        []LyricsSegmentBackupRecord                        `json:"segments"`
 	Publications                    []LyricsPublicationBackupRecord                    `json:"publications"`
+	PublicWithdrawals               []LyricsPublicWithdrawalBackupRecord               `json:"publicWithdrawals,omitempty"`
 	SourceDocuments                 []LyricsSourceDocumentBackupRecord                 `json:"sourceDocuments,omitempty"`
 	SourceArtifacts                 []LyricsSourceArtifactBackupRecord                 `json:"sourceArtifacts,omitempty"`
 	SourceIndexEvidence             []LyricsSourceIndexEvidenceBackupRecord            `json:"sourceIndexEvidence,omitempty"`
@@ -622,6 +629,14 @@ func (s *Store) exportLyricsContentSnapshot(ctx context.Context, afterDocuments 
 				return err
 			}
 			result.Publications = append(result.Publications, record)
+			return nil
+		}},
+		{`SELECT music_id, withdrawn_at, withdrawn_by FROM song_lyrics_public_withdrawals ORDER BY music_id`, func(rows *sql.Rows) error {
+			var record LyricsPublicWithdrawalBackupRecord
+			if err := rows.Scan(&record.MusicID, &record.WithdrawnAt, &record.WithdrawnBy); err != nil {
+				return err
+			}
+			result.PublicWithdrawals = append(result.PublicWithdrawals, record)
 			return nil
 		}},
 		{`SELECT document_id,music_id,schema_version,reason_code,document_json,document_sha256,manifest_batch_sha256,created_at
@@ -1004,6 +1019,7 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 		`DELETE FROM event_story_segments`,
 		`DELETE FROM event_story_scenarios`,
 		`DELETE FROM song_lyrics_publications`,
+		`DELETE FROM song_lyrics_public_withdrawals`,
 		`DELETE FROM song_lyric_segments`,
 		`DELETE FROM song_lyric_lines`,
 		`DELETE FROM song_lyrics_translation_edition_lines`,
@@ -1279,6 +1295,15 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO song_lyrics_publications(music_id, revision, updated_at, payload_json)
 			VALUES (?, ?, ?, ?)`, record.MusicID, record.Revision, record.UpdatedAt, record.PayloadJSON); err != nil {
+			return err
+		}
+	}
+	for _, record := range lyrics.PublicWithdrawals {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO song_lyrics_public_withdrawals(music_id, withdrawn_at, withdrawn_by)
+			VALUES (?, ?, ?)`, record.MusicID, record.WithdrawnAt, record.WithdrawnBy); err != nil {
 			return err
 		}
 	}
@@ -2773,6 +2798,7 @@ func (s *Store) RestoreBackupContext(ctx context.Context, categories map[string]
 			`DELETE FROM entry_localizations`,
 			`DELETE FROM event_story_segment_localizations WHERE locale<>'zh-CN'`,
 			`DELETE FROM song_lyrics_publications`,
+			`DELETE FROM song_lyrics_public_withdrawals`,
 			`DELETE FROM song_lyric_segments`,
 			`DELETE FROM song_lyric_lines`,
 			`DELETE FROM song_lyrics`,

@@ -465,7 +465,19 @@ func (s *Store) PublishLyricsMutation(musicID, revision int, users ...string) (m
 		}
 		current.lyrics.Status = "published"
 		current.lyrics.PublishedRevision = revision
-		return current.lyrics, false, nil
+		// A publication row and a withdrawal never coexist after this call.
+		cleared, err := clearPublicLyricsWithdrawalTx(tx, musicID)
+		if err != nil {
+			return model.SongLyrics{}, false, err
+		}
+		if !cleared {
+			return current.lyrics, false, nil
+		}
+		if err := tx.Commit(); err != nil {
+			return model.SongLyrics{}, false, err
+		}
+		s.NotifyChange()
+		return current.lyrics, true, nil
 	}
 	if err != nil && err != sql.ErrNoRows {
 		return model.SongLyrics{}, false, err
@@ -478,6 +490,9 @@ func (s *Store) PublishLyricsMutation(musicID, revision int, users ...string) (m
 		VALUES (?, ?, ?, ?) ON CONFLICT(music_id) DO UPDATE SET revision=excluded.revision,
 		updated_at=excluded.updated_at, payload_json=excluded.payload_json`,
 		musicID, revision, updatedAt, string(payload)); err != nil {
+		return model.SongLyrics{}, false, err
+	}
+	if _, err := clearPublicLyricsWithdrawalTx(tx, musicID); err != nil {
 		return model.SongLyrics{}, false, err
 	}
 	if _, err := tx.Exec(`INSERT INTO audit_log(ts, user, action, detail) VALUES (?, ?, 'lyrics.publish', ?)`,
@@ -519,25 +534,35 @@ func (s *Store) UnpublishLyricsMutation(musicID, revision int, users ...string) 
 		return model.SongLyrics{}, false, &LyricsContractError{Code: "revision_conflict", Current: &copy}
 	}
 	var publishedRevision int
-	if err := tx.QueryRow(`SELECT revision FROM song_lyrics_publications WHERE music_id=?`, musicID).Scan(&publishedRevision); err == sql.ErrNoRows {
-		current.lyrics.Status = "draft"
-		current.lyrics.PublishedRevision = 0
-		return current.lyrics, false, nil
-	} else if err != nil {
+	err = tx.QueryRow(`SELECT revision FROM song_lyrics_publications WHERE music_id=?`, musicID).Scan(&publishedRevision)
+	hadPublication := err == nil
+	if err != nil && err != sql.ErrNoRows {
 		return model.SongLyrics{}, false, err
 	}
-	if _, err := tx.Exec(`DELETE FROM song_lyrics_publications WHERE music_id=?`, musicID); err != nil {
+	if hadPublication {
+		if _, err := tx.Exec(`DELETE FROM song_lyrics_publications WHERE music_id=?`, musicID); err != nil {
+			return model.SongLyrics{}, false, err
+		}
+	}
+	// The embedded reviewed bundle may contain the song even when this
+	// database never published it, so the withdrawal is recorded either way.
+	now := time.Now().Unix()
+	withdrawn, err := recordPublicLyricsWithdrawalTx(tx, musicID, optionalActor(users), now)
+	if err != nil {
 		return model.SongLyrics{}, false, err
+	}
+	current.lyrics.Status = "draft"
+	current.lyrics.PublishedRevision = 0
+	if !hadPublication && !withdrawn {
+		return current.lyrics, false, nil
 	}
 	if _, err := tx.Exec(`INSERT INTO audit_log(ts, user, action, detail) VALUES (?, ?, 'lyrics.unpublish', ?)`,
-		time.Now().Unix(), optionalActor(users), fmt.Sprintf("musicId=%d revision=%d", musicID, revision)); err != nil {
+		now, optionalActor(users), fmt.Sprintf("musicId=%d revision=%d", musicID, revision)); err != nil {
 		return model.SongLyrics{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return model.SongLyrics{}, false, err
 	}
-	current.lyrics.Status = "draft"
-	current.lyrics.PublishedRevision = 0
 	s.NotifyChange()
 	return current.lyrics, true, nil
 }

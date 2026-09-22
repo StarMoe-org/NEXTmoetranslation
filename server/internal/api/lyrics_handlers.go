@@ -317,6 +317,11 @@ func (s *Server) handleLyricsTranslationEditions(w http.ResponseWriter, r *http.
 	// Edition metadata and the revision/default mirror are song-level state.
 	// Every open edition must reconcile instead of only the returned edition.
 	s.broadcastLyricsDocumentUpdated(result.MusicID, result.Revision, request.ClientID, currentUser(r))
+	// Create/clone/rename/set-default change which translation the public
+	// projection serves, so they publish immediately like a lyrics save.
+	if s.fileService != nil {
+		s.fileService.PublishNow()
+	}
 	writeJSON(w, http.StatusOK, result)
 }
 

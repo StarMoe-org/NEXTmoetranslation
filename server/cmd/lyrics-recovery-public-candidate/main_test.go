@@ -73,14 +73,14 @@ func TestRunRejectsHistoricalMixedLyricsStorageOwnership(t *testing.T) {
 	}
 }
 
-func TestRunRejectsUnreviewedV35RuntimeWithoutCreatingOutput(t *testing.T) {
+func TestRunRejectsUnreviewedV36RuntimeWithoutCreatingOutput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "future-recovery.db")
 	database, err := db.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO schema_migrations(version,name,checksum,applied_at)
-		VALUES (35,'future_migration',?,1)`, strings.Repeat("f", 64)); err != nil {
+		VALUES (36,'future_migration',?,1)`, strings.Repeat("f", 64)); err != nil {
 		database.Close()
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestRunRejectsUnreviewedV35RuntimeWithoutCreatingOutput(t *testing.T) {
 		"--batch-sha256", strings.Repeat("c", 64),
 		"--output-directory", output,
 	}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "exact known schema v27 through v34 prefix") {
+	if err == nil || !strings.Contains(err.Error(), "exact known schema v27 through v35 prefix") {
 		t.Fatalf("future runtime schema error=%v", err)
 	}
 	if _, statErr := os.Lstat(output); !errors.Is(statErr, os.ErrNotExist) {
@@ -176,7 +176,7 @@ func TestRunReadsV28DatabaseWithoutChangingBytesOrCreatingSidecars(t *testing.T)
 		database.Close()
 		t.Fatal(err)
 	}
-	if _, err := database.Exec(`DELETE FROM schema_migrations WHERE version IN (29,30,31,32,33,34)`); err != nil {
+	if _, err := database.Exec(`DELETE FROM schema_migrations WHERE version IN (29,30,31,32,33,34,35)`); err != nil {
 		database.Close()
 		t.Fatal(err)
 	}

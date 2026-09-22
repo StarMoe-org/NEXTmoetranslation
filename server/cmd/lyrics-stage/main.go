@@ -34,7 +34,7 @@ const (
 	maxAttempts                           = 5
 	defaultRequestTimeout                 = 8 * time.Minute
 	maxRequestTimeout                     = 10 * time.Minute
-	maximumCompatibleCatalogRuntimeSchema = 34
+	maximumCompatibleCatalogRuntimeSchema = 35
 )
 
 var sqliteSidecarSuffixes = [...]string{"-wal", "-shm", "-journal"}

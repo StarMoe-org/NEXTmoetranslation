@@ -83,6 +83,15 @@ jobs:
       - name: Verify standalone release contracts
         run: ./scripts/verify-release.sh
 
+      # Neither builder can run here: build-public-lyrics-v3-bundle.py needs the
+      # accepted candidate directory and build-embedded-lyrics-editor-seed.py needs
+      # the accepted producer database, and neither input is in this repository.
+      # This proves the committed artifacts still match contracts/public-lyrics/baseline.json
+      # and that the bundle inventory and index/detail identity are intact. It does not
+      # prove the builders reproduce those artifacts from their private inputs.
+      - name: Check committed public lyrics artifacts against the baseline (builders are not re-run; their producer inputs are private)
+        run: python3 scripts/verify-public-lyrics-baseline.py
+
       - name: Validate immutable image inputs
         shell: bash
         run: |

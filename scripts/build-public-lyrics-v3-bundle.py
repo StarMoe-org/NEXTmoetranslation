@@ -14,15 +14,21 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-EXPECTED_BATCH = "6559b9b21fff20418ec97e1a965cbff3f516f18205e122355e0e96cd19472bd7"
-EXPECTED_ROOT = "fe486efcd029659519b411a88dfe5688d2a67f351bc19bb61fa970784a39b3ad"
+# The reviewed artifact identity, batch binding and counts live in one place;
+# only the private accepted-candidate digests stay here, because nothing else
+# in the repository refers to them.
+BASELINE = json.loads((Path(__file__).resolve().parent.parent / "contracts" / "public-lyrics" / "baseline.json").read_text(encoding="utf-8"))
+BUNDLE_PINS = BASELINE["publicLyricsBundle"]
+EXPECTED_BATCH = BUNDLE_PINS["batchSha256"]
+EXPECTED_ROOT = BUNDLE_PINS["rootSha256"]
+EXPECTED_CATALOG = BUNDLE_PINS["catalogCount"]
+EXPECTED_DETAILS = BUNDLE_PINS["detailCount"]
+EXPECTED_ASSETS = BUNDLE_PINS["memberCount"]
+EXPECTED_ARCHIVE_SHA256 = BUNDLE_PINS["archiveSha256"]
 EXPECTED_MANIFEST_SHA256 = "b88f3076e40a6711b9e6a55321ede9da0aef0b69489a22b5b74fe468f5676d6f"
 EXPECTED_RECEIPT_FILE_SHA256 = "a4bf207f446feffd71f2e51ab1755ac3c9cd648b34fe72596f85de3c6a559deb"
 EXPECTED_RECEIPT_SHA256 = "fddf772043e1fa4a70e0bc677ada44e61121ef9c6ef1ccf7e04c419c789b039d"
 EXPECTED_CONTENT_SHA256 = "6e0395c926470c591f70195aa6cf96ed6df1ea961b54d6a9fb6229f4bbe3d4b2"
-EXPECTED_CATALOG = 712
-EXPECTED_DETAILS = 694
-EXPECTED_ASSETS = 695
 DETAIL_RE = re.compile(r"music_([1-9][0-9]*)\.json")
 
 
@@ -130,7 +136,14 @@ def main() -> None:
     finally:
         temporary.unlink(missing_ok=True)
 
-    print(f"archive_sha256={sha256(archive_data)}")
+    archive_sha256 = sha256(archive_data)
+    if archive_sha256 != EXPECTED_ARCHIVE_SHA256:
+        raise SystemExit(
+            f"built archive {archive_sha256} differs from contracts/public-lyrics/baseline.json "
+            f"({EXPECTED_ARCHIVE_SHA256}); update the baseline in the same commit as a new reviewed bundle"
+        )
+
+    print(f"archive_sha256={archive_sha256}")
     print(f"archive_bytes={len(archive_data)}")
     print(f"inventory_sha256={inventory.hexdigest()}")
     print(f"runtime_bytes={runtime_bytes}")

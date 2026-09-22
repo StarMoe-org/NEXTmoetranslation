@@ -112,12 +112,25 @@ func (s *Server) handleCategoryBatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(result.Changed) > 0 {
 		s.rebuildCategoryAsset(req.Category)
+		// Music titles are copied into the public lyrics index, which only a
+		// full rebuild regenerates.
+		if s.fileService != nil && req.Category == "music" && changedCategoryFields(result.Changed)["title"] {
+			s.fileService.PublishNow()
+		}
 	}
 	type categoryBatchResponse struct {
 		model.CategoryLocaleSnapshot
 		Updated int `json:"updated"`
 	}
 	writeJSON(w, http.StatusOK, categoryBatchResponse{CategoryLocaleSnapshot: result.Snapshot, Updated: len(result.Changed)})
+}
+
+func changedCategoryFields(changed []model.CategoryEntryUpdate) map[string]bool {
+	fields := make(map[string]bool, len(changed))
+	for _, item := range changed {
+		fields[item.Field] = true
+	}
+	return fields
 }
 
 type projectionStatusWithSongResponse struct {

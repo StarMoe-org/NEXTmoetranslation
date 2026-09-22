@@ -31,9 +31,10 @@ func TestLyricsSourceMigrationsAppendAfterPinnedV12(t *testing.T) {
 		32: "song_682_translation_editions",
 		33: "song_682_translation_qed_correction",
 		34: "song_682_translation_mirror_sync",
+		35: "song_lyrics_public_withdrawals",
 	}
-	if latest := migrations[len(migrations)-1]; latest.version != 34 || latest.name != wantNames[34] {
-		t.Fatalf("latest migration=%d/%q want=34/%q", latest.version, latest.name, wantNames[34])
+	if latest := migrations[len(migrations)-1]; latest.version != 35 || latest.name != wantNames[35] {
+		t.Fatalf("latest migration=%d/%q want=35/%q", latest.version, latest.name, wantNames[35])
 	}
 	for version, name := range wantNames {
 		migration := migrations[version-1]

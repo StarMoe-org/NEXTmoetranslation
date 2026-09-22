@@ -1,0 +1,17 @@
+{
+  "purpose": "Single authority for the embedded public lyrics artifacts. Every builder, verifier and CI step reads these pins instead of restating them; the documentation points here instead of quoting hashes or counts.",
+  "publicLyricsBundle": {
+    "path": "server/internal/publiclyricsbundle/public-v3.tar.gz",
+    "archiveSha256": "962d1f7931d915f325d703f26b1ce02d30c353b753f9f684163ea1e78d203453",
+    "memberCount": 695,
+    "catalogCount": 712,
+    "detailCount": 694,
+    "batchSha256": "6559b9b21fff20418ec97e1a965cbff3f516f18205e122355e0e96cd19472bd7",
+    "rootSha256": "fe486efcd029659519b411a88dfe5688d2a67f351bc19bb61fa970784a39b3ad"
+  },
+  "embeddedEditorSeed": {
+    "path": "server/internal/embeddedlyricsseed/editor-seed.tar.gz",
+    "archiveSha256": "a8a2a7c841d0d73e448fd69f9adb236965b3b01a89d2ba58dcc921925e6ea479",
+    "producerDatabaseSha256": "160e9c9c36e066aa6e33c0a09bffb36b08101a9b9e1e6cd99b7b05e13cd9b766"
+  }
+}

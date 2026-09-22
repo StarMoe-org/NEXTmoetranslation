@@ -4,14 +4,26 @@ set -eu
 expected_index=9a735e96f856da9b94e1362883df13616a8b6e3cd33afce5d5e1468b4784b475
 expected_detail=224a7d34e1d4d551bca21cbe70374f504a781edef90eb644d8d4ec9e5fca064c
 expected_db=2eb61967a5f5b96a4961c0258984d6d5bb2f7b813379872d9d50a427704b8877
-expected_public_lyrics_bundle=962d1f7931d915f325d703f26b1ce02d30c353b753f9f684163ea1e78d203453
-expected_editor_lyrics_seed=a8a2a7c841d0d73e448fd69f9adb236965b3b01a89d2ba58dcc921925e6ea479
-expected_public_lyrics_inventory=738e0dcadae6a81d46e000cdde8a080f9e43f8a7ebeb9f8128efab45da23f7a6
-expected_public_lyrics_tar=84ad887f9eb4dfdaa1dc699c82beada39487b4a53b311a6022716d06928bbaca
-historical_700_public_lyrics_bundle=6a987c5ed796b4609e4bcbc5c67126196eb660258ad19bea672408cb42f9136b
-historical_700_public_lyrics_inventory=604aae68e3cd6824a8960a3cbbec5e015af48e5fcdd9895f785ff61e019d1f4b
+public_lyrics_baseline=contracts/public-lyrics/baseline.json
 public_lyrics_bundle=server/internal/publiclyricsbundle/public-v3.tar.gz
 editor_lyrics_seed=server/internal/embeddedlyricsseed/editor-seed.tar.gz
+
+# Every pin that guards the embedded public lyrics artifacts lives in the
+# baseline; this script asserts the Go constants and the documentation against
+# it instead of restating the values.
+baseline_pin() {
+  python3 -c 'import json,sys;
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+for key in sys.argv[2].split("."):
+    data = data[key]
+print(data)' "$public_lyrics_baseline" "$1"
+}
+
+test -f "$public_lyrics_baseline"
+expected_public_lyrics_bundle=$(baseline_pin publicLyricsBundle.archiveSha256)
+expected_public_lyrics_batch=$(baseline_pin publicLyricsBundle.batchSha256)
+expected_public_lyrics_root=$(baseline_pin publicLyricsBundle.rootSha256)
+expected_editor_lyrics_seed=$(baseline_pin embeddedEditorSeed.archiveSha256)
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -38,96 +50,24 @@ test -f "$public_lyrics_bundle"
 test -f server/internal/publiclyricsbundle/bundle.go
 test -f server/internal/publiclyricsbundle/bundle_test.go
 test -f scripts/build-public-lyrics-v3-bundle.py
-test "$(hash_file "$public_lyrics_bundle")" = "$expected_public_lyrics_bundle"
 grep -Fq '//go:embed public-v3.tar.gz' server/internal/publiclyricsbundle/bundle.go
+grep -Eq "BatchSHA256[[:space:]]+= \"$expected_public_lyrics_batch\"" server/internal/publiclyricsbundle/bundle.go
+grep -Eq "RootSHA256[[:space:]]+= \"$expected_public_lyrics_root\"" server/internal/publiclyricsbundle/bundle.go
 test -f "$editor_lyrics_seed"
 test -f server/internal/embeddedlyricsseed/bundle.go
 test -f server/internal/embeddedlyricsseed/bundle_test.go
 test -f server/internal/embeddedlyricsseed/contract.go
 test -f scripts/build-embedded-lyrics-editor-seed.py
-test "$(hash_file "$editor_lyrics_seed")" = "$expected_editor_lyrics_seed"
 grep -Fq "const ExpectedArchiveSHA256 = \"$expected_editor_lyrics_seed\"" server/internal/embeddedlyricsseed/bundle.go
 grep -Fq '//go:embed editor-seed.tar.gz' server/internal/embeddedlyricsseed/bundle.go
-grep -Fq 'EXPECTED_DB_SHA256 = "160e9c9c36e066aa6e33c0a09bffb36b08101a9b9e1e6cd99b7b05e13cd9b766"' scripts/build-embedded-lyrics-editor-seed.py
-python3 - "$public_lyrics_bundle" "$expected_public_lyrics_inventory" "$expected_public_lyrics_tar" <<'PY'
-import collections
-import gzip
-import hashlib
-import io
-import json
-import re
-import sys
-import tarfile
 
-bundle, expected_inventory, expected_tar = sys.argv[1:]
-raw_tar = gzip.decompress(open(bundle, "rb").read())
-if len(raw_tar) != 22568960 or hashlib.sha256(raw_tar).hexdigest() != expected_tar:
-    raise SystemExit("public lyrics decompressed tar identity differs")
-detail = re.compile(r"music_([1-9][0-9]*)\.json\Z")
-with tarfile.open(fileobj=io.BytesIO(raw_tar), mode="r:") as archive:
-    members = archive.getmembers()
-    bodies = {member.name: archive.extractfile(member).read() for member in members}
-if len(members) != 695:
-    raise SystemExit(f"public lyrics bundle member count={len(members)}, expected=695")
-if sum(member.size for member in members) != 22027427:
-    raise SystemExit("public lyrics bundle runtime byte count differs")
-names = [member.name for member in members]
-if len(names) != len(set(names)) or names.count("index.json") != 1:
-    raise SystemExit("public lyrics bundle inventory is duplicate or lacks one index")
-if any(
-    not member.isfile()
-    or member.mode != 0o444
-    or member.uid != 0
-    or member.gid != 0
-    or member.mtime != 0
-    or member.uname
-    or member.gname
-    or member.linkname
-    or member.pax_headers
-    or member.devmajor != 0
-    or member.devminor != 0
-    for member in members
-):
-    raise SystemExit("public lyrics bundle contains noncanonical metadata")
-detail_ids = [int(match.group(1)) for name in names if (match := detail.fullmatch(name))]
-if len(detail_ids) != 694 or len(detail_ids) != len(set(detail_ids)):
-    raise SystemExit("public lyrics bundle detail inventory differs")
-if set(names) != {"index.json", *(f"music_{music_id}.json" for music_id in detail_ids)}:
-    raise SystemExit("public lyrics bundle contains a nested, private, or unexpected artifact")
-inventory = hashlib.sha256()
-for name in sorted(bodies):
-    body = bodies[name]
-    inventory.update(name.encode())
-    inventory.update(b"\0")
-    inventory.update(hashlib.sha256(body).hexdigest().encode())
-    inventory.update(b"\0")
-    inventory.update(str(len(body)).encode())
-    inventory.update(b"\n")
-if inventory.hexdigest() != expected_inventory:
-    raise SystemExit("public lyrics bundle computed inventory differs")
+# Both builders must take their pins from the baseline instead of carrying a
+# second copy of them.
+grep -Fq 'contracts" / "public-lyrics" / "baseline.json"' scripts/build-public-lyrics-v3-bundle.py
+grep -Fq 'contracts" / "public-lyrics" / "baseline.json"' scripts/build-embedded-lyrics-editor-seed.py
 
-def reject_duplicates(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON key: {key}")
-        result[key] = value
-    return result
-
-index = json.loads(bodies["index.json"], object_pairs_hook=reject_duplicates)
-if index.get("version") != 3:
-    raise SystemExit("public lyrics index contract differs")
-expected_details = {song["musicId"] for song in index["songs"] if song["state"] in {"complete", "game_only"}}
-if expected_details != set(detail_ids):
-    raise SystemExit("public lyrics index/detail identity differs")
-for music_id in detail_ids:
-    document = json.loads(bodies[f"music_{music_id}.json"], object_pairs_hook=reject_duplicates)
-    if document.get("version") != 3 or document.get("musicId") != music_id:
-        raise SystemExit(f"public lyrics detail identity differs: {music_id}")
-for forbidden in (b'"databaseSha256"', b'"manifestSha256"', b'"receiptSha256"', b'"rawBytes"', b'"privateReview"', b'"indexEvidenceRefs"', b'"documentJson"', b'"fixedIdentityJson"', b'"sourceUrl"', b'"sourceSha1"', b'"sourceFetchedAt"', b'"acquisitionId"'):
-    if any(forbidden in body for body in bodies.values()):
-        raise SystemExit(f"public lyrics bundle contains forbidden private field {forbidden!r}")
-PY
+# Artifact bytes, bundle inventory and index/detail identity.
+python3 scripts/verify-public-lyrics-baseline.py
 
 if grep -q 'registry\.npmmirror\.com' web/package-lock.json; then
   echo 'package lock contains a noncanonical registry' >&2
@@ -364,11 +304,10 @@ grep -q 'contracts/public-lyrics/v3/' PRODUCTION_CONTRACT.md
 grep -q 'server/internal/publiclyricsbundle/public-v3.tar.gz' PRODUCTION_CONTRACT.md
 grep -q 'embedded_lyrics_editor_seed_ledger' PRODUCTION_CONTRACT.md
 grep -q 'server/internal/embeddedlyricsseed/editor-seed.tar.gz' STANDALONE_RELEASE.md
-grep -q "$expected_public_lyrics_bundle" STANDALONE_RELEASE.md
-grep -q "$expected_public_lyrics_bundle" README.md
-grep -q "$expected_editor_lyrics_seed" PRODUCTION_CONTRACT.md
-grep -q "$expected_editor_lyrics_seed" STANDALONE_RELEASE.md
-grep -q "$expected_editor_lyrics_seed" README.md
+for document in README.md PRODUCTION_CONTRACT.md STANDALONE_RELEASE.md; do
+  grep -Fq "$public_lyrics_baseline" "$document"
+  reject_pattern "$expected_public_lyrics_bundle|$expected_editor_lyrics_seed" "$document"
+done
 grep -q 'DB_PATH.*data/moesekai.db' STANDALONE_RELEASE.md
 grep -q 'DATA_DIR.*data' STANDALONE_RELEASE.md
 grep -q 'TZ.*UTC' STANDALONE_RELEASE.md

@@ -114,6 +114,9 @@ type Service struct {
 
 func New(s *store.Store, es *store.EventStore, gen *files.Generator) *Service {
 	publicLyrics, publicLyricsErr := publiclyricsbundle.Load()
+	if publicLyricsErr != nil {
+		log.Printf("[projection] embedded public lyrics bundle unavailable; serving database-only lyrics: %v", publicLyricsErr)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var initialSummary LyricsProjectionSummary
@@ -551,9 +554,6 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if svc.publicLyricsErr != nil {
-		return fmt.Errorf("public lyrics bundle: %w", svc.publicLyricsErr)
-	}
 	releaseContent, err := svc.store.LockContentSharedContext(ctx)
 	if err != nil {
 		return err
@@ -630,8 +630,10 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 	// entry and their detail bytes, so newly published lyrics reach the public
 	// site while the reviewed bundle stays the safety base. A failing
 	// database projection keeps the pure bundle bytes (fail-open), and a
-	// missing bundle keeps the database-only fallback exactly. Canonical and
-	// locale-mirror paths publish in one asset generation.
+	// missing or unloadable bundle keeps the database-only fallback exactly.
+	// Explicit withdrawals are applied last so unpublishing also removes a song
+	// the bundle contains. Canonical and locale-mirror paths publish in one
+	// asset generation.
 	var lyrics map[string][]byte
 	var lyricsSummary LyricsProjectionSummary
 	var lyricsProvenance map[int]SongProvenance
@@ -642,9 +644,14 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 			return fmt.Errorf("lyrics: %w", err)
 		}
 		lyricsSummary, lyricsProvenance = svc.databaseOnlyLyricsSummary(lyrics)
+		if svc.publicLyricsErr != nil {
+			lyricsSummary.Degraded = true
+			lyricsSummary.DegradedReason = "bundle: embedded runtime bundle unavailable"
+		}
 	} else {
 		lyrics, lyricsSummary, lyricsProvenance = svc.overlayPublishedLyrics(svc.publicLyrics)
 	}
+	lyrics, lyricsSummary, lyricsProvenance = svc.applyLyricsWithdrawals(lyrics, lyricsSummary, lyricsProvenance)
 	for key, body := range lyrics {
 		source := sourceGenerated
 		rev := 0

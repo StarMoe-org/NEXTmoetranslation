@@ -16,7 +16,7 @@ v2/
 │       ├── legacy/         旧文件加载（含 virtualLive 损坏数据恢复）
 │       ├── files/          从 DB 再生成兼容格式 JSON
 │       ├── filesvc/        /files/* 内存缓存服务（ETag + Cache-Control）
-│       ├── publiclyricsbundle/ 已验收 700 首 Public Lyrics v3 只读运行时包
+│       ├── publiclyricsbundle/ 已验收 Public Lyrics v3 只读冷启动基线包
 │       ├── embeddedlyricsseed/ 私有 canonical 700 后台编辑 seed（不公开 serve）
 │       ├── searchindex/    search-index.json 生成
 │       ├── config/         设置存储（AES-GCM 加密密钥）+ env 种子
@@ -50,8 +50,8 @@ v2/
 
 1. **编辑真源**：SQLite。所有翻译、活动剧情、来源标记、ID 追踪都存在 DB。
 2. **公开分发**：DB 变更（去抖）后再生成 `/files/translation/*.json` 与 `search-index.json`。
-3. **私有后台歌词 seed**：`next-production` 镜像另内嵌 canonical 700 的私有编辑 seed（归档 SHA-256 `a8a2a7c841d0d73e448fd69f9adb236965b3b01a89d2ba58dcc921925e6ea479`）。生产启动在 settings/admin 环境种子之前检查目录；空目录会明确 defer 以兼容既有首次 bootstrap，任何非空目录都必须严格核对 700 首 ID、日文标题与 `catalog-identity-v2` fingerprint，再用一个事务只补完全没有歌词 ownership 的曲目：652 首写入 native plural source-v3、music 795 保持 legacy 可编辑、47 首写明确 availability；已有 legacy/source/recovery availability 一律 `preserved_existing`，不覆盖账号、设置、普通翻译、剧情、审核或 publication。重启只做精确 replay 验证并产生 0 新写入，707 或任意目录漂移 fail-closed。该 archive 不包含 raw evidence、provider payload 或 producer DB，也不会被公开路由 serve。
-4. **Public Lyrics 712 发布覆盖**：生产 standalone 镜像内嵌已验收的 Public Lyrics v3 只读包（归档 SHA-256 `962d1f7931d915f325d703f26b1ce02d30c353b753f9f684163ea1e78d203453`，695 个公开 JSON，712 首目录记录）。每次 files-service projection rebuild 都先完成普通 SQLite 投影，再以同一组不可变 bytes 覆盖 canonical `/translation/lyrics/*` 及 `v2/{locale}/translation/lyrics/*`；不会替换或迁移生产 SQLite，也不会把 manifest、receipt、producer DB、evidence 或私有输入打进公开包。
+3. **私有后台歌词 seed**：`next-production` 镜像另内嵌 canonical 700 的私有编辑 seed（归档 SHA-256 pin 见 `contracts/public-lyrics/baseline.json`）。生产启动在 settings/admin 环境种子之前检查目录；空目录会明确 defer 以兼容既有首次 bootstrap，任何非空目录都必须严格核对 700 首 ID、日文标题与 `catalog-identity-v2` fingerprint，再用一个事务只补完全没有歌词 ownership 的曲目：652 首写入 native plural source-v3、music 795 保持 legacy 可编辑、47 首写明确 availability；已有 legacy/source/recovery availability 一律 `preserved_existing`，不覆盖账号、设置、普通翻译、剧情、审核或 publication。重启只做精确 replay 验证并产生 0 新写入，707 或任意目录漂移 fail-closed。该 archive 不包含 raw evidence、provider payload 或 producer DB，也不会被公开路由 serve。
+4. **Public Lyrics 公开发布**：公开歌词由数据库发布决定——控制台点「发布」即可让新歌出现在 `/files/translation/lyrics/index.json` 与 `/files/translation/lyrics/music_<id>.json`（含 `v2/{locale}/` 镜像），不需要改任何文件或重新打包镜像；「取消发布」同样即时生效，即使该曲存在于内嵌包内，也会从索引与详情路由中移除。生产 standalone 镜像内嵌的已验收 Public Lyrics v3 只读包只是冷启动基线：每次 files-service projection rebuild 先完成 SQLite 投影，再由数据库发布覆盖同名条目；包加载失败时 rebuild 不中断，projection status 记为 degraded 并只服务数据库发布内容。公开包只含 `index.json` 与 `music_<id>.json`，不含 manifest、receipt、producer DB、evidence 或任何私有输入；归档 SHA-256 与数量 pins 统一记录在 `contracts/public-lyrics/baseline.json`。
 5. **来源优先级**：官方 CN 同步只尊重 `pinned`（控制台「锁定」）。非空官方 CN 文本会覆盖 `human`、`llm`、`unknown` 与既有 `cn`，空的官方值则保留现有非空文本；mysekai 的 `tag` → `flavorText` 镜像不检查来源，同名 `tag` 的文本与来源会覆盖 `flavorText`，锁定 `flavorText` 也挡不住（只能锁定对应的 `tag` 条目）。人工译文要想不被下一次官方同步覆盖，必须先锁定为 `pinned`。
 
 歌词首次普通保存可以不填 `sourceUrl`，也可以填写有效的非托管外部参考链接；产品托管的 Vocaloid Wiki 精确 origin 只能通过服务端验证 preview/import 路径写入完整 page/revision/SHA1/fetch identity，不能仅粘贴 Wiki URL 绕过验证。历史上已经存在的仅 URL Wiki 草稿仍可继续编辑翻译，但其 URL、来源 identity 和日文来源结构必须保持不变。固定 page/revision/SHA1 只证明保存内容与某次抓取的修订一致，不证明转载、翻译或发布获授权；私有 `sourceNote`、`licenseNote` 与公开 `attribution` 都是 operator-authored metadata，系统不会把它们当作权利或许可证明。
@@ -108,7 +108,7 @@ Ygo 资源门禁为代码固定的安全默认值：全局 50 条连接、每房
 
 应用内 Git/S3 内容备份不是完整数据库备份：它不包含用户、密码哈希、token generation、设置、审计记录或加密配置。生产环境必须另行使用 SQLite 在线备份语义生成完整快照，执行 `PRAGMA integrity_check`，加密后传到独立的 off-host 存储，并定期做恢复演练。不能在 WAL 活跃时只复制 `moesekai.db` 主文件。
 
-备份中的 `translations/` 以 `Generator.WriteAllContext` 生成的 legacy category/event restore projection 为基础；`materializeBackupPayload` 再从同一个 SQLite snapshot 明确写入与该快照 `PublishedLyricsJSON` 字节完全一致的 `translations/lyrics/index.json` 和 `translations/lyrics/music_<id>.json` 数据库投影归档，而不改变通用 legacy generator 的输出语义。published lyrics 的草稿、私有来源资料和 publication snapshot 另存于 `translation-content/lyrics.json`，用于恢复 SQLite 自身的可编辑状态。当前 700 首生产发布覆盖属于镜像内不可变公开 release content，不进入内容备份、不会被 restore 写入数据库，并会在 restore 后的下一次 files-service rebuild 中继续覆盖对外歌词路径。该 materialization 与备份 push 都不是部署、静态站点发布或 CDN 同步；v2 locale projections 与 search indexes 仍不进入该归档。
+备份中的 `translations/` 以 `Generator.WriteAllContext` 生成的 legacy category/event restore projection 为基础；`materializeBackupPayload` 再从同一个 SQLite snapshot 明确写入与该快照 `PublishedLyricsJSON` 字节完全一致的 `translations/lyrics/index.json` 和 `translations/lyrics/music_<id>.json` 数据库投影归档，而不改变通用 legacy generator 的输出语义。published lyrics 的草稿、私有来源资料和 publication snapshot 另存于 `translation-content/lyrics.json`，用于恢复 SQLite 自身的可编辑状态。镜像内嵌的 Public Lyrics 冷启动基线属于不可变公开 release content，不进入内容备份、不会被 restore 写入数据库，并会在 restore 后的下一次 files-service rebuild 中继续覆盖对外歌词路径。该 materialization 与备份 push 都不是部署、静态站点发布或 CDN 同步；v2 locale projections 与 search indexes 仍不进入该归档。
 
 增量备份继续使用 `translation-content` schemaVersion 1；`event-stories.json` 追加规范化 Scenario 与独立 `scenarioCount`，旧 `count` 语义不变。旧备份不含 Scenario 时会显式清空该 side table，恢复前会校验 SHA 与 event/episode/scenario 父身份并保持整笔事务原子。
 

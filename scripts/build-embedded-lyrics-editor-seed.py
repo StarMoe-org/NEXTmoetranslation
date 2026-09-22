@@ -14,10 +14,14 @@ from pathlib import Path
 
 SCHEMA_VERSION = 1
 RELEASE_ID = "runtime-rebind-700-editor-seed-final-20260808b"
-SOURCE_BATCH = "6559b9b21fff20418ec97e1a965cbff3f516f18205e122355e0e96cd19472bd7"
-ROOT_SHA = "fe486efcd029659519b411a88dfe5688d2a67f351bc19bb61fa970784a39b3ad"
+# The producer database identity, the accepted batch binding and the seed
+# archive identity are pinned once for every builder, verifier and CI step.
+BASELINE = json.loads((Path(__file__).resolve().parent.parent / "contracts" / "public-lyrics" / "baseline.json").read_text(encoding="utf-8"))
+SOURCE_BATCH = BASELINE["publicLyricsBundle"]["batchSha256"]
+ROOT_SHA = BASELINE["publicLyricsBundle"]["rootSha256"]
 CATALOG_POLICY = "catalog-identity-v2"
-EXPECTED_DB_SHA256 = "160e9c9c36e066aa6e33c0a09bffb36b08101a9b9e1e6cd99b7b05e13cd9b766"
+EXPECTED_DB_SHA256 = BASELINE["embeddedEditorSeed"]["producerDatabaseSha256"]
+EXPECTED_ARCHIVE_SHA256 = BASELINE["embeddedEditorSeed"]["archiveSha256"]
 EXPECTED = {
     "catalog": 700,
     "source_v3": 652,
@@ -245,9 +249,15 @@ def build(database: Path, output: Path) -> None:
     with output.open("wb") as raw:
         with gzip.GzipFile(filename="", mode="wb", fileobj=raw, compresslevel=9, mtime=0) as compressed:
             compressed.write(tar_buffer.getvalue())
+    archive_sha256 = file_sha256(output)
+    if archive_sha256 != EXPECTED_ARCHIVE_SHA256:
+        raise SystemExit(
+            f"built seed {archive_sha256} differs from contracts/public-lyrics/baseline.json "
+            f"({EXPECTED_ARCHIVE_SHA256}); update the baseline in the same commit as a new reviewed seed"
+        )
     print(json.dumps({
         "output": str(output),
-        "archiveSha256": file_sha256(output),
+        "archiveSha256": archive_sha256,
         "seedSha256": seed_digest,
         "bytes": output.stat().st_size,
         "counts": {name: len(value) for name, value in file_values.items()},

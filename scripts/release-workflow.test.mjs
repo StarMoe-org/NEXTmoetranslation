@@ -17,7 +17,10 @@ const publicLyricsBundlePath = new URL('server/internal/publiclyricsbundle/publi
 const publicLyricsBundleSource = readFileSync(new URL('server/internal/publiclyricsbundle/bundle.go', root), 'utf8')
 const publicLyricsBundleBuilder = readFileSync(new URL('scripts/build-public-lyrics-v3-bundle.py', root), 'utf8')
 const publicLyricsBundle = readFileSync(publicLyricsBundlePath)
-const expectedPublicLyricsBundleSHA256 = '962d1f7931d915f325d703f26b1ce02d30c353b753f9f684163ea1e78d203453'
+const publicLyricsSeedBuilder = readFileSync(new URL('scripts/build-embedded-lyrics-editor-seed.py', root), 'utf8')
+// contracts/public-lyrics/baseline.json is the only place the embedded artifact
+// pins are written down; this suite checks the committed artifacts against it.
+const baseline = JSON.parse(readFileSync(new URL('contracts/public-lyrics/baseline.json', root), 'utf8'))
 
 function stepSection(source, name, nextName) {
   const start = source.indexOf(`      - name: ${name}\n`)
@@ -59,25 +62,26 @@ test('paired release workflow and runbook are retired by deletion', () => {
 
 test('the accepted public lyrics bundle is present and content-addressed', () => {
   assert.equal(existsSync(publicLyricsBundlePath), true)
-  assert.equal(createHash('sha256').update(publicLyricsBundle).digest('hex'), expectedPublicLyricsBundleSHA256)
+  assert.equal(createHash('sha256').update(publicLyricsBundle).digest('hex'), baseline.publicLyricsBundle.archiveSha256)
   assert.match(publicLyricsBundleSource, /validateDocuments/)
   assert.match(publicLyricsBundleSource, /DecodePublicLyricsV3Index/)
   assert.match(publicLyricsBundleSource, /DecodePublicLyricsV3Detail/)
   assert.match(publicLyricsBundleSource, /go:embed public-v3\.tar\.gz/)
-  assert.match(publicLyricsBundleBuilder, /EXPECTED_MANIFEST_SHA256 = \"b88f3076e40a6711b9e6a55321ede9da0aef0b69489a22b5b74fe468f5676d6f\"/)
-  assert.match(publicLyricsBundleBuilder, /EXPECTED_RECEIPT_FILE_SHA256 = \"a4bf207f446feffd71f2e51ab1755ac3c9cd648b34fe72596f85de3c6a559deb\"/)
 })
 
-test('the public lyrics bundle builder pins the counts the accepted bundle actually has', () => {
+test('the baseline pins the counts the accepted bundle actually has, and both builders read it', () => {
   const members = tarMembers(gunzipSync(publicLyricsBundle))
   const index = members.find(member => member.name === 'index.json')
   assert.ok(index, 'bundle has no index.json')
-  const catalog = JSON.parse(index.body.toString('utf8')).songs.length
   const details = members.filter(member => /^music_[1-9][0-9]*\.json$/.test(member.name)).length
   assert.equal(details + 1, members.length)
-  assert.match(publicLyricsBundleBuilder, new RegExp(`^EXPECTED_CATALOG = ${catalog}$`, 'm'))
-  assert.match(publicLyricsBundleBuilder, new RegExp(`^EXPECTED_DETAILS = ${details}$`, 'm'))
-  assert.match(publicLyricsBundleBuilder, new RegExp(`^EXPECTED_ASSETS = ${members.length}$`, 'm'))
+  assert.equal(baseline.publicLyricsBundle.memberCount, members.length)
+  assert.equal(baseline.publicLyricsBundle.detailCount, details)
+  assert.equal(baseline.publicLyricsBundle.catalogCount, JSON.parse(index.body.toString('utf8')).songs.length)
+  for (const builder of [publicLyricsBundleBuilder, publicLyricsSeedBuilder]) {
+    assert.match(builder, /contracts" \/ "public-lyrics" \/ "baseline\.json"/)
+    assert.doesNotMatch(builder, /^EXPECTED_(CATALOG|DETAILS|ASSETS|DB_SHA256) = ["0-9]/m)
+  }
 })
 
 test('Docker defaults to a standalone production target without workspace bytes', () => {
