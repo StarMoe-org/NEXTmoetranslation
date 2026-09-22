@@ -256,7 +256,7 @@ func TestRecordSyncSuccessClearsStaleError(t *testing.T) {
 		s.ConsecutiveFailures = 2
 	})
 
-	w.RecordSyncResult(nil)
+	w.RecordSyncResult("", nil)
 	status := w.Status()
 	if status.LastError != "" || status.LastErrorAt != "" || status.ConsecutiveFailures != 0 {
 		t.Fatalf("stale error was not cleared: %+v", status)
@@ -350,6 +350,52 @@ func TestFailedSyncKeepsChangedVersionPendingForRetry(t *testing.T) {
 	status, err := watcher.CheckNow(false)
 	if err != nil || calls.Load() != 2 || status.LastDataVersion != "101" || status.PendingDataVersion != "" {
 		t.Fatalf("pending version was not retried: status=%+v calls=%d err=%v", status, calls.Load(), err)
+	}
+}
+
+func TestVersionPublishedDuringSyncStaysPending(t *testing.T) {
+	oldBuiltIns := builtInVersionFallbackURLs
+	builtInVersionFallbackURLs = nil
+	t.Cleanup(func() { builtInVersionFallbackURLs = oldBuiltIns })
+	var version atomic.Value
+	version.Store("100")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"dataVersion":%q}`, version.Load().(string))
+	}))
+	defer server.Close()
+	cfg := openWatcherConfig(t)
+	_ = cfg.Set(config.KeyUpstreamVersionURL, server.URL)
+	_ = cfg.Set(config.KeyUpstreamVersionFallbackURL, server.URL)
+	var watcher *Watcher
+	var calls atomic.Int32
+	watcher = New(cfg, func() error {
+		if calls.Add(1) == 1 {
+			// upstream publishes 102 while the sync of 101 is still running
+			version.Store("102")
+			if _, err := watcher.fetchAndCompare(); err != nil {
+				t.Errorf("mid-sync check failed: %v", err)
+			}
+		}
+		return nil
+	}, Options{})
+	if _, err := watcher.CheckNow(false); err != nil {
+		t.Fatal(err)
+	}
+	version.Store("101")
+	status, err := watcher.CheckNow(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.LastDataVersion != "101" || status.PendingDataVersion != "102" {
+		t.Fatalf("sync recorded a version it never processed: %+v", status)
+	}
+	if cfg.Get(config.KeyUpstreamLastDataVersion) != "101" || cfg.Get(config.KeyUpstreamPendingDataVersion) != "102" {
+		t.Fatalf("persisted state = last %q pending %q, want 101/102",
+			cfg.Get(config.KeyUpstreamLastDataVersion), cfg.Get(config.KeyUpstreamPendingDataVersion))
+	}
+	status, err = watcher.CheckNow(false)
+	if err != nil || calls.Load() != 2 || status.LastDataVersion != "102" || status.PendingDataVersion != "" {
+		t.Fatalf("mid-sync version was not fetched next tick: status=%+v calls=%d err=%v", status, calls.Load(), err)
 	}
 }
 

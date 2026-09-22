@@ -27,6 +27,10 @@ func (s *Server) handleCNSync(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	syncVersion := ""
+	if s.upstream != nil {
+		syncVersion = s.upstream.SyncStartVersion()
+	}
 	result, err := s.translator.SyncCNOnlyContext(r.Context())
 	if err != nil {
 		if translator.IsAlreadyRunning(err) {
@@ -38,13 +42,13 @@ func (s *Server) handleCNSync(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.upstream != nil {
-			s.upstream.RecordSyncResult(err)
+			s.upstream.RecordSyncResult(syncVersion, err)
 		}
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if s.upstream != nil {
-		s.upstream.RecordSyncResult(result.SkippedError())
+		s.upstream.RecordSyncResult(syncVersion, result.SkippedError())
 	}
 	writeJSON(w, http.StatusOK, result)
 }

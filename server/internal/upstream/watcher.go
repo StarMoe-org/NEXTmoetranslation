@@ -611,22 +611,34 @@ func parseRetryAfter(value string, now time.Time) time.Duration {
 	return 0
 }
 
+// SyncStartVersion returns the upstream version a sync starting now processes.
+// Callers pass it back to RecordSyncResult so a version published while the sync
+// runs is not recorded as done.
+func (w *Watcher) SyncStartVersion() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.pendingDataVersion
+}
+
 // RecordSyncResult updates the shared upstream status after a scheduled or
 // manual data sync. A complete manual sync clears a stale watcher error because
 // it has just verified the configured upstream data path end to end.
-func (w *Watcher) RecordSyncResult(err error) {
+// processedVersion is the version the finished run started from (see
+// SyncStartVersion); pending is only cleared while it still matches, so a newer
+// version detected mid-sync stays pending for the next tick.
+func (w *Watcher) RecordSyncResult(processedVersion string, err error) {
 	stamp := nowRFC3339()
-	if err == nil {
+	consumed := false
+	if err == nil && processedVersion != "" {
 		w.mu.Lock()
-		pending := w.pendingDataVersion
+		consumed = w.pendingDataVersion == processedVersion
 		w.mu.Unlock()
-		if pending != "" {
-			if _, persistErr := w.cfg.SetMany(map[string]string{
-				config.KeyUpstreamLastDataVersion:    pending,
-				config.KeyUpstreamPendingDataVersion: "",
-			}); persistErr != nil {
-				err = fmt.Errorf("persist completed upstream version: %w", persistErr)
-			}
+		updates := map[string]string{config.KeyUpstreamLastDataVersion: processedVersion}
+		if consumed {
+			updates[config.KeyUpstreamPendingDataVersion] = ""
+		}
+		if _, persistErr := w.cfg.SetMany(updates); persistErr != nil {
+			err = fmt.Errorf("persist completed upstream version: %w", persistErr)
 		}
 	}
 	w.setStatus(func(s *Status) {
@@ -636,8 +648,10 @@ func (w *Watcher) RecordSyncResult(err error) {
 			return
 		}
 		s.LastSync = stamp
-		if w.pendingDataVersion != "" {
-			s.LastDataVersion = w.pendingDataVersion
+		if processedVersion != "" {
+			s.LastDataVersion = processedVersion
+		}
+		if consumed {
 			w.pendingDataVersion = ""
 			s.PendingDataVersion = ""
 		}
@@ -662,11 +676,12 @@ func (w *Watcher) runSyncContext(ctx context.Context) error {
 	if w.syncFn == nil {
 		return nil
 	}
+	processedVersion := w.SyncStartVersion()
 	if err := w.syncFn(ctx); err != nil {
-		w.RecordSyncResult(err)
+		w.RecordSyncResult(processedVersion, err)
 		return err
 	}
-	w.RecordSyncResult(nil)
+	w.RecordSyncResult(processedVersion, nil)
 	fmt.Println("[upstream] sync completed after upstream change")
 	return nil
 }
