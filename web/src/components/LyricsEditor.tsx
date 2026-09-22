@@ -1428,6 +1428,9 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
             ? `公共文件已完成新一代生成；歌曲 ${musicID} 的数据库发布状态已进入 generation ${status.generation}。`
             : `公共文件已完成新一代生成；歌曲 ${musicID} 的数据库撤回状态已进入 generation ${status.generation}。`);
           show(nextPublished ? "数据库发布与公共文件生成均已完成" : "数据库撤回与公共文件更新均已完成", "ok");
+          // The catalog's public-mirror line follows the served projection, so
+          // refresh it once the new generation is live.
+          void loadCatalog(query);
           return;
         }
         setProjectionMessage(`数据库操作已完成，正在等待公共文件 generation 超过 ${previousGeneration}（当前 ${status.generation}）。`);

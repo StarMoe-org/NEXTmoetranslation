@@ -123,6 +123,11 @@ test("embedded Public Lyrics metadata remains independent from editable SQLite s
   assert.match(combined, /数据库：\{databaseLyricsStatusLabel\(item\)\}/);
   assert.match(editor, /数据库已记录歌词可用性，但当前没有可编辑正文/);
   assert.match(combined, /公开镜像：\{runtimeLyricsStateLabel\(item\.runtimeLyrics\.state\)\}/);
+  // The public-mirror line reflects whatever is currently served (bundle or database
+  // publication); only the read-only 404 fallback is tied to the embedded release.
+  assert.match(sidebar, /\{item\.runtimeLyrics && \(/);
+  assert.doesNotMatch(sidebar, /item\.runtimeLyrics\?\.immutableOverlay &&/);
+  assert.match(api, /source\?: "bundle" \| "db_publication" \| "localization_projection"/);
   assert.match(editor, /reason instanceof APIError && reason\.status === 404 && item\.runtimeLyrics\?\.immutableOverlay/);
   assert.match(editor, /setRuntimeOnlyMissingDatabaseSource\(true\)/);
   assert.match(editor, /公开镜像仍在，后台数据库尚无可编辑源/);

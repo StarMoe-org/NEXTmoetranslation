@@ -256,6 +256,7 @@ export interface LocalizedTitle {
 export interface RuntimeLyricsMetadata {
   releaseId: string;
   immutableOverlay: boolean;
+  source?: "bundle" | "db_publication" | "localization_projection";
   state: "complete" | "game_only" | "satisfied_no_lyrics" | "incomplete";
   hasDetail: boolean;
   availableVersions: string[];
@@ -274,7 +275,10 @@ export interface CatalogMusicItem {
   lyricsStatus?: "draft" | "published" | "draft-published";
   /** Persisted SQLite availability state for reviewed songs without an editable text document. */
   lyricsAvailabilityState?: "satisfied_no_lyrics" | "ambiguous" | "missing" | "incomplete" | "failed";
-  /** Independent read-only metadata for the embedded Public Lyrics release. */
+  /**
+   * What the public mirror currently serves for this song (embedded release overlaid by
+   * database publications, minus withdrawals). Absent when nothing is served.
+   */
   runtimeLyrics?: RuntimeLyricsMetadata;
 }
 

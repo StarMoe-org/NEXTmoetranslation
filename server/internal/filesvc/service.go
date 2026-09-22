@@ -28,10 +28,17 @@ import (
 
 type assetSource string
 
+// SongProvenance.Source values, exported for API consumers.
 const (
-	sourceBundle                 assetSource = "bundle"
-	sourceDBPublication          assetSource = "db_publication"
-	sourceLocalizationProjection assetSource = "localization_projection"
+	SongSourceBundle                 = "bundle"
+	SongSourceDBPublication          = "db_publication"
+	SongSourceLocalizationProjection = "localization_projection"
+)
+
+const (
+	sourceBundle                 assetSource = SongSourceBundle
+	sourceDBPublication          assetSource = SongSourceDBPublication
+	sourceLocalizationProjection assetSource = SongSourceLocalizationProjection
 	sourceGenerated              assetSource = "generated"
 )
 

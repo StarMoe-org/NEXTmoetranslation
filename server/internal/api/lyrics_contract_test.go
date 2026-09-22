@@ -177,6 +177,64 @@ func TestCatalogMusicAddsEmbeddedRuntimeLyricsWithoutChangingDBStatus(t *testing
 	t.Fatal("music 307 missing after DB draft save")
 }
 
+type provenanceFileService struct {
+	fakeFileService
+	provenance map[int]filesvc.SongProvenance
+}
+
+func (f *provenanceFileService) SongProvenance(musicID int) (filesvc.SongProvenance, bool) {
+	p, ok := f.provenance[musicID]
+	return p, ok
+}
+
+func TestCatalogMusicRuntimeLyricsFollowsLivePublicProjection(t *testing.T) {
+	h := setupLegacyAPI(t)
+	if err := h.store.UpsertMusicCatalog([]store.MusicCatalogRecord{
+		{MusicID: 307, JapaneseTitle: "おこちゃま戦争"},
+		{MusicID: 682, JapaneseTitle: "あなたしか見えないの"},
+		{MusicID: 999999, JapaneseTitle: "Bundle 外の曲"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 307 stays served from the embedded bundle, 682 was withdrawn from the
+	// public mirror, 999999 is a database publication outside the bundle.
+	h.api.SetFileService(&provenanceFileService{provenance: map[int]filesvc.SongProvenance{
+		307: {MusicID: 307, Source: filesvc.SongSourceBundle, Revision: 1, State: "complete",
+			AvailableVersions: []string{"full", "game"}, UpdatedAt: "2026-08-08T13:24:16Z", HasDetail: true},
+		999999: {MusicID: 999999, Source: filesvc.SongSourceDBPublication, Revision: 3, State: "complete",
+			AvailableVersions: []string{"full"}, UpdatedAt: "2026-09-22T20:19:58Z", HasDetail: true},
+	}})
+
+	response := authorizedRequest(t, h, http.MethodGet, "/api/catalog/music?newlyWritten=false&limit=100", nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("catalog status=%d", response.StatusCode)
+	}
+	var result model.CatalogMusicResponse
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	items := make(map[int]model.CatalogMusicItem, len(result.Items))
+	for _, item := range result.Items {
+		items[item.MusicID] = item
+	}
+	bundled := items[307].RuntimeLyrics
+	if bundled == nil || !bundled.ImmutableOverlay || bundled.Source != "bundle" || bundled.ReleaseID != publiclyricsbundle.ReleaseID ||
+		bundled.BatchSHA256 != publiclyricsbundle.BatchSHA256 || bundled.State != "complete" || !bundled.HasDetail ||
+		!reflect.DeepEqual(bundled.AvailableVersions, []string{"full", "game"}) {
+		t.Fatalf("bundle-served item runtime=%+v", bundled)
+	}
+	if withdrawn := items[682].RuntimeLyrics; withdrawn != nil {
+		t.Fatalf("withdrawn bundle song still advertises a public mirror: %+v", *withdrawn)
+	}
+	published := items[999999].RuntimeLyrics
+	if published == nil || published.ImmutableOverlay || published.Source != "db_publication" || published.ReleaseID != "" ||
+		published.BatchSHA256 != "" || published.Revision != 3 || published.State != "complete" ||
+		!reflect.DeepEqual(published.AvailableVersions, []string{"full"}) {
+		t.Fatalf("database-published item runtime=%+v", published)
+	}
+}
+
 func TestLyricsAPIContractAndRBAC(t *testing.T) {
 	h := setupLegacyAPI(t)
 	seedLyricsCatalog(t, h)

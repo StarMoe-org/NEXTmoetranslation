@@ -88,6 +88,7 @@ func loadCatalogRuntimeMetadata() {
 		metadata[song.MusicID] = model.RuntimeLyricsMetadata{
 			ReleaseID:         ReleaseID,
 			ImmutableOverlay:  true,
+			Source:            "bundle",
 			State:             string(song.State),
 			HasDetail:         song.State == store.PublicLyricsStateComplete || song.State == store.PublicLyricsStateGameOnly,
 			AvailableVersions: versions,

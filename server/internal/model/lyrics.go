@@ -15,6 +15,7 @@ type LocalizedTitle struct {
 type RuntimeLyricsMetadata struct {
 	ReleaseID         string   `json:"releaseId"`
 	ImmutableOverlay  bool     `json:"immutableOverlay"`
+	Source            string   `json:"source,omitempty"`
 	State             string   `json:"state"`
 	HasDetail         bool     `json:"hasDetail"`
 	AvailableVersions []string `json:"availableVersions"`

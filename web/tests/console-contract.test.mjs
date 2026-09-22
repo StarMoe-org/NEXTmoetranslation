@@ -393,6 +393,7 @@ test("lyrics workspace covers catalog, verified source import, draft, and public
   assert.match(api, /getProjectionStatus = \(musicId\?: number\) =>/);
   assert.match(editor, /previousProjectionGeneration = status\.generation/);
   assert.match(editor, /void waitForProjection\(previousProjectionGeneration, nextPublished, musicID\)/);
+  assert.match(editor, /status\.generation > previousGeneration\) \{[\s\S]*?setProjectionState\("ready"\);[\s\S]*?void loadCatalog\(query\);[\s\S]*?return;/);
   assert.match(editor, /数据库发布已提交，正在核对公共文件/);
   assert.match(combinedEditor, /重新核对公共文件/);
   assert.match(editor, /分段与日文一致/);

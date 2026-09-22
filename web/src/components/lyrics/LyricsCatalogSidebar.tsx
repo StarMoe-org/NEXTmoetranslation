@@ -86,7 +86,7 @@ export function LyricsCatalogSidebar({
             >
               <strong>{item.title["zh-CN"] || item.title["ja-JP"]}</strong>
               <span>#{item.musicId} · 数据库：{databaseLyricsStatusLabel(item)}</span>
-              {item.runtimeLyrics?.immutableOverlay && (
+              {item.runtimeLyrics && (
                 <span>
                   公开镜像：{runtimeLyricsStateLabel(item.runtimeLyrics.state)} · {runtimeLyricsVersionsLabel(item.runtimeLyrics.availableVersions)}
                 </span>

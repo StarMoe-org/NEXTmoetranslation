@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"moesekai/server/internal/auth"
+	"moesekai/server/internal/filesvc"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 	"moesekai/server/internal/publiclyricsbundle"
@@ -49,19 +50,53 @@ func (s *Server) handleCatalogMusic(w http.ResponseWriter, r *http.Request) {
 		writeContractError(w, http.StatusInternalServerError, "internal_error", nil, nil)
 		return
 	}
-	runtimeLyrics, err := publiclyricsbundle.CatalogRuntimeMetadata()
-	if err != nil {
-		writeContractError(w, http.StatusInternalServerError, "internal_error", nil, nil)
-		return
+	var bundleMetadata map[int]model.RuntimeLyricsMetadata
+	if s.fileService == nil {
+		metadata, err := publiclyricsbundle.CatalogRuntimeMetadata()
+		if err != nil {
+			writeContractError(w, http.StatusInternalServerError, "internal_error", nil, nil)
+			return
+		}
+		bundleMetadata = metadata
 	}
 	for index := range result.Items {
-		if metadata, ok := runtimeLyrics[result.Items[index].MusicID]; ok {
-			copy := metadata
-			copy.AvailableVersions = append([]string{}, metadata.AvailableVersions...)
-			result.Items[index].RuntimeLyrics = &copy
-		}
+		result.Items[index].RuntimeLyrics = s.catalogRuntimeLyrics(result.Items[index].MusicID, bundleMetadata)
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// catalogRuntimeLyrics describes what the public mirror currently serves for a
+// song. With the file service wired it reflects the live projection (embedded
+// bundle overlaid by database publications, minus explicit withdrawals);
+// otherwise only the embedded release is known.
+func (s *Server) catalogRuntimeLyrics(musicID int, bundleMetadata map[int]model.RuntimeLyricsMetadata) *model.RuntimeLyricsMetadata {
+	if s.fileService == nil {
+		metadata, ok := bundleMetadata[musicID]
+		if !ok {
+			return nil
+		}
+		metadata.AvailableVersions = append([]string{}, metadata.AvailableVersions...)
+		return &metadata
+	}
+	provenance, ok := s.fileService.SongProvenance(musicID)
+	if !ok {
+		return nil
+	}
+	metadata := model.RuntimeLyricsMetadata{
+		Source:            provenance.Source,
+		State:             provenance.State,
+		HasDetail:         provenance.HasDetail,
+		AvailableVersions: append([]string{}, provenance.AvailableVersions...),
+		Revision:          provenance.Revision,
+		UpdatedAt:         provenance.UpdatedAt,
+	}
+	if provenance.Source == filesvc.SongSourceBundle {
+		metadata.ReleaseID = publiclyricsbundle.ReleaseID
+		metadata.ImmutableOverlay = true
+		metadata.BatchSHA256 = publiclyricsbundle.BatchSHA256
+		metadata.RootSHA256 = publiclyricsbundle.RootSHA256
+	}
+	return &metadata
 }
 
 func (s *Server) handleCatalogCharacters(w http.ResponseWriter, r *http.Request) {
