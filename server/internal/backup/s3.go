@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -131,16 +132,27 @@ func encryptBackupPayloadContext(ctx context.Context, work string, payload backu
 
 func (m *Manager) publishS3BackupArtifactContext(ctx context.Context, cfg s3Settings, artifact []byte) error {
 	ts := time.Now().UTC().Format("20060102-150405")
-	ext := "tar.gz"
+	ext, supersededExt := "tar.gz", "enc"
 	if !bytes.HasPrefix(artifact, []byte{0x1f, 0x8b}) {
-		ext = "enc"
+		ext, supersededExt = "enc", "tar.gz"
 	}
 	key := fmt.Sprintf("%s/translations-%s.%s", cfg.prefix, ts, ext)
 	if err := m.s3PutContext(ctx, cfg, key, artifact); err != nil {
 		return err
 	}
 	latestKey := fmt.Sprintf("%s/latest.%s", cfg.prefix, ext)
-	return m.s3PutContext(ctx, cfg, latestKey, artifact)
+	if err := m.s3PutContext(ctx, cfg, latestKey, artifact); err != nil {
+		return err
+	}
+	// Turning the encryption key on or off switches the artifact format, so the
+	// other format's pointer should go: it would otherwise survive as a stale
+	// latest object. The backup is durable at this point and restore already
+	// prefers the readable format, so a key without DeleteObject only logs.
+	supersededKey := fmt.Sprintf("%s/latest.%s", cfg.prefix, supersededExt)
+	if err := m.s3DeleteContext(ctx, cfg, supersededKey); err != nil {
+		log.Printf("[backup] delete superseded S3 pointer %s: %v", supersededKey, err)
+	}
+	return nil
 }
 
 func (m *Manager) restoreS3(actors ...string) (importer.Result, error) {
@@ -172,14 +184,19 @@ func (m *Manager) prepareS3RestoreContext(ctx context.Context) (restoreCandidate
 		return restoreCandidate{}, err
 	}
 	defer clear(encryptionKey)
+	// Prefer the format this process can actually read so a pointer left over
+	// from before an encryption-key change cannot shadow the current artifact.
 	latestKey := fmt.Sprintf("%s/latest.tar.gz", cfg.prefix)
+	fallbackKey := fmt.Sprintf("%s/latest.enc", cfg.prefix)
+	if len(encryptionKey) > 0 {
+		latestKey, fallbackKey = fallbackKey, latestKey
+	}
 	data, err := m.s3GetContext(ctx, cfg, latestKey)
 	if err != nil {
-		latestKeyEnc := fmt.Sprintf("%s/latest.enc", cfg.prefix)
-		var errEnc error
-		data, errEnc = m.s3GetContext(ctx, cfg, latestKeyEnc)
-		if errEnc != nil {
-			return restoreCandidate{}, fmt.Errorf("s3 restore artifact not found (checked %s and %s): %w", latestKey, latestKeyEnc, err)
+		var errFallback error
+		data, errFallback = m.s3GetContext(ctx, cfg, fallbackKey)
+		if errFallback != nil {
+			return restoreCandidate{}, fmt.Errorf("s3 restore artifact not found (checked %s and %s): %w", latestKey, fallbackKey, err)
 		}
 	}
 	var archive []byte
@@ -493,6 +510,10 @@ func (m *Manager) s3Get(cfg s3Settings, key string) ([]byte, error) {
 
 func (m *Manager) s3GetContext(ctx context.Context, cfg s3Settings, key string) ([]byte, error) {
 	return m.s3DoRespContext(ctx, cfg, http.MethodGet, key, nil)
+}
+
+func (m *Manager) s3DeleteContext(ctx context.Context, cfg s3Settings, key string) error {
+	return m.s3DoContext(ctx, cfg, http.MethodDelete, key, nil)
 }
 
 func (m *Manager) s3Do(cfg s3Settings, method, key string, body []byte) error {

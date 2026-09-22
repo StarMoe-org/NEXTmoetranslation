@@ -242,8 +242,8 @@ func TestLegacyS3BackupTriggerAndRestoreSemantics(t *testing.T) {
 	mu.Lock()
 	puts := append([]requestRecord(nil), requests...)
 	mu.Unlock()
-	if len(puts) != 2 {
-		t.Fatalf("S3 backup requests = %d, want timestamped plus latest", len(puts))
+	if len(puts) != 3 {
+		t.Fatalf("S3 backup requests = %d, want timestamped, latest, and the superseded pointer delete", len(puts))
 	}
 	timestamped := regexp.MustCompile(`^/legacy-bucket/snapshots/translations-[0-9]{8}-[0-9]{6}\.enc$`)
 	if puts[0].method != http.MethodPut || !timestamped.MatchString(puts[0].path) {
@@ -252,7 +252,10 @@ func TestLegacyS3BackupTriggerAndRestoreSemantics(t *testing.T) {
 	if puts[1].method != http.MethodPut || puts[1].path != "/legacy-bucket/snapshots/latest.enc" {
 		t.Fatalf("latest PUT = %s %s", puts[1].method, puts[1].path)
 	}
-	for _, put := range puts {
+	if puts[2].method != http.MethodDelete || puts[2].path != "/legacy-bucket/snapshots/latest.tar.gz" {
+		t.Fatalf("superseded pointer request = %s %s", puts[2].method, puts[2].path)
+	}
+	for _, put := range puts[:2] {
 		if !strings.HasPrefix(put.auth, "AWS4-HMAC-SHA256 Credential=legacy-access/") {
 			t.Fatalf("missing SigV4 Authorization: %q", put.auth)
 		}
