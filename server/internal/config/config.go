@@ -136,6 +136,7 @@ func (c *Config) reload() error {
 	}
 	defer rows.Close()
 	cache := map[string]string{}
+	canonical := map[string]string{}
 	for rows.Next() {
 		var key, value string
 		var enc int
@@ -153,15 +154,76 @@ func (c *Config) reload() error {
 			}
 			value = dec
 		}
+		if normalized, legacy := canonicalSettingValue(key, value); legacy {
+			canonical[key] = normalized
+			value = normalized
+		}
 		if err := validateSettingValue(key, value); err != nil {
 			return fmt.Errorf("invalid persisted setting: %w", err)
 		}
 		cache[key] = value
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := c.persistCanonicalSettings(canonical); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	c.cache = cache
 	c.mu.Unlock()
-	return rows.Err()
+	return nil
+}
+
+// canonicalSettingValue rewrites the boolean and integer spellings that older
+// binaries accepted into the single form validateSettingValue allows. Values
+// that are not a legacy spelling are returned unchanged so they still fail
+// validation.
+func canonicalSettingValue(key, value string) (string, bool) {
+	switch key {
+	case KeySchedulerOn, KeyLyricsDiscoveryOn, KeyLyricsFetchRevisionOn, KeyBackupS3Enabled, KeyBackupGitEnabled:
+		switch value {
+		case "1", "yes", "on":
+			return "true", true
+		case "0", "no", "off":
+			return "false", true
+		}
+	case KeyLLMRequestTimeoutMS, KeyLLMMaxRetries, KeyBatchSize, KeyRateDelayMS,
+		KeyUpstreamFetchConcurrency, KeyBackupDailyHour:
+		number, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return value, false
+		}
+		if normalized := strconv.Itoa(number); normalized != value {
+			return normalized, true
+		}
+	}
+	return value, false
+}
+
+// persistCanonicalSettings stores the rewritten values so later readers and
+// writers see the same canonical form. Only plaintext rows are rewritten;
+// no boolean or integer setting is a secret.
+func (c *Config) persistCanonicalSettings(values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	tx, err := c.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for key, value := range values {
+		if _, err := tx.Exec(`UPDATE settings SET value=? WHERE key=? AND encrypted=0`, value, key); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // Get returns a setting value, or the empty string if unset.
