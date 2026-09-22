@@ -220,6 +220,17 @@ test("REM keeps two equal-text families independent by stable key", () => {
   assert.deepEqual(lyricsVersionSaveProblems(candidate), []);
 });
 
+test("manual REM ruby spans may leave Han unannotated while present readings stay kana over Han", () => {
+  const candidate = remDocument();
+  for (const side of ["full", "game"]) candidate.renditions[0][side].lines[0].segments[0].ruby = [{ text: "歌" }];
+  candidate.renditions[1].game.lines[0].segments[0].ruby = [{ text: "歌" }];
+
+  assert.deepEqual(lyricsVersionSaveProblems(candidate), []);
+
+  candidate.renditions[0].full.lines[0].segments[0].ruby = [{ text: "歌", reading: "uta" }];
+  assert.ok(lyricsVersionSaveProblems(candidate).some((problem) => problem.includes("假名注音")));
+});
+
 test("REM authoritative reload retains a still-valid stable rendition side and falls back deterministically", () => {
   const candidate = remDocument();
 

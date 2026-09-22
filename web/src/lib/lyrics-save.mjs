@@ -210,10 +210,6 @@ function rubyBaseRuneMayReceiveReading(value) {
   return RUBY_HAN_RE.test(value) && value !== "〇" && !RUBY_NUMBER_RE.test(value);
 }
 
-function rubyTextContainsReadableHan(value) {
-  return Array.from(value).some(rubyBaseRuneMayReceiveReading);
-}
-
 function rubyReadingBaseIsHan(value) {
   const runes = Array.from(value);
   return runes.length > 0 && runes.every(rubyBaseRuneMayReceiveReading);
@@ -258,8 +254,6 @@ function validateRuby(ruby, segmentText, path, errors, maximumSpans) {
       if (!rubyReadingIsKana(span.reading)) {
         errors.push(`${path}.ruby[${index}].reading must contain kana only`);
       }
-    } else if (rubyTextContainsReadableHan(span.text)) {
-      errors.push(`${path}.ruby[${index}] is missing a Han reading`);
     }
     text += span.text;
   }

@@ -12,10 +12,6 @@ function rubyBaseRuneMayReceiveReading(value) {
   return RUBY_HAN_RE.test(value) && value !== "〇" && !RUBY_NUMBER_RE.test(value);
 }
 
-function rubyTextContainsReadableHan(value) {
-  return Array.from(value).some(rubyBaseRuneMayReceiveReading);
-}
-
 function rubyReadingBaseIsHan(value) {
   const runes = Array.from(value);
   return runes.length > 0 && runes.every(rubyBaseRuneMayReceiveReading);
@@ -263,12 +259,8 @@ function validateRenditionSide(side, path, expectedKind, errors) {
       } else {
         for (let rubyIndex = 0; rubyIndex < segment.ruby.length; rubyIndex++) {
           const span = segment.ruby[rubyIndex];
-          if (span.reading !== undefined) {
-            if (!rubyReadingBaseIsHan(span.text) || !rubyReadingIsKana(span.reading)) {
-              errors.push(`${segmentPath}.ruby[${rubyIndex}] 仅允许纯非数字 Han 基底使用假名注音`);
-            }
-          } else if (rubyTextContainsReadableHan(span.text)) {
-            errors.push(`${segmentPath}.ruby[${rubyIndex}] 缺少 Han 注音`);
+          if (span.reading !== undefined && (!rubyReadingBaseIsHan(span.text) || !rubyReadingIsKana(span.reading))) {
+            errors.push(`${segmentPath}.ruby[${rubyIndex}] 仅允许纯非数字 Han 基底使用假名注音`);
           }
         }
         if (segment.ruby.map((span) => span.text).join("") !== segment.text) {

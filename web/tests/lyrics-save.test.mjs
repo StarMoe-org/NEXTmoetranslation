@@ -321,7 +321,6 @@ test("strict legacy response validation keeps the 256-span ruby boundary", () =>
 
 test("strict REM ruby validation enforces Han/kana rules and keeps U+3007 plain", () => {
   const cases = [
-    (response) => { response.renditions[0].full.lines[0].segments[0].ruby = [{ text: "曲" }]; },
     (response) => {
       const line = response.renditions[0].full.lines[0];
       line.japanese = "〇";
@@ -351,6 +350,36 @@ test("strict REM ruby validation enforces Han/kana rules and keeps U+3007 plain"
   assert.equal(validateSongLyricsMutationResponse(plain, {
     operation: "publish", musicId: 765, revision: 2,
   }).ok, true);
+});
+
+test("strict ruby validation accepts unannotated Han and still rejects malformed readings", () => {
+  const request = validRenditionDocument(1);
+  const response = validRenditionDocument(2);
+  for (const document of [request, response]) {
+    for (const [sideName, performerId] of [["full", "sekai-full"], ["game", "sekai-game"]]) {
+      const line = document.renditions[0][sideName].lines[0];
+      line.japanese = "初音";
+      line.segments = [{ text: "初音", performerIds: [performerId], ruby: [{ text: "初音" }] }];
+    }
+  }
+  const remResult = validateSongLyricsMutationResponse(response, {
+    operation: "save", musicId: 765, revision: 1, document: request,
+  });
+  assert.equal(remResult.ok, true, remResult.details?.join("\n"));
+
+  const legacy = { ...validDocument(2, "published"), publishedRevision: 2 };
+  legacy.lines[0].segments[0].ruby = [{ text: "歌詞" }];
+  const legacyResult = validateSongLyricsMutationResponse(legacy, {
+    operation: "publish", musicId: 10, revision: 2,
+  });
+  assert.equal(legacyResult.ok, true, legacyResult.details?.join("\n"));
+
+  legacy.lines[0].segments[0].ruby = [{ text: "歌詞", reading: "kashi" }];
+  const rejected = validateSongLyricsMutationResponse(legacy, {
+    operation: "publish", musicId: 10, revision: 2,
+  });
+  assert.equal(rejected.ok, false);
+  assert.ok(rejected.details.includes("lines[0].segments[0].ruby[0].reading must contain kana only"));
 });
 
 test("strict save response validation accepts only a correlated SongLyrics document", () => {
