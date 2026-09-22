@@ -9,6 +9,12 @@ SET revision = (
 )
 WHERE document_id IN (
   SELECT document_id FROM song_lyrics_source_documents WHERE music_id = 682
+)
+-- A mirror row without authoritative edition state keeps its own revision;
+-- the subquery above would otherwise write NULL into a NOT NULL column.
+AND EXISTS (
+  SELECT 1 FROM song_lyrics_translation_edition_state
+  WHERE song_lyrics_translation_edition_state.document_id = song_lyrics_rendition_localizations.document_id
 );
 `
 
