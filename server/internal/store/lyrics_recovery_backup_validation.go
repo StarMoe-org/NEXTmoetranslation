@@ -61,8 +61,12 @@ func validateRestoredLyricsRecoveryProvenance(
 			return fmt.Errorf("lyrics recovery batch %s is duplicated", record.BatchSHA256)
 		}
 		var coverage lyricsrootmanifest.Coverage
+		// The batch is historical: coverage is checked against the catalog size
+		// the batch itself recorded, never against the catalog as it stands
+		// today. Item validation below still requires every batch music ID to
+		// exist in the exported catalog.
 		if err := decodeCanonicalBackupJSON(record.CoverageJSON, &coverage); err != nil ||
-			coverage.Total != record.CatalogCount || record.CatalogCount != len(lyrics.Music) ||
+			coverage.Total != record.CatalogCount ||
 			coverage.UniqueEvidenceCount != record.EvidenceCount ||
 			coverage.UniqueAcquisitionCount != record.EvidenceCount ||
 			(record.EvidenceCount == 0) != (record.ShardCount == 0 && record.RawByteCount == 0 && record.EncodedByteCount == 0) ||
