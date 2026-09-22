@@ -4,10 +4,10 @@ set -eu
 expected_index=9a735e96f856da9b94e1362883df13616a8b6e3cd33afce5d5e1468b4784b475
 expected_detail=224a7d34e1d4d551bca21cbe70374f504a781edef90eb644d8d4ec9e5fca064c
 expected_db=2eb61967a5f5b96a4961c0258984d6d5bb2f7b813379872d9d50a427704b8877
-expected_public_lyrics_bundle=d22a91f8c9e719b2995c34778074a9e2cc04c6752c589a46f7de91972a83351b
+expected_public_lyrics_bundle=962d1f7931d915f325d703f26b1ce02d30c353b753f9f684163ea1e78d203453
 expected_editor_lyrics_seed=a8a2a7c841d0d73e448fd69f9adb236965b3b01a89d2ba58dcc921925e6ea479
-expected_public_lyrics_inventory=b3004480563dd0eb4580d5c9b8620a62e007755b267b3983785bdfe302b67b1b
-expected_public_lyrics_tar=ad1029f7fef969f41b9986a426a24c6c21535c21236f14e47b5d75519a153c33
+expected_public_lyrics_inventory=738e0dcadae6a81d46e000cdde8a080f9e43f8a7ebeb9f8128efab45da23f7a6
+expected_public_lyrics_tar=84ad887f9eb4dfdaa1dc699c82beada39487b4a53b311a6022716d06928bbaca
 historical_700_public_lyrics_bundle=6a987c5ed796b4609e4bcbc5c67126196eb660258ad19bea672408cb42f9136b
 historical_700_public_lyrics_inventory=604aae68e3cd6824a8960a3cbbec5e015af48e5fcdd9895f785ff61e019d1f4b
 public_lyrics_bundle=server/internal/publiclyricsbundle/public-v3.tar.gz
@@ -61,15 +61,15 @@ import tarfile
 
 bundle, expected_inventory, expected_tar = sys.argv[1:]
 raw_tar = gzip.decompress(open(bundle, "rb").read())
-if len(raw_tar) != 22528000 or hashlib.sha256(raw_tar).hexdigest() != expected_tar:
+if len(raw_tar) != 22568960 or hashlib.sha256(raw_tar).hexdigest() != expected_tar:
     raise SystemExit("public lyrics decompressed tar identity differs")
 detail = re.compile(r"music_([1-9][0-9]*)\.json\Z")
 with tarfile.open(fileobj=io.BytesIO(raw_tar), mode="r:") as archive:
     members = archive.getmembers()
     bodies = {member.name: archive.extractfile(member).read() for member in members}
-if len(members) != 693:
-    raise SystemExit(f"public lyrics bundle member count={len(members)}, expected=693")
-if sum(member.size for member in members) != 21990969:
+if len(members) != 695:
+    raise SystemExit(f"public lyrics bundle member count={len(members)}, expected=695")
+if sum(member.size for member in members) != 22027427:
     raise SystemExit("public lyrics bundle runtime byte count differs")
 names = [member.name for member in members]
 if len(names) != len(set(names)) or names.count("index.json") != 1:
@@ -90,7 +90,7 @@ if any(
 ):
     raise SystemExit("public lyrics bundle contains noncanonical metadata")
 detail_ids = [int(match.group(1)) for name in names if (match := detail.fullmatch(name))]
-if len(detail_ids) != 692 or len(detail_ids) != len(set(detail_ids)):
+if len(detail_ids) != 694 or len(detail_ids) != len(set(detail_ids)):
     raise SystemExit("public lyrics bundle detail inventory differs")
 if set(names) != {"index.json", *(f"music_{music_id}.json" for music_id in detail_ids)}:
     raise SystemExit("public lyrics bundle contains a nested, private, or unexpected artifact")
