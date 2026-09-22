@@ -38,6 +38,7 @@ import {
   LyricsCollaboration,
   type LyricsCollaborationPeer,
   type LyricsCollaborationStatus,
+  canonicalLyricsJSON,
 } from "@/lib/yjs-lyrics";
 
 function databaseAvailabilityDescription(state: NonNullable<CatalogMusicItem["lyricsAvailabilityState"]>): string {
@@ -316,7 +317,7 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
     "ja-JP": null, "zh-CN": null, "en-US": null,
   });
 
-  const dirty = lyrics != null && JSON.stringify(lyrics) !== baseline;
+  const dirty = lyrics != null && canonicalLyricsJSON(lyrics) !== baseline;
   const lyricsRef = useRef<SongLyricsDocument | null>(lyrics);
   const baselineRef = useRef(baseline);
   const activeTranslationEditionKeyRef = useRef(activeTranslationEditionKey);
@@ -501,7 +502,7 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
           const authoritative = collaborationAuthoritativeRef.current;
           if (authoritative) {
             const editable = editableLyricsDocument(authoritative);
-            const serialized = JSON.stringify(editable);
+            const serialized = canonicalLyricsJSON(editable);
             collaborationInitialBaselineRef.current = editable.revision;
             collaborationDocumentJSONRef.current = serialized;
             documentGenerationRef.current++;
@@ -522,7 +523,7 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
         }
         if (!snapshot.synced || !snapshot.document) return;
         const editable = editableLyricsDocument(snapshot.document);
-        const serialized = JSON.stringify(editable);
+        const serialized = canonicalLyricsJSON(editable);
         if (collaborationInitialBaselineRef.current === null) {
           collaborationInitialBaselineRef.current = editable.revision;
           setBaseline(serialized);
@@ -577,7 +578,7 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
       : "";
     documentGenerationRef.current++;
     setLyrics(editable);
-    setBaseline(JSON.stringify(editable));
+    setBaseline(canonicalLyricsJSON(editable));
     setActiveTranslationEditionKey(editionKey);
     setActiveRenditionKey(retainedTarget.renditionKey);
     setActiveVersion(retainedTarget.version === "game" ? "game" : "full");
@@ -779,7 +780,7 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
     const next = { ...lyrics, ...patch } as SongLyricsDocument;
     documentGenerationRef.current++;
     if (!localSourceImportDraft && collaborationRef.current?.updateDocument(next)) {
-      collaborationDocumentJSONRef.current = JSON.stringify(next);
+      collaborationDocumentJSONRef.current = canonicalLyricsJSON(next);
     } else {
       setLyrics(next);
     }
@@ -1137,7 +1138,7 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
         collaboration?.checkpointCommitted(checkpointBoundary);
         collaboration?.updateAuthoritativeEnvelope(persisted);
       }
-      setBaseline(JSON.stringify(persisted));
+      setBaseline(canonicalLyricsJSON(persisted));
       if (isRenditionLyricsDocument(persisted)) {
         const persistedEditionDocument = persisted as RenditionLyricsDocument;
         setActiveTranslationEditionKey(persistedEditionDocument.translationEditionKey);
@@ -1339,9 +1340,9 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
   useImperativeHandle(ref, () => ({
     save,
     discard,
-    isDirty: () => lyricsRef.current != null && JSON.stringify(lyricsRef.current) !== baselineRef.current,
+    isDirty: () => lyricsRef.current != null && canonicalLyricsJSON(lyricsRef.current) !== baselineRef.current,
     snapshot: () => ({
-      dirty: lyricsRef.current != null && JSON.stringify(lyricsRef.current) !== baselineRef.current,
+      dirty: lyricsRef.current != null && canonicalLyricsJSON(lyricsRef.current) !== baselineRef.current,
       document: lyricsRef.current ? JSON.parse(JSON.stringify(lyricsRef.current)) as SongLyricsDocument : null,
       generation: documentGenerationRef.current,
       editionKey: activeTranslationEditionKeyRef.current,
@@ -1472,7 +1473,7 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
       const result = preserveReadOnlyLyricsSourceFacts(response, document);
       documentGenerationRef.current++;
       collaborationRef.current?.updateAuthoritativeEnvelope(result);
-      setBaseline(JSON.stringify(result));
+      setBaseline(canonicalLyricsJSON(result));
       void loadCatalog(query);
       show(nextPublished ? "数据库发布已提交，正在核对公共文件" : "数据库撤回已提交，正在核对公共文件", "ok");
       void waitForProjection(previousProjectionGeneration, nextPublished, musicID);
@@ -1608,7 +1609,7 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
       if (!document) return;
       const currentSharedDocument = collaborationRef.current?.getSnapshot().document;
       if (collaborationRef.current?.undoManager.canUndo() ||
-          (currentSharedDocument && JSON.stringify(editableLyricsDocument(currentSharedDocument)) !== JSON.stringify(document))) {
+          (currentSharedDocument && canonicalLyricsJSON(editableLyricsDocument(currentSharedDocument)) !== canonicalLyricsJSON(document))) {
         show("保存期间又产生了新修改，请再次保存后再继续", "err");
         return;
       }
@@ -2057,7 +2058,7 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
             if (!confirmImportRecovery) return;
             documentGenerationRef.current++;
             setLyrics(confirmImportRecovery);
-            setBaseline(JSON.stringify(confirmImportRecovery));
+            setBaseline(canonicalLyricsJSON(confirmImportRecovery));
             setConfirmImportRecovery(null);
             setPendingTransition(null);
             setError(null);

@@ -457,3 +457,35 @@ test("concurrent lines Y.Array inserts preserve stable IDs and converge", () => 
     "line-right": "右",
   });
 });
+
+test("a materialized shared document compares clean against the server response regardless of key insertion order", () => {
+  const lyrics = sampleLyrics();
+  const reverseKeys = value => Object.fromEntries(Object.entries(value).reverse());
+  const seededByPeer = reverseKeys({ ...lyrics, lines: lyrics.lines.map(line => reverseKeys(line)) });
+  const doc = new Y.Doc();
+  const root = doc.getMap(collaboration.LYRICS_YJS_ROOT);
+  collaboration.syncLyricsDocument(root, seededByPeer);
+
+  const materialized = collaboration.materializeLyricsDocument(root);
+  assert.deepEqual(materialized, lyrics);
+  assert.notEqual(JSON.stringify(materialized), JSON.stringify(lyrics));
+  assert.equal(collaboration.canonicalLyricsJSON(materialized), collaboration.canonicalLyricsJSON(lyrics));
+
+  const changed = structuredClone(lyrics);
+  changed.lines[0]["zh-CN"] = "改动";
+  assert.notEqual(collaboration.canonicalLyricsJSON(materialized), collaboration.canonicalLyricsJSON(changed));
+  const reordered = structuredClone(lyrics);
+  reordered.lines[0].segments[0].performerIds = [2, 1];
+  assert.notEqual(collaboration.canonicalLyricsJSON(lyrics), collaboration.canonicalLyricsJSON(reordered));
+});
+
+test("LyricsEditor dirty tracking never compares raw JSON.stringify output against the baseline", async () => {
+  const editor = await readFile(new URL("../src/components/LyricsEditor.tsx", import.meta.url), "utf8");
+  assert.match(editor, /const dirty = lyrics != null && canonicalLyricsJSON\(lyrics\) !== baseline;/);
+  assert.match(editor, /setBaseline\(canonicalLyricsJSON\(persisted\)\)/);
+  assert.match(editor, /canonicalLyricsJSON\(editableLyricsDocument\(currentSharedDocument\)\) !== canonicalLyricsJSON\(document\)/);
+  assert.doesNotMatch(editor, /JSON\.stringify\([^\n]*\) !== baseline/);
+  assert.doesNotMatch(editor, /setBaseline\(JSON\.stringify/);
+  assert.doesNotMatch(editor, /const serialized = JSON\.stringify/);
+  assert.doesNotMatch(editor, /collaborationDocumentJSONRef\.current = JSON\.stringify/);
+});

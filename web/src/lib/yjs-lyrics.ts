@@ -453,6 +453,20 @@ function syncSharedValue(current: unknown, next: unknown, key: string | null, pa
   }
 }
 
+// Shared Y.Map keys materialize in insertion order, which follows whichever peer
+// (or the server seed) first wrote each key, so document equality must ignore it.
+export function canonicalLyricsJSON(value: unknown): string {
+  return JSON.stringify(canonicalValue(value));
+}
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (!isRecord(value)) return value;
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) sorted[key] = canonicalValue(value[key]);
+  return sorted;
+}
+
 export function materializeLyricsDocument(root: Y.Map<unknown>): SongLyricsDocument | null {
   if (root.get("schemaVersion") !== LYRICS_YJS_SCHEMA_VERSION) return null;
   let result: unknown;
