@@ -28,6 +28,7 @@ import (
 	"moesekai/server/internal/lyricsimportreceipt"
 	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/lyricsstaging"
+	"moesekai/server/internal/offlineimport"
 	"moesekai/server/internal/singleinstance"
 	"moesekai/server/internal/store"
 
@@ -440,9 +441,9 @@ func executeWithHooks(ctx context.Context, opts options, hooks executionHooks) (
 	// The commit hook is the protocol boundary: it records the exact receipt in
 	// the importing transaction, then publishes and fsyncs the immutable external
 	// copy. Store invokes SQLite Commit as the next database operation.
-	results, commitAttempted, importErr := store.New(database).ImportStagedLyricsManifestWithEvidenceReceiptAndCommitHook(
-		ctx, manifest, evidenceReceipt, opts.Operator,
-		func(tx *sql.Tx, results []store.StagedLyricsImportItem) error {
+	results, commitAttempted, importErr := offlineimport.ImportStagedLyricsManifestWithEvidenceReceiptAndCommitHook(
+		ctx, store.New(database), manifest, evidenceReceipt, opts.Operator,
+		func(tx *sql.Tx, results []offlineimport.StagedLyricsImportItem) error {
 			if hooks.beforeCommitValidation != nil {
 				if err := hooks.beforeCommitValidation(); err != nil {
 					return err
@@ -595,7 +596,7 @@ func buildImportReceipt(
 	manifest lyricsstaging.Manifest,
 	databaseIdentity sqliteSnapshotIdentity,
 	backupIdentity sqliteSnapshotIdentity,
-	results []store.StagedLyricsImportItem,
+	results []offlineimport.StagedLyricsImportItem,
 ) (importReceipt, error) {
 	items := make([]importReceiptItem, len(results))
 	stagedByMusicID := make(map[int]lyricsstaging.Draft, len(manifest.Items))

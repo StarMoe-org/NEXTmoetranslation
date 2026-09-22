@@ -365,7 +365,7 @@ func validateRestoredLyricsRecoveryProvenance(
 	lastContributionByItem := make(map[recoveryBackupItemIdentity]string)
 	for identity, item := range items {
 		if source, exists := sourceDocuments[identity]; exists {
-			expectedComponents[identity] = stagedLyricsComponentRefs(source)
+			expectedComponents[identity] = LyricsSourceComponentRefs(source)
 			continue
 		}
 		if item.State == string(lyricsrootmanifest.CoverageGameOnly) {

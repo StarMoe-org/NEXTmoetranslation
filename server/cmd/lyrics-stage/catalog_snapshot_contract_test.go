@@ -21,6 +21,7 @@ import (
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
+	"moesekai/server/internal/offlineimport"
 	"moesekai/server/internal/store"
 )
 
@@ -982,14 +983,14 @@ func TestMixedClassificationStagePublishesManifestReachableReceiptAndRealImportA
 		t.Fatal(err)
 	}
 	defer importDatabase.Close()
-	results, err := store.New(importDatabase).ImportStagedLyricsManifestWithEvidenceReceipt(
-		context.Background(), publishedManifest, publishedReceipt, "offline-operator",
+	results, err := offlineimport.ImportStagedLyricsManifestWithEvidenceReceipt(
+		context.Background(), store.New(importDatabase), publishedManifest, publishedReceipt, "offline-operator",
 	)
 	if err != nil || len(results) != 1 || !results[0].Changed || results[0].MusicID != report.UniqueComplete[0].MusicID {
 		t.Fatalf("real mixed staged import results=%+v err=%v", results, err)
 	}
-	if _, err := store.New(importDatabase).ImportStagedLyricsManifestWithEvidenceReceipt(
-		context.Background(), publishedManifest, *report.EvidenceReceipt, "offline-operator",
+	if _, err := offlineimport.ImportStagedLyricsManifestWithEvidenceReceipt(
+		context.Background(), store.New(importDatabase), publishedManifest, *report.EvidenceReceipt, "offline-operator",
 	); err == nil || !strings.Contains(err.Error(), "orphan evidence") {
 		t.Fatalf("real import accepted full-report orphan evidence: %v", err)
 	}

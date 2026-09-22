@@ -1,10 +1,13 @@
-package store
+package offlineimport
 
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"moesekai/server/internal/db"
 
 	"moesekai/server/internal/lyricsrecoveryimport"
 	"moesekai/server/internal/lyricsrootmanifest"
@@ -72,8 +75,8 @@ func TestLyricsImportRuntimeSchemasAllowReviewedV27ThroughV33Contiguously(t *tes
 	for validatorName, validate := range validators {
 		for _, test := range cases {
 			t.Run(validatorName+"/"+test.name, func(t *testing.T) {
-				s := setupLyricsStore(t)
-				tx, err := s.db.BeginTx(context.Background(), nil)
+				database := openImportTestDatabase(t)
+				tx, err := database.BeginTx(context.Background(), nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -166,8 +169,8 @@ func TestPeerTranslationRuntimeSchemaRequiresExactV29OnlyWhenPresent(t *testing.
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			s := setupLyricsStore(t)
-			tx, err := s.db.BeginTx(context.Background(), nil)
+			database := openImportTestDatabase(t)
+			tx, err := database.BeginTx(context.Background(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -293,4 +296,14 @@ func TestRecoveryImportCatalogTargetMatchesRejectsCrossStateOrIdentityDrift(t *t
 			}
 		})
 	}
+}
+
+func openImportTestDatabase(t *testing.T) *db.DB {
+	t.Helper()
+	database, err := db.Open(filepath.Join(t.TempDir(), "offline-import.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	return database
 }

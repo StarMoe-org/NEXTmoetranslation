@@ -1,4 +1,4 @@
-package store
+package offlineimport
 
 import (
 	"bytes"
@@ -10,17 +10,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"moesekai/server/internal/db"
 	"moesekai/server/internal/legacy"
-	"moesekai/server/internal/lyricscompose"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
+	"moesekai/server/internal/store"
 )
 
 var (
@@ -54,33 +53,35 @@ type StagedLyricsImportCommitHook func(*sql.Tx, []StagedLyricsImportItem) error
 // ownership of the database; this method additionally serializes every affected
 // lyrics stripe and revalidates the complete catalog generation in one SQLite
 // transaction. It never publishes a draft.
-func (s *Store) ImportStagedLyricsManifest(ctx context.Context, manifest lyricsstaging.Manifest, actor string) ([]StagedLyricsImportItem, error) {
-	results, _, err := s.ImportStagedLyricsManifestWithCommitHook(ctx, manifest, actor, nil)
+func ImportStagedLyricsManifest(ctx context.Context, lyricsStore *store.Store, manifest lyricsstaging.Manifest, actor string) ([]StagedLyricsImportItem, error) {
+	results, _, err := ImportStagedLyricsManifestWithCommitHook(ctx, lyricsStore, manifest, actor, nil)
 	return results, err
 }
 
 // ImportStagedLyricsManifestWithCommitHook is the receipt-aware variant used by
 // the offline importer. commitAttempted is true exactly when the hook completed
 // and SQLite Commit was invoked, including an ambiguous Commit error.
-func (s *Store) ImportStagedLyricsManifestWithCommitHook(
+func ImportStagedLyricsManifestWithCommitHook(
 	ctx context.Context,
+	lyricsStore *store.Store,
 	manifest lyricsstaging.Manifest,
 	actor string,
 	beforeCommit StagedLyricsImportCommitHook,
 ) ([]StagedLyricsImportItem, bool, error) {
-	return s.importStagedLyricsManifest(ctx, manifest, nil, actor, beforeCommit)
+	return importStagedLyricsManifest(ctx, lyricsStore, manifest, nil, actor, beforeCommit)
 }
 
 // ImportStagedLyricsManifestWithEvidenceReceipt is the strict private offline
 // handoff. Concrete evidence remains outside the staged manifest, but is
 // inserted-or-verified and linked atomically with every imported artifact.
-func (s *Store) ImportStagedLyricsManifestWithEvidenceReceipt(
+func ImportStagedLyricsManifestWithEvidenceReceipt(
 	ctx context.Context,
+	lyricsStore *store.Store,
 	manifest lyricsstaging.Manifest,
 	receipt lyricsstaging.PrivateEvidenceReceipt,
 	actor string,
 ) ([]StagedLyricsImportItem, error) {
-	results, _, err := s.ImportStagedLyricsManifestWithEvidenceReceiptAndCommitHook(ctx, manifest, receipt, actor, nil)
+	results, _, err := ImportStagedLyricsManifestWithEvidenceReceiptAndCommitHook(ctx, lyricsStore, manifest, receipt, actor, nil)
 	return results, err
 }
 
@@ -88,18 +89,20 @@ func (s *Store) ImportStagedLyricsManifestWithEvidenceReceipt(
 // strict concrete-evidence handoff with the durable pre-commit receipt
 // boundary. Evidence parents and artifact links are inserted or verified in
 // the same transaction before the hook runs; Commit is the next database call.
-func (s *Store) ImportStagedLyricsManifestWithEvidenceReceiptAndCommitHook(
+func ImportStagedLyricsManifestWithEvidenceReceiptAndCommitHook(
 	ctx context.Context,
+	lyricsStore *store.Store,
 	manifest lyricsstaging.Manifest,
 	receipt lyricsstaging.PrivateEvidenceReceipt,
 	actor string,
 	beforeCommit StagedLyricsImportCommitHook,
 ) ([]StagedLyricsImportItem, bool, error) {
-	return s.importStagedLyricsManifest(ctx, manifest, &receipt, actor, beforeCommit)
+	return importStagedLyricsManifest(ctx, lyricsStore, manifest, &receipt, actor, beforeCommit)
 }
 
-func (s *Store) importStagedLyricsManifest(
+func importStagedLyricsManifest(
 	ctx context.Context,
+	lyricsStore *store.Store,
 	manifest lyricsstaging.Manifest,
 	receipt *lyricsstaging.PrivateEvidenceReceipt,
 	actor string,
@@ -109,8 +112,8 @@ func (s *Store) importStagedLyricsManifest(
 		return nil, false, errors.New("staged lyrics import requires context")
 	}
 	actor = strings.TrimSpace(actor)
-	if actor == "" || len(actor) > maxLyricsReviewActorBytes || !utf8.ValidString(actor) {
-		return nil, false, ErrLyricsSourceInvalidRequest
+	if actor == "" || len(actor) > store.MaxLyricsImportActorBytes || !utf8.ValidString(actor) {
+		return nil, false, store.ErrLyricsSourceInvalidRequest
 	}
 	if err := lyricsstaging.ValidateManifest(manifest); err != nil {
 		return nil, false, err
@@ -125,14 +128,12 @@ func (s *Store) importStagedLyricsManifest(
 		}
 	}
 
-	unlock := s.lockStagedLyricsManifest(manifest)
-	defer unlock()
-
-	tx, err := s.db.BeginTx(ctx, nil)
+	session, err := lyricsStore.BeginOfflineLyricsImport(ctx, stagedManifestMusicIDs(manifest))
 	if err != nil {
 		return nil, false, err
 	}
-	defer tx.Rollback()
+	defer session.Close()
+	tx := session.Tx()
 	if err := validateStagedImportRuntimeSchema(ctx, tx); err != nil {
 		return nil, false, err
 	}
@@ -140,7 +141,7 @@ func (s *Store) importStagedLyricsManifest(
 		return nil, false, err
 	}
 	if receipt != nil {
-		if err := insertOrVerifyLyricsIndexEvidenceCollectionTx(ctx, tx, receipt.IndexEvidence, time.Now().UTC()); err != nil {
+		if err := store.InsertOrVerifyLyricsIndexEvidenceCollectionTx(ctx, tx, receipt.IndexEvidence, time.Now().UTC()); err != nil {
 			return nil, false, err
 		}
 	}
@@ -169,7 +170,7 @@ func (s *Store) importStagedLyricsManifest(
 		return nil, false, fmt.Errorf("%w: current catalog classification is incomplete", ErrLyricsStagedManifestDrift)
 	}
 
-	performerAliases, err := loadCatalogPerformerAliases(tx)
+	performerAliases, err := store.LoadCatalogPerformerAliases(tx)
 	if err != nil {
 		return nil, false, err
 	}
@@ -188,18 +189,18 @@ func (s *Store) importStagedLyricsManifest(
 			return nil, false, fmt.Errorf("%w: music %d catalog target or associations changed", ErrLyricsStagedManifestDrift, staged.MusicID)
 		}
 		if staged.Document.SchemaVersion == model.LyricsSourceDocumentSchemaVersionV3 {
-			if err := validateStoreLyricsSourceDocument(staged.Document); err != nil {
+			if err := store.ValidatePersistedLyricsSourceDocument(staged.Document); err != nil {
 				return nil, false, fmt.Errorf("%w: music %d source v3: %v", ErrLyricsStagedManifestRebuildRequired, staged.MusicID, err)
 			}
 			// Source-v3 documents are always owned by the plural rendition
 			// editor. A legacy SongLyrics row would create a second mutable
 			// translation store, so an existing one is a rebuild-required
 			// conflict rather than something to reconcile implicitly.
-			_, loadErr := s.loadLyrics(tx, staged.MusicID)
+			_, loadErr := store.LoadLyricsTx(tx, staged.MusicID)
 			if loadErr == nil {
 				return nil, false, fmt.Errorf("%w: music %d has a legacy editable row for source v3", ErrLyricsStagedManifestRebuildRequired, staged.MusicID)
 			}
-			if !errors.Is(loadErr, ErrLyricsNotFound) {
+			if !errors.Is(loadErr, store.ErrLyricsNotFound) {
 				return nil, false, loadErr
 			}
 			exists, matched, provenanceErr := stagedLyricsSourceDocumentMatches(ctx, tx, staged, receipt != nil)
@@ -210,9 +211,9 @@ func (s *Store) importStagedLyricsManifest(
 				return nil, false, fmt.Errorf("%w: music %d immutable source-v3 graph or localization drifted", ErrLyricsStagedManifestRebuildRequired, staged.MusicID)
 			}
 			if matched {
-				results[index] = StagedLyricsImportItem{MusicID: staged.MusicID, SourceDocument: cloneSourceDocumentPtr(staged.Document)}
+				results[index] = StagedLyricsImportItem{MusicID: staged.MusicID, SourceDocument: store.CloneLyricsSourceDocument(staged.Document)}
 			} else {
-				results[index] = StagedLyricsImportItem{MusicID: staged.MusicID, Changed: true, SourceDocument: cloneSourceDocumentPtr(staged.Document)}
+				results[index] = StagedLyricsImportItem{MusicID: staged.MusicID, Changed: true, SourceDocument: store.CloneLyricsSourceDocument(staged.Document)}
 			}
 			continue
 		}
@@ -220,19 +221,15 @@ func (s *Store) importStagedLyricsManifest(
 		if err != nil {
 			return nil, false, err
 		}
-		if _, err := validateLyricsProvenance(draft); err != nil {
+		if err := store.ValidateImportedLyrics(draft, performerAliases); err != nil {
 			return nil, false, err
-		}
-		code, details, _ := validateLyrics(draft, performerAliases.validIDs, false)
-		if code != "" {
-			return nil, false, &LyricsContractError{Code: code, Details: details}
 		}
 		requested[index] = draft
 
-		current, loadErr := s.loadLyrics(tx, staged.MusicID)
+		current, loadErr := store.LoadLyricsTx(tx, staged.MusicID)
 		switch {
 		case loadErr == nil:
-			if !sameLyricsContent(draft, current.lyrics) {
+			if !store.SameLyricsContent(draft, current) {
 				return nil, false, fmt.Errorf("%w: music %d", ErrLyricsStagedManifestConflict, staged.MusicID)
 			}
 			_, matched, provenanceErr := stagedLyricsSourceDocumentMatches(ctx, tx, staged, receipt != nil)
@@ -242,8 +239,8 @@ func (s *Store) importStagedLyricsManifest(
 			if !matched {
 				return nil, false, fmt.Errorf("%w: music %d has editable bytes without the required immutable source document", ErrLyricsStagedManifestRebuildRequired, staged.MusicID)
 			}
-			results[index] = StagedLyricsImportItem{MusicID: staged.MusicID, Lyrics: current.lyrics}
-		case errors.Is(loadErr, ErrLyricsNotFound):
+			results[index] = StagedLyricsImportItem{MusicID: staged.MusicID, Lyrics: current}
+		case errors.Is(loadErr, store.ErrLyricsNotFound):
 			results[index] = StagedLyricsImportItem{MusicID: staged.MusicID, Changed: true}
 		default:
 			return nil, false, loadErr
@@ -274,11 +271,11 @@ func (s *Store) importStagedLyricsManifest(
 			return nil, false, err
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := session.Commit(); err != nil {
 		return nil, true, err
 	}
 	if changed {
-		s.NotifyChange()
+		session.NotifyChange()
 	}
 	return results, true, nil
 }
@@ -387,43 +384,8 @@ func decodeStagedCatalogJSON(body []byte, target any) error {
 	return nil
 }
 
-func mapDeclaredLyricsSourcePerformerIDs(
-	sourceIDs []string,
-	aliases map[string]int,
-	declaredUnmapped map[string]bool,
-) ([]int, error) {
-	seen := map[int]bool{}
-	result := make([]int, 0, len(sourceIDs))
-	for _, sourceID := range sourceIDs {
-		normalized := normalizeLyricsSourcePerformerAlias(sourceID)
-		if normalized == "" || normalized == "chorus" || normalized == "ensemble" ||
-			normalized == "all" || normalized == "everyone" {
-			continue
-		}
-		performerID := aliases[normalized]
-		if performerID <= 0 {
-			// Fixed Wiki revisions can name human or external singers that do
-			// not exist in the runtime's closed catalog_performers table. The
-			// staging manifest preserves those source labels for auditability;
-			// projection may omit them only when the same normalized label is
-			// explicitly declared in that immutable source legend. The caller
-			// then uses the selected catalog-vocal fallback. Undeclared labels
-			// still fail closed as possible manifest corruption.
-			if declaredUnmapped[normalized] {
-				continue
-			}
-			return nil, ErrLyricsSourcePerformerMapping
-		}
-		if !seen[performerID] {
-			seen[performerID] = true
-			result = append(result, performerID)
-		}
-	}
-	return result, nil
-}
-
 func stagedManifestLyricsDraft(staged lyricsstaging.Draft, vocals []model.CatalogVocalSignal,
-	catalogPerformers catalogPerformerAliases,
+	catalogPerformers store.CatalogPerformerAliases,
 ) (model.SongLyrics, error) {
 	fullIdentity, err := stagedFullTextIdentity(staged)
 	if err != nil {
@@ -452,7 +414,7 @@ func stagedManifestLyricsDraft(staged lyricsstaging.Draft, vocals []model.Catalo
 	if unassignedFull && len(staged.Document.Full.Performers) != 0 {
 		return model.SongLyrics{}, fmt.Errorf("%w: music %d unsegmented Full declares performers", ErrLyricsStagedManifestRebuildRequired, staged.MusicID)
 	}
-	aliases, declaredUnmapped := resolveLyricsSourcePerformerAliases(catalogPerformers, staged.Document.Full.Performers)
+	aliases, declaredUnmapped := catalogPerformers.Resolve(staged.Document.Full.Performers)
 	lines := make([]model.LyricLine, len(sourceLines))
 	for lineIndex, sourceLine := range sourceLines {
 		lineFallback := []int{}
@@ -462,7 +424,7 @@ func stagedManifestLyricsDraft(staged lyricsstaging.Draft, vocals []model.Catalo
 				return model.SongLyrics{}, fmt.Errorf("%w: music %d line %d violates unassigned Full segmentation", ErrLyricsStagedManifestRebuildRequired, staged.MusicID, lineIndex+1)
 			}
 		} else {
-			lineFallback, err = mapDeclaredLyricsSourcePerformerIDs(
+			lineFallback, err = store.MapDeclaredLyricsSourcePerformerIDs(
 				sourceLine.TrailingPerformerIDs,
 				aliases,
 				declaredUnmapped,
@@ -476,7 +438,7 @@ func stagedManifestLyricsDraft(staged lyricsstaging.Draft, vocals []model.Catalo
 		for segmentIndex, sourceSegment := range sourceLine.Segments {
 			performerIDs := []int{}
 			if !unassignedFull {
-				performerIDs, err = mapDeclaredLyricsSourcePerformerIDs(
+				performerIDs, err = store.MapDeclaredLyricsSourcePerformerIDs(
 					sourceSegment.PerformerIDs,
 					aliases,
 					declaredUnmapped,
@@ -530,7 +492,7 @@ func stagedManifestLyricsDraft(staged lyricsstaging.Draft, vocals []model.Catalo
 }
 
 func insertStagedLyricsDraft(ctx context.Context, tx *sql.Tx, lyrics model.SongLyrics, staged lyricsstaging.Draft, actor, batchSHA256 string, now int64, linkEvidence bool) (model.SongLyrics, error) {
-	sourceHash := lyricsSourceHash(lyrics.Lines)
+	sourceHash := store.LyricsSourceHash(lyrics.Lines)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO song_lyrics
 		(music_id,revision,updated_at,updated_by,attribution,source_note,source_url,license_note,source_hash,
 		 source_page_id,source_revision_id,source_sha1,source_fetched_at,source_fetched_at_rfc3339)
@@ -572,7 +534,7 @@ func insertStagedLyricsDraft(ctx context.Context, tx *sql.Tx, lyrics model.SongL
 	if err := tx.QueryRowContext(ctx, `SELECT document_id FROM song_lyrics_source_documents WHERE music_id=?`, staged.MusicID).Scan(&documentID); err != nil {
 		return model.SongLyrics{}, err
 	}
-	if err := insertLyricsRenditionLocalizationsTx(ctx, tx, documentID, staged.Document, staged.RenditionTranslations, actor, now); err != nil {
+	if err := store.InsertLyricsRenditionLocalizationsTx(ctx, tx, documentID, staged.Document, staged.RenditionTranslations, actor, now); err != nil {
 		return model.SongLyrics{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO audit_log(ts,user,action,detail) VALUES (?,?,'lyrics.import_stage',?)`,
@@ -581,7 +543,7 @@ func insertStagedLyricsDraft(ctx context.Context, tx *sql.Tx, lyrics model.SongL
 	}
 	lyrics.Status = "draft"
 	lyrics.Revision = 1
-	lyrics.UpdatedAt = formatTimestamp(now)
+	lyrics.UpdatedAt = store.FormatLyricsTimestamp(now)
 	return lyrics, nil
 }
 
@@ -596,7 +558,7 @@ func insertStagedV3Draft(ctx context.Context, tx *sql.Tx, staged lyricsstaging.D
 	if err := tx.QueryRowContext(ctx, `SELECT document_id FROM song_lyrics_source_documents WHERE music_id=?`, staged.MusicID).Scan(&documentID); err != nil {
 		return model.SongLyrics{}, err
 	}
-	if err := insertLyricsRenditionLocalizationsTx(ctx, tx, documentID, staged.Document, staged.RenditionTranslations, actor, now); err != nil {
+	if err := store.InsertLyricsRenditionLocalizationsTx(ctx, tx, documentID, staged.Document, staged.RenditionTranslations, actor, now); err != nil {
 		return model.SongLyrics{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO audit_log(ts,user,action,detail) VALUES (?,?,'lyrics.import_stage',?)`,
@@ -625,7 +587,7 @@ func stagedFullTextIdentity(staged lyricsstaging.Draft) (model.LyricsSourceFixed
 }
 
 func insertStagedLyricsSourceDocument(ctx context.Context, tx *sql.Tx, staged lyricsstaging.Draft, batchSHA256 string, now int64, linkEvidence bool) error {
-	if err := validateStoreLyricsSourceDocument(staged.Document); err != nil {
+	if err := store.ValidatePersistedLyricsSourceDocument(staged.Document); err != nil {
 		return fmt.Errorf("%w: music %d: %v", ErrLyricsStagedManifestRebuildRequired, staged.MusicID, err)
 	}
 	documentJSON, err := json.Marshal(staged.Document)
@@ -681,7 +643,7 @@ func insertStagedLyricsSourceDocument(ctx context.Context, tx *sql.Tx, staged ly
 			}
 		}
 	}
-	for component, renditionKey := range stagedLyricsComponentRefs(staged.Document) {
+	for component, renditionKey := range store.LyricsSourceComponentRefs(staged.Document) {
 		contributionDigest := sha256.Sum256([]byte(staged.DocumentSHA256 + "\x00" + component + "\x00" + renditionKey))
 		if _, err := tx.ExecContext(ctx, `INSERT INTO song_lyrics_component_contributions
 			(document_id,component,rendition_key,contribution_sha256) VALUES (?,?,?,?)`, documentID, component,
@@ -749,7 +711,7 @@ func stagedLyricsSourceDocumentMatches(ctx context.Context, tx *sql.Tx, staged l
 			}
 		}
 	}
-	refs := stagedLyricsComponentRefs(staged.Document)
+	refs := store.LyricsSourceComponentRefs(staged.Document)
 	var contributionCount int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM song_lyrics_component_contributions WHERE document_id=?`, documentID).
 		Scan(&contributionCount); err != nil {
@@ -772,15 +734,15 @@ func stagedLyricsSourceDocumentMatches(ctx context.Context, tx *sql.Tx, staged l
 		}
 	}
 	if staged.Document.SchemaVersion == model.LyricsSourceDocumentSchemaVersionV3 {
-		storedTranslations, err := exportLyricsRenditionLocalizationsTx(ctx, tx, documentID, staged.Document)
+		storedTranslations, err := store.ExportLyricsRenditionLocalizationsTx(ctx, tx, documentID, staged.Document)
 		if err != nil {
 			return true, false, err
 		}
-		storedDigest, err := v3TranslationsDigest(storedTranslations)
+		storedDigest, err := store.LyricsRenditionTranslationsDigest(storedTranslations)
 		if err != nil {
 			return true, false, err
 		}
-		expectedDigest, err := v3TranslationsDigest(staged.RenditionTranslations)
+		expectedDigest, err := store.LyricsRenditionTranslationsDigest(staged.RenditionTranslations)
 		if err != nil || storedDigest != expectedDigest {
 			return true, false, err
 		}
@@ -788,112 +750,9 @@ func stagedLyricsSourceDocumentMatches(ctx context.Context, tx *sql.Tx, staged l
 	return true, true, nil
 }
 
-func validateStoreLyricsSourceDocument(document model.LyricsSourceDocument) error {
-	if err := model.ValidateLyricsSourceDocument(document); err != nil {
-		return err
-	}
-	if err := validateStoreV3DocumentGraph(document); err != nil {
-		return err
-	}
-	validateFull := func(full model.LyricsSourceFull) error {
-		if err := lyricscompose.ValidatePersistedPerformerMetadata(full); err != nil {
-			return errors.New("unsafe persisted lyrics performer metadata")
-		}
-		canonicalRubyVersion, err := lyricssource.RecoveryPersistedRubyGeneratorVersion(full.RubyGeneratorVersion)
-		if err != nil || canonicalRubyVersion != full.RubyGeneratorVersion {
-			return errors.New("unsafe persisted lyrics ruby generator metadata")
-		}
-		return nil
-	}
-	if document.SchemaVersion == model.LyricsSourceDocumentSchemaVersionV3 {
-		for _, rendition := range document.Renditions {
-			for _, full := range []*model.LyricsSourceFull{rendition.Full, rendition.Game} {
-				if full != nil {
-					if err := validateFull(*full); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		return nil
-	}
-	if err := validateFull(document.Full); err != nil {
-		return err
-	}
-	for _, alternate := range document.AlternateVocals {
-		for _, full := range []*model.LyricsSourceFull{alternate.Full, alternate.Game} {
-			if full != nil {
-				if err := validateFull(*full); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func stagedLyricsComponentRefs(document model.LyricsSourceDocument) map[string]string {
-	if document.SchemaVersion == model.LyricsSourceDocumentSchemaVersionV3 {
-		refs, err := storeV3DocumentComponentRefs(document)
-		if err != nil {
-			return map[string]string{}
-		}
-		return refs
-	}
-	refs := map[string]string{
-		"full_text":        document.Provenance.FullText.RenditionKey,
-		"version_evidence": document.Provenance.VersionEvidence.RenditionKey,
-	}
-	if document.Provenance.PerformerSegmentation != nil {
-		refs["performer_segmentation"] = document.Provenance.PerformerSegmentation.RenditionKey
-	}
-	if document.Provenance.GameProjection != nil {
-		refs["game_projection"] = document.Provenance.GameProjection.RenditionKey
-	}
-	if document.Provenance.Ruby != nil {
-		refs["ruby"] = document.Provenance.Ruby.RenditionKey
-	}
-	for index, alternate := range document.AlternateVocals {
-		prefix := fmt.Sprintf("alternate_vocal_%06d_", index+1)
-		refs[prefix+"version_evidence"] = alternate.Provenance.VersionEvidence.RenditionKey
-		if alternate.Provenance.FullText != nil {
-			refs[prefix+"full_text"] = alternate.Provenance.FullText.RenditionKey
-		}
-		if alternate.Provenance.GameText != nil {
-			refs[prefix+"game_text"] = alternate.Provenance.GameText.RenditionKey
-		}
-		if alternate.Provenance.GameProjection != nil {
-			refs[prefix+"game_projection"] = alternate.Provenance.GameProjection.RenditionKey
-		}
-	}
-	return refs
-}
-
 func mustParseStagedTimestamp(value string) int64 {
 	parsed, _ := time.Parse(time.RFC3339, value)
 	return parsed.Unix()
-}
-
-func (s *Store) lockStagedLyricsManifest(manifest lyricsstaging.Manifest) func() {
-	seen := make(map[int]struct{}, len(manifest.Items))
-	stripes := make([]int, 0, len(manifest.Items))
-	for _, item := range manifest.Items {
-		stripe := lyricsMutexStripe(item.MusicID)
-		if _, exists := seen[stripe]; exists {
-			continue
-		}
-		seen[stripe] = struct{}{}
-		stripes = append(stripes, stripe)
-	}
-	sort.Ints(stripes)
-	for _, stripe := range stripes {
-		s.lyricsMutexes[stripe].Lock()
-	}
-	return func() {
-		for index := len(stripes) - 1; index >= 0; index-- {
-			s.lyricsMutexes[stripes[index]].Unlock()
-		}
-	}
 }
 
 func sameStagedAssociationIDs(left, right []int) bool {
@@ -906,4 +765,12 @@ func sameStagedAssociationIDs(left, right []int) bool {
 		}
 	}
 	return true
+}
+
+func stagedManifestMusicIDs(manifest lyricsstaging.Manifest) []int {
+	musicIDs := make([]int, 0, len(manifest.Items))
+	for _, item := range manifest.Items {
+		musicIDs = append(musicIDs, item.MusicID)
+	}
+	return musicIDs
 }

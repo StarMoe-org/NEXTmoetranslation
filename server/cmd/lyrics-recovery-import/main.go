@@ -24,6 +24,7 @@ import (
 	"moesekai/server/internal/lyricsevidencepack"
 	"moesekai/server/internal/lyricsrecoveryimport"
 	"moesekai/server/internal/lyricsrootmanifest"
+	"moesekai/server/internal/offlineimport"
 	"moesekai/server/internal/singleinstance"
 	"moesekai/server/internal/store"
 )
@@ -167,7 +168,7 @@ func validateOptions(opts options) error {
 
 func executeWithHooks(ctx context.Context, opts options, hooks executionHooks) (
 	receipt lyricsrecoveryimport.ImportReceipt,
-	results []store.RecoveryLyricsImportItem,
+	results []offlineimport.RecoveryLyricsImportItem,
 	state committedRecoveryState,
 	returnErr error,
 ) {
@@ -366,9 +367,9 @@ func executeWithHooks(ctx context.Context, opts options, hooks executionHooks) (
 		}
 	}()
 
-	results, commitAttempted, importErr := store.New(database).ImportRecoveryLyricsManifestWithCommitHook(
-		ctx, root, manifest, evidenceReceipt, resolver, opts.actor,
-		func(tx *sql.Tx, hookResults []store.RecoveryLyricsImportItem, batchCreatedAt int64) error {
+	results, commitAttempted, importErr := offlineimport.ImportRecoveryLyricsManifestWithCommitHook(
+		ctx, store.New(database), root, manifest, evidenceReceipt, resolver, opts.actor,
+		func(tx *sql.Tx, hookResults []offlineimport.RecoveryLyricsImportItem, batchCreatedAt int64) error {
 			if hooks.beforeCommitValidation != nil {
 				if err := hooks.beforeCommitValidation(); err != nil {
 					return err
@@ -559,7 +560,7 @@ func validateRecoveryBindings(root lyricsrootmanifest.Manifest, manifest lyricsr
 }
 
 func committedRecoveryStateTx(ctx context.Context, tx *sql.Tx, manifest lyricsrecoveryimport.Manifest,
-	evidence lyricsrecoveryimport.EvidenceReceipt, results []store.RecoveryLyricsImportItem, batchCreatedAt int64,
+	evidence lyricsrecoveryimport.EvidenceReceipt, results []offlineimport.RecoveryLyricsImportItem, batchCreatedAt int64,
 ) (committedRecoveryState, error) {
 	state := committedRecoveryState{counts: lyricsrecoveryimport.ExpectedImportStorageCounts(manifest, evidence), batchCreatedAt: batchCreatedAt}
 	if len(results) != len(manifest.Items) {
@@ -724,7 +725,7 @@ func queryRecoveryStorageCounts(ctx context.Context, query recoveryCountQuery, b
 	return counts, nil
 }
 
-func receiptItems(results []store.RecoveryLyricsImportItem) []lyricsrecoveryimport.ImportReceiptItem {
+func receiptItems(results []offlineimport.RecoveryLyricsImportItem) []lyricsrecoveryimport.ImportReceiptItem {
 	items := make([]lyricsrecoveryimport.ImportReceiptItem, len(results))
 	for index, result := range results {
 		items[index] = lyricsrecoveryimport.ImportReceiptItem{

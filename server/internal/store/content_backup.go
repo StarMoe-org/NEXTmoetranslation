@@ -1769,7 +1769,7 @@ func validateRestoredLyricsSourceProvenance(lyrics LyricsContentExport, document
 	expectedContributions := make(map[int64]map[string]string, len(provenanceByID))
 	lastContributionByDocument := make(map[int64]string)
 	for documentID, document := range sourceDocumentsByID {
-		expectedContributions[documentID] = stagedLyricsComponentRefs(document)
+		expectedContributions[documentID] = LyricsSourceComponentRefs(document)
 	}
 	for _, record := range lyrics.SourceContributions {
 		document, exists := provenanceByID[record.DocumentID]

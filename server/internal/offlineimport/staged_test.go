@@ -1,4 +1,4 @@
-package store
+package offlineimport
 
 import (
 	"context"
@@ -20,6 +20,7 @@ import (
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
+	"moesekai/server/internal/store"
 )
 
 type stagedImportSong struct {
@@ -48,27 +49,27 @@ func stagedSekaipediaRevisionEvidenceID(baseID, fetchedAt, rawSHA256 string) str
 	return fmt.Sprintf("%s:%x", baseID, digest)
 }
 
-func setupStagedManifestImportStore(t *testing.T, songs []stagedImportSong) (*Store, *db.DB, lyricsstaging.Manifest, lyricsstaging.PrivateEvidenceReceipt) {
+func setupStagedManifestImportStore(t *testing.T, songs []stagedImportSong) (*store.Store, *db.DB, lyricsstaging.Manifest, lyricsstaging.PrivateEvidenceReceipt) {
 	t.Helper()
 	database, err := db.Open(filepath.Join(t.TempDir(), "staged-import.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { database.Close() })
-	s := New(database)
-	if err := s.UpsertPerformerCatalog([]PerformerCatalogRecord{
+	s := store.New(database)
+	if err := s.UpsertPerformerCatalog([]store.PerformerCatalogRecord{
 		{PerformerID: 21, JapaneseName: "初音ミク", EnglishName: "Miku"},
 		{PerformerID: 22, JapaneseName: "鏡音リン", EnglishName: "Rin"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	records := make([]MusicCatalogRecord, len(songs))
+	records := make([]store.MusicCatalogRecord, len(songs))
 	for index, song := range songs {
 		vocalType := song.catalogVocalType
 		if vocalType == "" {
 			vocalType = "sekai"
 		}
-		records[index] = MusicCatalogRecord{
+		records[index] = store.MusicCatalogRecord{
 			MusicID: song.musicID, JapaneseTitle: song.title, Lyricist: "作詞者", Composer: "作曲者",
 			Arranger: "編曲者", LyricsVersion: "full", LyricsVersionKnown: true,
 			Vocals: []model.CatalogVocalSignal{{VocalID: song.musicID, VocalType: vocalType, CharacterType: "game_character", CharacterID: 21}},
@@ -351,9 +352,7 @@ func TestImportStagedLyricsManifestPreservesSourceTranslationInPrivateDraft(t *t
 		manifest.Items[0].Translations[0] != "初音未来歌唱" {
 		t.Fatalf("staging manifest lost the exact source translation: %+v", manifest.Items)
 	}
-	results, err := s.ImportStagedLyricsManifestWithEvidenceReceipt(
-		context.Background(), manifest, receipt, "offline-operator",
-	)
+	results, err := ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), s, manifest, receipt, "offline-operator")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,9 +365,7 @@ func TestImportStagedLyricsManifestPreservesSourceTranslationInPrivateDraft(t *t
 		Scan(&chinese, &english); err != nil || chinese != "初音未来歌唱" || english != "" {
 		t.Fatalf("stored staged translation chinese=%q english=%q err=%v", chinese, english, err)
 	}
-	replayed, err := s.ImportStagedLyricsManifestWithEvidenceReceipt(
-		context.Background(), manifest, receipt, "offline-operator",
-	)
+	replayed, err := ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), s, manifest, receipt, "offline-operator")
 	if err != nil || len(replayed) != 1 || replayed[0].Changed ||
 		replayed[0].Lyrics.Lines[0].Chinese != "初音未来歌唱" {
 		t.Fatalf("translated manifest replay=%+v err=%v", replayed, err)
@@ -377,7 +374,7 @@ func TestImportStagedLyricsManifestPreservesSourceTranslationInPrivateDraft(t *t
 
 func TestImportStagedLyricsManifestCreatesPrivateEditableDraftAndReplays(t *testing.T) {
 	s, database, manifest, receipt := setupStagedManifestImportStore(t, []stagedImportSong{{musicID: 10, title: "合成試験曲", text: "初音歌う", sourceID: "miku"}})
-	results, err := s.ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), manifest, receipt, "offline-operator")
+	results, err := ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), s, manifest, receipt, "offline-operator")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +432,7 @@ func TestImportStagedLyricsManifestCreatesPrivateEditableDraftAndReplays(t *test
 		t.Fatal("immutable source artifact allowed deletion while its document exists")
 	}
 
-	replay, err := s.ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), manifest, receipt, "offline-operator")
+	replay, err := ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), s, manifest, receipt, "offline-operator")
 	if err != nil || len(replay) != 1 || replay[0].Changed || replay[0].Lyrics.Revision != 1 {
 		t.Fatalf("replay=%+v err=%v", replay, err)
 	}
@@ -454,7 +451,7 @@ func TestImportStagedLyricsManifestRejectsOmittedCrossedDuplicateAndOrphanEviden
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), manifest, omitted, "offline-operator"); err == nil || !strings.Contains(err.Error(), "candidate reference is unresolved") {
+		if _, err := ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), s, manifest, omitted, "offline-operator"); err == nil || !strings.Contains(err.Error(), "candidate reference is unresolved") {
 			t.Fatalf("omitted successful evidence error=%v", err)
 		}
 	})
@@ -466,7 +463,7 @@ func TestImportStagedLyricsManifestRejectsOmittedCrossedDuplicateAndOrphanEviden
 		_, _, _, crossed := setupStagedManifestImportStore(t, []stagedImportSong{{
 			musicID: 20, title: "第二曲", text: "第二行", sourceID: "miku",
 		}})
-		if _, err := s.ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), manifest, crossed, "offline-operator"); err == nil || !strings.Contains(err.Error(), "candidate reference is unresolved") {
+		if _, err := ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), s, manifest, crossed, "offline-operator"); err == nil || !strings.Contains(err.Error(), "candidate reference is unresolved") {
 			t.Fatalf("crossed receipt error=%v", err)
 		}
 	})
@@ -484,7 +481,7 @@ func TestImportStagedLyricsManifestRejectsOmittedCrossedDuplicateAndOrphanEviden
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), manifest, orphaned, "offline-operator"); err == nil || !strings.Contains(err.Error(), "private evidence receipt contains orphan evidence") {
+		if _, err := ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), s, manifest, orphaned, "offline-operator"); err == nil || !strings.Contains(err.Error(), "private evidence receipt contains orphan evidence") {
 			t.Fatalf("extra projected import evidence error=%v", err)
 		}
 	})
@@ -496,7 +493,7 @@ func TestImportStagedLyricsManifestRejectsOmittedCrossedDuplicateAndOrphanEviden
 		duplicated := receipt
 		duplicated.IndexEvidence = append([]lyricssource.IndexEvidence(nil), receipt.IndexEvidence...)
 		duplicated.IndexEvidence = append(duplicated.IndexEvidence, receipt.IndexEvidence[0])
-		if _, err := s.ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), manifest, duplicated, "offline-operator"); err == nil || !strings.Contains(err.Error(), "not uniquely ordered by evidence ID") {
+		if _, err := ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), s, manifest, duplicated, "offline-operator"); err == nil || !strings.Contains(err.Error(), "not uniquely ordered by evidence ID") {
 			t.Fatalf("duplicate receipt evidence ID error=%v", err)
 		}
 	})
@@ -512,8 +509,15 @@ func TestStagedManifestLyricsDraftRequiresExactAuthoritativeVocaloidSegmentation
 	if err != nil {
 		t.Fatal(err)
 	}
-	performers, err := loadCatalogPerformerAliases(database)
+	aliasTx, err := database.BeginTx(context.Background(), nil)
 	if err != nil {
+		t.Fatal(err)
+	}
+	performers, err := store.LoadCatalogPerformerAliases(aliasTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := aliasTx.Rollback(); err != nil {
 		t.Fatal(err)
 	}
 	for name, privateReview := range map[string]*model.LyricsSourcePrivateReview{
@@ -538,7 +542,7 @@ func TestImportStagedSekaipediaAuthoritativeVocaloidPersistsTimestampSegmentatio
 		versionKind: "vocaloid", catalogVocalType: "original_song",
 		provider: model.LyricsSourceProviderSekaipedia, authoritativeVocaloidSegmentation: true,
 	}})
-	results, err := s.ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), manifest, receipt, "offline-operator")
+	results, err := ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), s, manifest, receipt, "offline-operator")
 	if err != nil || len(results) != 1 || !results[0].Changed {
 		t.Fatalf("Sekaipedia authoritative import=%+v err=%v", results, err)
 	}
@@ -593,7 +597,7 @@ func TestImportStagedSekaipediaAuthoritativeVocaloidPersistsTimestampSegmentatio
 	if parents != 2 || links != 2 || orphanLinks != 0 {
 		t.Fatalf("Sekaipedia evidence graph parents=%d links=%d orphans=%d", parents, links, orphanLinks)
 	}
-	replay, err := s.ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), manifest, receipt, "offline-operator")
+	replay, err := ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), s, manifest, receipt, "offline-operator")
 	if err != nil || len(replay) != 1 || replay[0].Changed ||
 		len(replay[0].Lyrics.Lines[0].Segments) != 2 ||
 		fmt.Sprint(replay[0].Lyrics.Lines[0].Segments[0].PerformerIDs) != "[21]" ||
@@ -615,7 +619,8 @@ func TestImportStagedSekaipediaAuthoritativeVocaloidPersistsTimestampSegmentatio
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := insertOrVerifyLyricsIndexEvidenceTx(context.Background(), tx, conflictingEvidence, time.Now()); !errors.Is(err, ErrLyricsSourceArtifactConflict) {
+	if err := store.InsertOrVerifyLyricsIndexEvidenceCollectionTx(context.Background(), tx,
+		[]lyricssource.IndexEvidence{conflictingEvidence}, time.Now()); !errors.Is(err, store.ErrLyricsSourceArtifactConflict) {
 		tx.Rollback()
 		t.Fatalf("Sekaipedia immutable evidence conflict=%v", err)
 	}
@@ -624,35 +629,64 @@ func TestImportStagedSekaipediaAuthoritativeVocaloidPersistsTimestampSegmentatio
 	}
 }
 
-func TestStagedLyricsSourceDocumentMatchDetectsExistingSourceV3LocalizationDrift(t *testing.T) {
-	s := setupLyricsStore(t)
-	document, evidenceByIdentity := renditionV3PersistenceDocument(t)
-	translations := []lyricsstaging.RenditionTranslation{
-		{
-			RenditionKey: document.Renditions[0].RenditionKey,
-			Translations: []string{"主译文一", "主译文二"},
-			PeerTranslations: []lyricsstaging.RenditionPeerTranslation{{
-				Side: "game", Locale: "zh-CN", Translations: []string{"游戏译文一", "游戏译文二"},
-			}},
-		},
-		{RenditionKey: document.Renditions[1].RenditionKey, Translations: []string{"虚拟歌手译文"}},
+// stagedV3DraftWithTranslations up-converts the fixture's one-rendition v2
+// draft into a source-v3 draft carrying a main translation per rendition.
+func stagedV3DraftWithTranslations(t *testing.T, s *store.Store, staged lyricsstaging.Draft, translation string) lyricsstaging.Draft {
+	t.Helper()
+	document, err := model.UpconvertLyricsSourceDocumentV2(staged.Document)
+	if err != nil {
+		t.Fatalf("up-convert staged v2 draft: %v", err)
 	}
-	artifacts := make([]lyricsstaging.Artifact, len(document.FixedIdentities))
-	for index, identity := range document.FixedIdentities {
-		artifact, err := lyricsstaging.NewRecoveryArtifact(identity, evidenceByIdentity[index][0].Raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		artifacts[index] = artifact
-	}
-	draft, err := lyricsstaging.BuildRecoveryPeerDraft(
-		10, "新曲", recoveryRenditionTestCatalogFingerprint(t, s, 10), 10, []int{}, document, artifacts, translations,
-	)
+	// Up-conversion keeps the v2 identity keys; bind each identity to the
+	// rendition family that now owns it.
+	bindings, err := model.EnumerateLyricsSourceRenditionComponents(document.Renditions)
 	if err != nil {
 		t.Fatal(err)
 	}
+	familyByIdentity := make(map[string]string, len(bindings))
+	for _, binding := range bindings {
+		familyByIdentity[binding.FixedIdentityKey] = binding.RenditionKey
+	}
+	for index := range document.FixedIdentities {
+		family, found := familyByIdentity[document.FixedIdentities[index].RenditionKey]
+		if !found {
+			t.Fatalf("identity %q has no rendition component", document.FixedIdentities[index].RenditionKey)
+		}
+		document.FixedIdentities[index].CompositionRenditionKey = family
+	}
+	artifacts := make([]lyricsstaging.Artifact, len(document.FixedIdentities))
+	for index, identity := range document.FixedIdentities {
+		artifacts[index], err = lyricsstaging.NewRecoveryArtifact(identity, []byte("== Lyrics ==\n"+staged.Document.Full.Lines[0].Text))
+		if err != nil {
+			t.Fatalf("build recovery artifact %q: %v", identity.RenditionKey, err)
+		}
+	}
+	translations := make([]lyricsstaging.RenditionTranslation, len(document.Renditions))
+	for index, rendition := range document.Renditions {
+		translations[index] = lyricsstaging.RenditionTranslation{
+			RenditionKey: rendition.RenditionKey, Translations: []string{translation},
+		}
+	}
+	identity, err := s.CatalogMusicIdentity(staged.MusicID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := lyricsstaging.BuildRecoveryPeerDraft(
+		staged.MusicID, staged.JapaneseTitle, identity.CatalogFingerprint, staged.MusicID, []int{}, document, artifacts, translations,
+	)
+	if err != nil {
+		t.Fatalf("build source-v3 draft: %v", err)
+	}
+	return draft
+}
+
+func TestStagedLyricsSourceDocumentMatchDetectsExistingSourceV3LocalizationDrift(t *testing.T) {
+	s, database, manifest, _ := setupStagedManifestImportStore(t, []stagedImportSong{{
+		musicID: 10, title: "新曲", text: "初音歌う", sourceID: "miku",
+	}})
+	draft := stagedV3DraftWithTranslations(t, s, manifest.Items[0], "初音在歌唱")
 	ctx := context.Background()
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -664,28 +698,31 @@ func TestStagedLyricsSourceDocumentMatchDetectsExistingSourceV3LocalizationDrift
 		t.Fatal(err)
 	}
 
-	tx, err = s.db.BeginTx(context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
+	matches := func() (bool, bool) {
+		tx, err := database.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		exists, matched, err := stagedLyricsSourceDocumentMatches(ctx, tx, draft, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return exists, matched
 	}
-	exists, matched, err := stagedLyricsSourceDocumentMatches(context.Background(), tx, draft, false)
-	_ = tx.Rollback()
-	if err != nil || !exists || !matched {
-		t.Fatalf("exact source-v3 replay exists=%t matched=%t err=%v", exists, matched, err)
+	if exists, matched := matches(); !exists || !matched {
+		t.Fatalf("exact source-v3 replay exists=%t matched=%t", exists, matched)
 	}
 
-	if _, err := s.db.Exec(`UPDATE song_lyrics_rendition_side_translation_lines
-		SET text='篡改的 Game 译文' WHERE side='game' AND position=0`); err != nil {
-		t.Fatal(err)
-	}
-	tx, err = s.db.BeginTx(context.Background(), nil)
+	result, err := database.Exec(`UPDATE song_lyrics_rendition_translation_lines SET text='篡改的译文' WHERE position=0`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	exists, matched, err = stagedLyricsSourceDocumentMatches(context.Background(), tx, draft, false)
-	_ = tx.Rollback()
-	if err != nil || !exists || matched {
-		t.Fatalf("drifted source-v3 replay exists=%t matched=%t err=%v", exists, matched, err)
+	if changed, _ := result.RowsAffected(); changed == 0 {
+		t.Fatal("the persisted rendition translation line was not found")
+	}
+	if exists, matched := matches(); !exists || matched {
+		t.Fatalf("drifted source-v3 replay exists=%t matched=%t", exists, matched)
 	}
 }
 
@@ -710,15 +747,11 @@ func TestImportStagedLyricsManifestEvidenceReceiptAndCommitHookShareOneTransacti
 		}
 		return nil
 	}
-	results, commitAttempted, err := s.ImportStagedLyricsManifestWithEvidenceReceiptAndCommitHook(
-		context.Background(), manifest, receipt, "offline-operator", verifyHook,
-	)
+	results, commitAttempted, err := ImportStagedLyricsManifestWithEvidenceReceiptAndCommitHook(context.Background(), s, manifest, receipt, "offline-operator", verifyHook)
 	if err != nil || !commitAttempted || len(results) != 1 || !results[0].Changed {
 		t.Fatalf("combined first import results=%+v commitAttempted=%t err=%v", results, commitAttempted, err)
 	}
-	replay, replayCommitAttempted, err := s.ImportStagedLyricsManifestWithEvidenceReceiptAndCommitHook(
-		context.Background(), manifest, receipt, "offline-operator", verifyHook,
-	)
+	replay, replayCommitAttempted, err := ImportStagedLyricsManifestWithEvidenceReceiptAndCommitHook(context.Background(), s, manifest, receipt, "offline-operator", verifyHook)
 	if err != nil || !replayCommitAttempted || len(replay) != 1 || replay[0].Changed {
 		t.Fatalf("combined replay results=%+v commitAttempted=%t err=%v", replay, replayCommitAttempted, err)
 	}
@@ -729,7 +762,7 @@ func TestImportStagedVocaloidFullNeverAppliesCatalogPerformerFallbackAndReplays(
 		musicID: 10, title: "Vocaloid限定曲", text: "初音歌う", sourceID: "", versionKind: "vocaloid",
 		catalogVocalType: "original_song",
 	}})
-	results, err := s.ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), manifest, receipt, "offline-operator")
+	results, err := ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), s, manifest, receipt, "offline-operator")
 	if err != nil || len(results) != 1 || !results[0].Changed {
 		t.Fatalf("Vocaloid import=%+v err=%v", results, err)
 	}
@@ -747,7 +780,7 @@ func TestImportStagedVocaloidFullNeverAppliesCatalogPerformerFallbackAndReplays(
 	if performerJSON != "[]" {
 		t.Fatalf("Vocaloid Full persisted performers=%q", performerJSON)
 	}
-	replay, err := s.ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), manifest, receipt, "offline-operator")
+	replay, err := ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), s, manifest, receipt, "offline-operator")
 	if err != nil || len(replay) != 1 || replay[0].Changed ||
 		len(replay[0].Lyrics.Lines[0].Segments[0].PerformerIDs) != 0 {
 		t.Fatalf("Vocaloid replay=%+v err=%v", replay, err)
@@ -756,7 +789,7 @@ func TestImportStagedVocaloidFullNeverAppliesCatalogPerformerFallbackAndReplays(
 
 func TestStagedLyricsSourceProvenanceSurvivesTransactionalContentBackupRestore(t *testing.T) {
 	s, database, manifest, receipt := setupStagedManifestImportStore(t, []stagedImportSong{{musicID: 10, title: "合成試験曲", text: "初音歌う", sourceID: "miku"}})
-	if _, err := s.ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), manifest, receipt, "offline-operator"); err != nil {
+	if _, err := ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), s, manifest, receipt, "offline-operator"); err != nil {
 		t.Fatal(err)
 	}
 	exported, err := s.ExportLyricsContent()
@@ -785,8 +818,8 @@ func TestStagedLyricsSourceProvenanceSurvivesTransactionalContentBackupRestore(t
 		t.Fatalf("exported artifact evidence link=%+v want provider=%q ref=%+v", link,
 			manifest.Items[0].Artifacts[0].Identity.Provider, wantRef)
 	}
-	events := EventContentExport{Segments: []EventSegmentRecord{}, Localizations: []EventLocalizationRecord{},
-		LocaleMeta: []EventLocaleMetaRecord{}, Scenarios: []EventScenarioRecord{}}
+	events := store.EventContentExport{Segments: []store.EventSegmentRecord{}, Localizations: []store.EventLocalizationRecord{},
+		LocaleMeta: []store.EventLocaleMetaRecord{}, Scenarios: []store.EventScenarioRecord{}}
 	missingLinks := exported
 	missingLinks.SourceArtifactEvidence = nil
 	if err := s.ImportTranslationContent(nil, events, missingLinks); err == nil ||
@@ -803,7 +836,7 @@ func TestStagedLyricsSourceProvenanceSurvivesTransactionalContentBackupRestore(t
 		restoredDocuments != 1 || restoredLinks != 1 {
 		t.Fatalf("restored source documents=%d evidenceLinks=%d err=%v", restoredDocuments, restoredLinks, err)
 	}
-	if replay, err := s.ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), manifest, receipt, "offline-operator"); err != nil || len(replay) != 1 || replay[0].Changed {
+	if replay, err := ImportStagedLyricsManifestWithEvidenceReceipt(context.Background(), s, manifest, receipt, "offline-operator"); err != nil || len(replay) != 1 || replay[0].Changed {
 		t.Fatalf("replay after restore=%+v err=%v", replay, err)
 	}
 }
@@ -813,7 +846,7 @@ func TestImportStagedLyricsManifestPreservesEachFixedRevisionFetchTime(t *testin
 		{musicID: 10, title: "第一曲", text: "第一行", sourceID: "miku"},
 		{musicID: 20, title: "第二曲", text: "第二行", sourceID: "miku"},
 	})
-	results, err := s.ImportStagedLyricsManifest(context.Background(), manifest, "offline-operator")
+	results, err := ImportStagedLyricsManifest(context.Background(), s, manifest, "offline-operator")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -828,7 +861,7 @@ func TestImportStagedLyricsManifestPreservesEachFixedRevisionFetchTime(t *testin
 
 func TestImportStagedLyricsManifestConflictsWithNonidenticalExistingDraft(t *testing.T) {
 	s, _, manifest, _ := setupStagedManifestImportStore(t, []stagedImportSong{{musicID: 10, title: "競合曲", text: "歌詞", sourceID: "miku"}})
-	results, err := s.ImportStagedLyricsManifest(context.Background(), manifest, "offline-operator")
+	results, err := ImportStagedLyricsManifest(context.Background(), s, manifest, "offline-operator")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -837,7 +870,7 @@ func TestImportStagedLyricsManifestConflictsWithNonidenticalExistingDraft(t *tes
 	if _, err := s.SaveLyrics(changed, "editor"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ImportStagedLyricsManifest(context.Background(), manifest, "offline-operator"); !errors.Is(err, ErrLyricsStagedManifestConflict) {
+	if _, err := ImportStagedLyricsManifest(context.Background(), s, manifest, "offline-operator"); !errors.Is(err, ErrLyricsStagedManifestConflict) {
 		t.Fatalf("nonidentical replay error=%v", err)
 	}
 	loaded, err := s.GetLyrics(10)
@@ -856,7 +889,7 @@ func TestImportStagedLyricsManifestRollsBackWholeBatch(t *testing.T) {
 		BEGIN SELECT RAISE(ABORT, 'injected staged import failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ImportStagedLyricsManifest(context.Background(), manifest, "offline-operator"); err == nil || !strings.Contains(err.Error(), "injected staged import failure") {
+	if _, err := ImportStagedLyricsManifest(context.Background(), s, manifest, "offline-operator"); err == nil || !strings.Contains(err.Error(), "injected staged import failure") {
 		t.Fatalf("batch failure error=%v", err)
 	}
 	var lyricsCount, lineCount, segmentCount, auditCount int
@@ -881,17 +914,17 @@ func TestImportStagedLyricsManifestRejectsCatalogDriftAndProjectsDeclaredExterna
 		if _, err := database.Exec(`UPDATE catalog_music SET composer='改変後' WHERE music_id=10`); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.ImportStagedLyricsManifest(context.Background(), manifest, "offline-operator"); !errors.Is(err, ErrLyricsStagedManifestDrift) {
+		if _, err := ImportStagedLyricsManifest(context.Background(), s, manifest, "offline-operator"); !errors.Is(err, ErrLyricsStagedManifestDrift) {
 			t.Fatalf("catalog drift error=%v", err)
 		}
-		if _, err := s.GetLyrics(10); !errors.Is(err, ErrLyricsNotFound) {
+		if _, err := s.GetLyrics(10); !errors.Is(err, store.ErrLyricsNotFound) {
 			t.Fatalf("catalog drift created draft: %v", err)
 		}
 	})
 
 	t.Run("audited external performer uses reserved lyrics-only ID", func(t *testing.T) {
 		s, database, manifest, _ := setupStagedManifestImportStore(t, []stagedImportSong{{musicID: 10, title: "映射曲", text: "歌詞", sourceID: "外部歌唱者-01"}})
-		results, err := s.ImportStagedLyricsManifest(context.Background(), manifest, "offline-operator")
+		results, err := ImportStagedLyricsManifest(context.Background(), s, manifest, "offline-operator")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -906,18 +939,14 @@ func TestImportStagedLyricsManifestRejectsCatalogDriftAndProjectsDeclaredExterna
 		if performerJSON != "[1001]" {
 			t.Fatalf("audited external persisted performers=%q", performerJSON)
 		}
-		validPerformers, err := s.performerIDs(database)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if code, details, _ := validateLyrics(results[0].Lyrics, validPerformers, false); code != "" {
-			t.Fatalf("audited external draft validation code=%q details=%v", code, details)
+		if err := store.ValidateImportedLyrics(results[0].Lyrics, stagedTestPerformerAliases(t, database)); err != nil {
+			t.Fatalf("audited external draft validation: %v", err)
 		}
 	})
 
 	t.Run("unknown declared external performer remains an editable unpublished draft", func(t *testing.T) {
 		s, database, manifest, _ := setupStagedManifestImportStore(t, []stagedImportSong{{musicID: 10, title: "映射曲", text: "歌詞", sourceID: "external_singer"}})
-		results, err := s.ImportStagedLyricsManifest(context.Background(), manifest, "offline-operator")
+		results, err := ImportStagedLyricsManifest(context.Background(), s, manifest, "offline-operator")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -932,22 +961,22 @@ func TestImportStagedLyricsManifestRejectsCatalogDriftAndProjectsDeclaredExterna
 		if performerJSON != "[]" {
 			t.Fatalf("unknown external persisted performers=%q", performerJSON)
 		}
-		validPerformers, err := s.performerIDs(database)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if code, details, _ := validateLyrics(results[0].Lyrics, validPerformers, true); code != "" {
-			t.Fatalf("unknown external draft publication code=%q details=%v", code, details)
+		if err := store.ValidateImportedLyrics(results[0].Lyrics, stagedTestPerformerAliases(t, database)); err != nil {
+			t.Fatalf("unknown external draft validation: %v", err)
 		}
 	})
 }
 
-func TestMapDeclaredLyricsSourcePerformerIDsRejectsUndeclaredLabel(t *testing.T) {
-	if _, err := mapDeclaredLyricsSourcePerformerIDs(
-		[]string{"undeclared_singer"},
-		map[string]int{"miku": 21},
-		map[string]bool{"external_singer": true},
-	); !errors.Is(err, ErrLyricsSourcePerformerMapping) {
-		t.Fatalf("undeclared performer error=%v", err)
+func stagedTestPerformerAliases(t *testing.T, database *db.DB) store.CatalogPerformerAliases {
+	t.Helper()
+	tx, err := database.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer tx.Rollback()
+	performers, err := store.LoadCatalogPerformerAliases(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return performers
 }

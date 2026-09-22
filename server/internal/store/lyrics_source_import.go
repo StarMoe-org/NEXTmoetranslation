@@ -277,7 +277,7 @@ func approvedLyricsSourceDraft(query queryRower, source approvedLyricsSourceImpo
 
 	lines := make([]model.LyricLine, len(source.extractedLines))
 	for lineIndex, sourceLine := range source.extractedLines {
-		lineFallback, err := mapDeclaredLyricsSourcePerformerIDs(
+		lineFallback, err := MapDeclaredLyricsSourcePerformerIDs(
 			sourceLine.TrailingPerformerIDs,
 			aliases,
 			declaredUnmapped,
@@ -288,7 +288,7 @@ func approvedLyricsSourceDraft(query queryRower, source approvedLyricsSourceImpo
 		segments := make([]model.LyricSegment, len(sourceLine.Segments))
 		var japanese strings.Builder
 		for segmentIndex, sourceSegment := range sourceLine.Segments {
-			performerIDs, err := mapDeclaredLyricsSourcePerformerIDs(
+			performerIDs, err := MapDeclaredLyricsSourcePerformerIDs(
 				sourceSegment.PerformerIDs,
 				aliases,
 				declaredUnmapped,

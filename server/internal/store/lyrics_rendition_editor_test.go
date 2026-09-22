@@ -998,7 +998,7 @@ func setupRecoveryRenditionV3EditorFixture(t *testing.T) recoveryRenditionV3Edit
 					break
 				}
 			}
-			if err := insertOrVerifyRecoveryEvidenceTx(ctx, tx, ref, parent, createdAt); err != nil {
+			if err := seedRecoveryEvidenceTx(ctx, tx, ref, parent, createdAt); err != nil {
 				t.Fatalf("insert recovery evidence %d: %v", index, rollback(err))
 			}
 		}
@@ -1008,13 +1008,13 @@ func setupRecoveryRenditionV3EditorFixture(t *testing.T) recoveryRenditionV3Edit
 		AssociationMusicIDs: []int{}, State: lyricsrootmanifest.CoverageComplete,
 		ResultSHA256: recoveryEditorTestSHA("result-10"), Draft: &draft,
 	}
-	if err := insertRecoveryImportItemTx(ctx, tx, batchSHA, item, createdAt); err != nil {
+	if err := seedRecoveryImportItemTx(ctx, tx, batchSHA, item, createdAt); err != nil {
 		t.Fatal(rollback(err))
 	}
-	if err := insertRecoveryV3DraftItemTx(ctx, tx, batchSHA, item, createdAt); err != nil {
+	if err := seedRecoveryV3DraftItemTx(ctx, tx, batchSHA, item, createdAt); err != nil {
 		t.Fatal(rollback(err))
 	}
-	if err := insertRecoveryProvenanceGraphTx(ctx, tx, batchSHA, item, createdAt); err != nil {
+	if err := seedRecoveryProvenanceGraphTx(ctx, tx, batchSHA, item, createdAt); err != nil {
 		t.Fatal(rollback(err))
 	}
 
@@ -1038,10 +1038,10 @@ func setupRecoveryRenditionV3EditorFixture(t *testing.T) recoveryRenditionV3Edit
 		ResultSHA256: recoveryEditorTestSHA("result-20"), Availability: &missingAvailability,
 		AvailabilityDocumentSHA256: missingSHA,
 	}
-	if err := insertRecoveryImportItemTx(ctx, tx, batchSHA, missingItem, createdAt); err != nil {
+	if err := seedRecoveryImportItemTx(ctx, tx, batchSHA, missingItem, createdAt); err != nil {
 		t.Fatal(rollback(err))
 	}
-	if err := insertRecoveryAvailabilityItemTx(ctx, tx, batchSHA, missingItem, string(missingBody), createdAt); err != nil {
+	if err := seedRecoveryAvailabilityItemTx(ctx, tx, batchSHA, missingItem, string(missingBody), createdAt); err != nil {
 		t.Fatal(rollback(err))
 	}
 	if err := tx.Commit(); err != nil {

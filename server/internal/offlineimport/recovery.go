@@ -1,4 +1,4 @@
-package store
+package offlineimport
 
 import (
 	"bytes"
@@ -22,6 +22,7 @@ import (
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
+	"moesekai/server/internal/store"
 )
 
 const (
@@ -35,10 +36,7 @@ const (
 	lyricsImportMaximumCompatibleRuntimeSchema = 34
 )
 
-var (
-	ErrLyricsRecoveryImportConflict = errors.New("lyrics recovery import conflicts with existing private lyrics state")
-	ErrLyricsRecoveryImportDrift    = errors.New("lyrics recovery import no longer matches its catalog, root, or evidence pack")
-)
+var ErrLyricsRecoveryImportDrift = errors.New("lyrics recovery import no longer matches its catalog, root, or evidence pack")
 
 // RecoveryLyricsImportItem is the transaction result for one compact-root song.
 // Changed is false only for an exact replay of an already committed batch.
@@ -58,15 +56,16 @@ type RecoveryLyricsImportItem struct {
 // all-root importer.
 type RecoveryLyricsImportCommitHook func(*sql.Tx, []RecoveryLyricsImportItem, int64) error
 
-func (s *Store) ImportRecoveryLyricsManifest(
+func ImportRecoveryLyricsManifest(
 	ctx context.Context,
+	lyricsStore *store.Store,
 	root lyricsrootmanifest.Manifest,
 	manifest lyricsrecoveryimport.Manifest,
 	receipt lyricsrecoveryimport.EvidenceReceipt,
 	resolver *lyricsevidencepack.Resolver,
 	actor string,
 ) ([]RecoveryLyricsImportItem, error) {
-	results, _, err := s.ImportRecoveryLyricsManifestWithCommitHook(ctx, root, manifest, receipt, resolver, actor, nil)
+	results, _, err := ImportRecoveryLyricsManifestWithCommitHook(ctx, lyricsStore, root, manifest, receipt, resolver, actor, nil)
 	return results, err
 }
 
@@ -75,8 +74,9 @@ func (s *Store) ImportRecoveryLyricsManifest(
 // Full draft and source document v2; all recovery artifacts/evidence use the
 // additive v24 graph plus the v25 source-document schema migration. Non-Full
 // states create only availability-document v1.
-func (s *Store) ImportRecoveryLyricsManifestWithCommitHook(
+func ImportRecoveryLyricsManifestWithCommitHook(
 	ctx context.Context,
+	lyricsStore *store.Store,
 	root lyricsrootmanifest.Manifest,
 	manifest lyricsrecoveryimport.Manifest,
 	receipt lyricsrecoveryimport.EvidenceReceipt,
@@ -88,8 +88,8 @@ func (s *Store) ImportRecoveryLyricsManifestWithCommitHook(
 		return nil, false, errors.New("recovery lyrics import requires context and an exact evidence resolver")
 	}
 	actor = strings.TrimSpace(actor)
-	if actor == "" || len(actor) > maxLyricsReviewActorBytes || !utf8.ValidString(actor) || strings.ContainsAny(actor, "\r\n") {
-		return nil, false, ErrLyricsSourceInvalidRequest
+	if actor == "" || len(actor) > store.MaxLyricsImportActorBytes || !utf8.ValidString(actor) || strings.ContainsAny(actor, "\r\n") {
+		return nil, false, store.ErrLyricsSourceInvalidRequest
 	}
 	pack := resolver.Manifest()
 	if err := lyricsrecoveryimport.ValidateEvidenceReceiptAgainst(receipt, root, manifest, pack); err != nil {
@@ -99,14 +99,12 @@ func (s *Store) ImportRecoveryLyricsManifestWithCommitHook(
 		return nil, false, fmt.Errorf("%w: %v", ErrLyricsRecoveryImportDrift, err)
 	}
 
-	unlock := s.lockRecoveryLyricsManifest(manifest)
-	defer unlock()
-
-	tx, err := s.db.BeginTx(ctx, nil)
+	session, err := lyricsStore.BeginOfflineLyricsImport(ctx, recoveryManifestMusicIDs(manifest))
 	if err != nil {
 		return nil, false, err
 	}
-	defer tx.Rollback()
+	defer session.Close()
+	tx := session.Tx()
 	if err := validateRecoveryImportRuntimeSchema(ctx, tx); err != nil {
 		return nil, false, err
 	}
@@ -132,7 +130,7 @@ func (s *Store) ImportRecoveryLyricsManifestWithCommitHook(
 			return nil, false, fmt.Errorf("%w: music %d catalog target or associations changed", ErrLyricsRecoveryImportDrift, item.MusicID)
 		}
 		if item.Draft != nil && item.Draft.Document.SchemaVersion == model.LyricsSourceDocumentSchemaVersionV3 {
-			if err := validateStoreLyricsSourceDocument(item.Draft.Document); err != nil {
+			if err := store.ValidatePersistedLyricsSourceDocument(item.Draft.Document); err != nil {
 				return nil, false, fmt.Errorf("%w: music %d source v3: %v", ErrLyricsRecoveryImportDrift, item.MusicID, err)
 			}
 			// Source-v3 is always plural-editor owned. Never materialize a
@@ -145,12 +143,8 @@ func (s *Store) ImportRecoveryLyricsManifestWithCommitHook(
 			if err != nil {
 				return nil, false, err
 			}
-			if _, err := validateLyricsProvenance(lyrics); err != nil {
+			if err := store.ValidateImportedLyrics(lyrics, performers); err != nil {
 				return nil, false, err
-			}
-			code, details, _ := validateLyrics(lyrics, performers.validIDs, false)
-			if code != "" {
-				return nil, false, &LyricsContractError{Code: code, Details: details}
 			}
 			preparedLyrics[item.MusicID] = lyrics
 			preparedEditable[item.MusicID] = true
@@ -286,11 +280,11 @@ func (s *Store) ImportRecoveryLyricsManifestWithCommitHook(
 			return nil, false, err
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := session.Commit(); err != nil {
 		return nil, true, err
 	}
 	if !batchExists {
-		s.NotifyChange()
+		session.NotifyChange()
 	}
 	return results, true, nil
 }
@@ -341,9 +335,9 @@ func validateRecoveryImportCatalog(
 	tx *sql.Tx,
 	catalog []stagedImportCatalogItem,
 	manifest lyricsrecoveryimport.Manifest,
-) (map[int]stagedImportCatalogItem, map[int]model.CatalogLyricsTarget, catalogPerformerAliases, error) {
+) (map[int]stagedImportCatalogItem, map[int]model.CatalogLyricsTarget, store.CatalogPerformerAliases, error) {
 	if len(catalog) != manifest.Root.CatalogCount {
-		return nil, nil, catalogPerformerAliases{}, fmt.Errorf("%w: manifest catalog count %d does not match current catalog count %d",
+		return nil, nil, store.CatalogPerformerAliases{}, fmt.Errorf("%w: manifest catalog count %d does not match current catalog count %d",
 			ErrLyricsRecoveryImportDrift, manifest.Root.CatalogCount, len(catalog))
 	}
 	catalogByMusicID := make(map[int]stagedImportCatalogItem, len(catalog))
@@ -357,7 +351,7 @@ func validateRecoveryImportCatalog(
 	for _, item := range manifest.Items {
 		catalogItem, exists := catalogByMusicID[item.MusicID]
 		if !exists || catalogItem.japaneseTitle != item.JapaneseTitle || catalogItem.catalogFingerprint != item.CatalogFingerprint {
-			return nil, nil, catalogPerformerAliases{}, fmt.Errorf("%w: music %d catalog identity changed", ErrLyricsRecoveryImportDrift, item.MusicID)
+			return nil, nil, store.CatalogPerformerAliases{}, fmt.Errorf("%w: music %d catalog identity changed", ErrLyricsRecoveryImportDrift, item.MusicID)
 		}
 	}
 	targets := model.ClassifyCatalogLyricsTargets(grouping)
@@ -366,11 +360,11 @@ func validateRecoveryImportCatalog(
 		targetByMusicID[target.MusicID] = target
 	}
 	if len(targetByMusicID) != len(catalogByMusicID) {
-		return nil, nil, catalogPerformerAliases{}, fmt.Errorf("%w: current catalog classification is incomplete", ErrLyricsRecoveryImportDrift)
+		return nil, nil, store.CatalogPerformerAliases{}, fmt.Errorf("%w: current catalog classification is incomplete", ErrLyricsRecoveryImportDrift)
 	}
-	performers, err := loadCatalogPerformerAliases(tx)
+	performers, err := store.LoadCatalogPerformerAliases(tx)
 	if err != nil {
-		return nil, nil, catalogPerformerAliases{}, err
+		return nil, nil, store.CatalogPerformerAliases{}, err
 	}
 	return catalogByMusicID, targetByMusicID, performers, nil
 }
@@ -532,7 +526,7 @@ func insertOrVerifyRecoveryEvidenceTx(ctx context.Context, tx *sql.Tx, ref lyric
 		ref.Provider, ref.EvidenceID).Scan(&existing); err != nil {
 		return err
 	}
-	pageID, revisionID := recoveryNullablePositiveInt(evidence.PageID), recoveryNullablePositiveInt(evidence.RevisionID)
+	pageID, revisionID := nullablePositiveInt(evidence.PageID), nullablePositiveInt(evidence.RevisionID)
 	if existing == 0 {
 		_, err := tx.ExecContext(ctx, `INSERT INTO lyrics_recovery_source_evidence
 			(provider,evidence_id,sha256,acquisition_id,envelope_sha256,kind,origin,page_id,revision_id,
@@ -575,7 +569,7 @@ func insertOrVerifyRecoveryEvidenceTx(ctx context.Context, tx *sql.Tx, ref lyric
 		stored.categories != categoriesJSON || stored.requestURL != evidence.CanonicalRequestURL ||
 		stored.fetchedAt != evidence.FetchedAt || !bytes.Equal(stored.raw, evidence.Raw) || stored.rawCount != len(evidence.Raw) ||
 		stored.rawSHA != evidence.RawSHA256 || stored.createdAt <= 0 {
-		return fmt.Errorf("%w: recovery evidence %s conflicts with stored bytes", ErrLyricsRecoveryImportConflict, ref.EvidenceID)
+		return fmt.Errorf("%w: recovery evidence %s conflicts with stored bytes", store.ErrLyricsRecoveryImportConflict, ref.EvidenceID)
 	}
 	return nil
 }
@@ -591,7 +585,7 @@ func recoveryCategoriesJSON(categories []string) (string, error) {
 	return string(body), nil
 }
 
-func recoveryNullablePositiveInt(value int) any {
+func nullablePositiveInt(value int) any {
 	if value <= 0 {
 		return nil
 	}
@@ -605,9 +599,9 @@ func nullableIntMatches(stored sql.NullInt64, expected int) bool {
 func insertRecoveryCompleteItemTx(ctx context.Context, tx *sql.Tx, batchSHA256 string,
 	item lyricsrecoveryimport.Item, lyrics model.SongLyrics, actor string, now int64,
 ) (int, error) {
-	if _, err := sLoadLyricsTx(tx, item.MusicID); !errors.Is(err, ErrLyricsNotFound) {
+	if _, err := store.LoadLyricsTx(tx, item.MusicID); !errors.Is(err, store.ErrLyricsNotFound) {
 		if err == nil {
-			return 0, fmt.Errorf("%w: music %d already has editable lyrics", ErrLyricsRecoveryImportConflict, item.MusicID)
+			return 0, fmt.Errorf("%w: music %d already has editable lyrics", store.ErrLyricsRecoveryImportConflict, item.MusicID)
 		}
 		return 0, err
 	}
@@ -636,8 +630,8 @@ func insertRecoveryV3DraftItemTx(ctx context.Context, tx *sql.Tx, batchSHA256 st
 }
 
 func recoveryEditableReplayRevision(musicID int, requested, current model.SongLyrics) (int, error) {
-	if !sameLyricsContent(requested, current) {
-		return 0, fmt.Errorf("%w: music %d editable Full changed", ErrLyricsRecoveryImportConflict, musicID)
+	if !store.SameLyricsContent(requested, current) {
+		return 0, fmt.Errorf("%w: music %d editable Full changed", store.ErrLyricsRecoveryImportConflict, musicID)
 	}
 	if current.Revision <= 0 {
 		return 0, fmt.Errorf("%w: music %d editable Full has no durable revision", ErrLyricsRecoveryImportDrift, musicID)
@@ -660,27 +654,21 @@ func verifyRecoveryV3DraftItemTx(ctx context.Context, tx *sql.Tx, batchSHA256 st
 func verifyRecoveryCompleteItemTx(ctx context.Context, tx *sql.Tx, batchSHA256 string,
 	item lyricsrecoveryimport.Item, requested model.SongLyrics,
 ) (int, error) {
-	current, err := sLoadLyricsTx(tx, item.MusicID)
+	current, err := store.LoadLyricsTx(tx, item.MusicID)
 	if err != nil {
 		return 0, err
 	}
-	if !sameLyricsContent(requested, current.lyrics) {
-		return 0, fmt.Errorf("%w: music %d editable Full changed", ErrLyricsRecoveryImportConflict, item.MusicID)
+	if !store.SameLyricsContent(requested, current) {
+		return 0, fmt.Errorf("%w: music %d editable Full changed", store.ErrLyricsRecoveryImportConflict, item.MusicID)
 	}
 	if err := verifyRecoveryFullSourceDocumentTx(ctx, tx, batchSHA256, item); err != nil {
 		return 0, err
 	}
-	return current.lyrics.Revision, nil
-}
-
-// sLoadLyricsTx mirrors Store.loadLyrics for helpers that intentionally receive
-// only the active transaction.
-func sLoadLyricsTx(tx *sql.Tx, musicID int) (storedLyrics, error) {
-	return (&Store{}).loadLyrics(tx, musicID)
+	return current.Revision, nil
 }
 
 func insertRecoveryEditableLyricsTx(ctx context.Context, tx *sql.Tx, lyrics model.SongLyrics, actor string, now int64) error {
-	sourceHash := lyricsSourceHash(lyrics.Lines)
+	sourceHash := store.LyricsSourceHash(lyrics.Lines)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO song_lyrics
 		(music_id,revision,updated_at,updated_by,attribution,translation_credit,proofreading_credit,
 		 source_note,source_url,license_note,source_hash,source_page_id,source_revision_id,source_sha1,
@@ -723,7 +711,7 @@ func insertRecoveryEditableLyricsTx(ctx context.Context, tx *sql.Tx, lyrics mode
 func insertRecoveryFullSourceDocumentTx(ctx context.Context, tx *sql.Tx, batchSHA256 string,
 	item lyricsrecoveryimport.Item, now int64,
 ) error {
-	if item.Draft == nil || validateStoreLyricsSourceDocument(item.Draft.Document) != nil {
+	if item.Draft == nil || store.ValidatePersistedLyricsSourceDocument(item.Draft.Document) != nil {
 		return fmt.Errorf("%w: music %d Full source document is invalid", ErrLyricsRecoveryImportDrift, item.MusicID)
 	}
 	documentJSON, err := json.Marshal(item.Draft.Document)
@@ -741,7 +729,7 @@ func insertRecoveryFullSourceDocumentTx(ctx context.Context, tx *sql.Tx, batchSH
 	if err != nil {
 		return err
 	}
-	return insertLyricsRenditionLocalizationsTx(ctx, tx, documentID, item.Draft.Document, item.Draft.RenditionTranslations, "recovery-import", now)
+	return store.InsertLyricsRenditionLocalizationsTx(ctx, tx, documentID, item.Draft.Document, item.Draft.RenditionTranslations, "recovery-import", now)
 }
 
 func verifyRecoveryFullSourceDocumentTx(ctx context.Context, tx *sql.Tx, batchSHA256 string,
@@ -761,7 +749,7 @@ func verifyRecoveryFullSourceDocumentTx(ctx context.Context, tx *sql.Tx, batchSH
 		item.MusicID, item.Draft.Document.SchemaVersion, item.Draft.Document.ReasonCode, string(documentJSON),
 		item.Draft.DocumentSHA256, batchSHA256).Scan(&documentID); err != nil {
 		if err == sql.ErrNoRows {
-			return fmt.Errorf("%w: music %d Full source document changed", ErrLyricsRecoveryImportConflict, item.MusicID)
+			return fmt.Errorf("%w: music %d Full source document changed", store.ErrLyricsRecoveryImportConflict, item.MusicID)
 		}
 		return err
 	}
@@ -771,18 +759,18 @@ func verifyRecoveryFullSourceDocumentTx(ctx context.Context, tx *sql.Tx, batchSH
 		return err
 	}
 	if count != 0 {
-		return fmt.Errorf("%w: music %d mixed legacy and recovery provenance graphs", ErrLyricsRecoveryImportConflict, item.MusicID)
+		return fmt.Errorf("%w: music %d mixed legacy and recovery provenance graphs", store.ErrLyricsRecoveryImportConflict, item.MusicID)
 	}
 	if item.Draft.Document.SchemaVersion == model.LyricsSourceDocumentSchemaVersionV3 {
-		storedTranslations, err := exportLyricsRenditionLocalizationsTx(ctx, tx, documentID, item.Draft.Document)
+		storedTranslations, err := store.ExportLyricsRenditionLocalizationsTx(ctx, tx, documentID, item.Draft.Document)
 		if err != nil {
 			return err
 		}
-		storedDigest, err := v3TranslationsDigest(storedTranslations)
+		storedDigest, err := store.LyricsRenditionTranslationsDigest(storedTranslations)
 		if err != nil {
 			return err
 		}
-		expectedDigest, err := v3TranslationsDigest(item.Draft.RenditionTranslations)
+		expectedDigest, err := store.LyricsRenditionTranslationsDigest(item.Draft.RenditionTranslations)
 		if err != nil || storedDigest != expectedDigest {
 			if err != nil {
 				return err
@@ -799,7 +787,7 @@ func ensureRecoveryItemOwnsNoEditableLyrics(ctx context.Context, tx *sql.Tx, mus
 		return err
 	}
 	if count != 0 {
-		return fmt.Errorf("%w: non-Full music %d already has editable lyrics", ErrLyricsRecoveryImportConflict, musicID)
+		return fmt.Errorf("%w: non-Full music %d already has editable lyrics", store.ErrLyricsRecoveryImportConflict, musicID)
 	}
 	return nil
 }
@@ -829,7 +817,7 @@ func verifyRecoveryAvailabilityItemTx(ctx context.Context, tx *sql.Tx, batchSHA2
 		return err
 	}
 	if count != 1 {
-		return fmt.Errorf("%w: music %d availability document changed", ErrLyricsRecoveryImportConflict, item.MusicID)
+		return fmt.Errorf("%w: music %d availability document changed", store.ErrLyricsRecoveryImportConflict, item.MusicID)
 	}
 	return nil
 }
@@ -860,7 +848,7 @@ func recoveryItemArtifacts(item lyricsrecoveryimport.Item) []lyricsstaging.Artif
 
 func recoveryItemComponentRefs(item lyricsrecoveryimport.Item) map[string]string {
 	if item.Draft != nil {
-		return stagedLyricsComponentRefs(item.Draft.Document)
+		return store.LyricsSourceComponentRefs(item.Draft.Document)
 	}
 	if item.Availability == nil || item.Availability.State != model.LyricsAvailabilityStateGameOnly {
 		return map[string]string{}
@@ -1050,24 +1038,10 @@ func verifyRecoveryArtifactTx(ctx context.Context, tx *sql.Tx, batchSHA256 strin
 	return nil
 }
 
-func (s *Store) lockRecoveryLyricsManifest(manifest lyricsrecoveryimport.Manifest) func() {
-	seen := make(map[int]struct{}, len(manifest.Items))
-	stripes := make([]int, 0, len(manifest.Items))
+func recoveryManifestMusicIDs(manifest lyricsrecoveryimport.Manifest) []int {
+	musicIDs := make([]int, 0, len(manifest.Items))
 	for _, item := range manifest.Items {
-		stripe := lyricsMutexStripe(item.MusicID)
-		if _, exists := seen[stripe]; exists {
-			continue
-		}
-		seen[stripe] = struct{}{}
-		stripes = append(stripes, stripe)
+		musicIDs = append(musicIDs, item.MusicID)
 	}
-	sort.Ints(stripes)
-	for _, stripe := range stripes {
-		s.lyricsMutexes[stripe].Lock()
-	}
-	return func() {
-		for index := len(stripes) - 1; index >= 0; index-- {
-			s.lyricsMutexes[stripes[index]].Unlock()
-		}
-	}
+	return musicIDs
 }
