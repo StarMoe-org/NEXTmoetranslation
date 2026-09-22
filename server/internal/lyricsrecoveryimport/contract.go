@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"moesekai/server/internal/legacy"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsrecovery"
 	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/lyricsstaging"
@@ -33,12 +34,12 @@ const (
 var canonicalSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type RootBinding struct {
-	SchemaVersion  int                         `json:"schemaVersion"`
-	RootID         string                      `json:"rootId"`
-	RootSHA256     string                      `json:"rootSha256"`
-	CatalogCount   int                         `json:"catalogCount"`
-	MusicIDsSHA256 string                      `json:"musicIdsSha256"`
-	Coverage       lyricsrootmanifest.Coverage `json:"coverage"`
+	SchemaVersion  int                     `json:"schemaVersion"`
+	RootID         string                  `json:"rootId"`
+	RootSHA256     string                  `json:"rootSha256"`
+	CatalogCount   int                     `json:"catalogCount"`
+	MusicIDsSHA256 string                  `json:"musicIdsSha256"`
+	Coverage       lyricscontract.Coverage `json:"coverage"`
 }
 
 type Item struct {
@@ -47,7 +48,7 @@ type Item struct {
 	CatalogFingerprint         string                            `json:"catalogFingerprint"`
 	TargetMusicID              int                               `json:"targetMusicId"`
 	AssociationMusicIDs        []int                             `json:"associationMusicIds"`
-	State                      lyricsrootmanifest.CoverageState  `json:"state"`
+	State                      lyricscontract.CoverageState      `json:"state"`
 	ResultSHA256               string                            `json:"resultSha256"`
 	Draft                      *lyricsstaging.Draft              `json:"draft,omitempty"`
 	Availability               *model.LyricsAvailabilityDocument `json:"availability,omitempty"`
@@ -106,7 +107,7 @@ func ValidateManifest(manifest Manifest) error {
 }
 
 func validateManifest(manifest Manifest, requireDigest bool) error {
-	if manifest.SchemaVersion != ManifestSchemaVersion || manifest.Root.SchemaVersion != lyricsrootmanifest.SchemaVersionV2 ||
+	if manifest.SchemaVersion != ManifestSchemaVersion || manifest.Root.SchemaVersion != lyricscontract.SchemaVersionV2 ||
 		manifest.Root.RootID == "" || strings.TrimSpace(manifest.Root.RootID) != manifest.Root.RootID ||
 		!canonicalSHA256.MatchString(manifest.Root.RootSHA256) || manifest.Root.CatalogCount <= 0 ||
 		manifest.Root.CatalogCount > MaxManifestItems || !canonicalSHA256.MatchString(manifest.Root.MusicIDsSHA256) ||
@@ -120,7 +121,7 @@ func validateManifest(manifest Manifest, requireDigest bool) error {
 	} else if manifest.BatchSHA256 != "" {
 		return errors.New("new recovery import manifest contains a premature digest")
 	}
-	stateCounts := map[lyricsrootmanifest.CoverageState]int{}
+	stateCounts := map[lyricscontract.CoverageState]int{}
 	musicIDs := make([]int, len(manifest.Items))
 	lastMusicID := 0
 	for index, item := range manifest.Items {
@@ -134,7 +135,7 @@ func validateManifest(manifest Manifest, requireDigest bool) error {
 		}
 		stateCounts[item.State]++
 	}
-	musicIDsSHA256, err := lyricsrootmanifest.OrderedMusicIDsSHA256(musicIDs)
+	musicIDsSHA256, err := lyricscontract.OrderedMusicIDsSHA256(musicIDs)
 	if err != nil || musicIDsSHA256 != manifest.Root.MusicIDsSHA256 {
 		return errors.New("recovery import manifest music IDs do not match the compact-root binding")
 	}
@@ -164,7 +165,7 @@ func validateItem(item Item) error {
 		}
 	}
 	switch item.State {
-	case lyricsrootmanifest.CoverageComplete, lyricsrootmanifest.CoverageGameOnly:
+	case lyricscontract.CoverageComplete, lyricscontract.CoverageGameOnly:
 		if item.Draft != nil {
 			if item.Availability != nil || item.AvailabilityDocumentSHA256 != "" || item.Artifacts != nil || item.Translations != nil {
 				return errors.New("rendition item mixes Draft and availability ownership")
@@ -177,12 +178,12 @@ func validateItem(item Item) error {
 				!reflect.DeepEqual(item.Draft.AssociationMusicIDs, item.AssociationMusicIDs) {
 				return errors.New("rendition staging draft drifted from the recovery item identity")
 			}
-			if item.State == lyricsrootmanifest.CoverageGameOnly && item.Draft.Document.SchemaVersion != model.LyricsSourceDocumentSchemaVersionV3 {
+			if item.State == lyricscontract.CoverageGameOnly && item.Draft.Document.SchemaVersion != model.LyricsSourceDocumentSchemaVersionV3 {
 				return errors.New("Game-only Draft ownership requires source v3")
 			}
 			break
 		}
-		if item.State == lyricsrootmanifest.CoverageComplete {
+		if item.State == lyricscontract.CoverageComplete {
 			return errors.New("complete item must own a staging draft")
 		}
 		if item.Availability == nil || item.Artifacts == nil || len(item.Artifacts) == 0 ||
@@ -195,9 +196,9 @@ func validateItem(item Item) error {
 		if item.Availability.Game == nil || len(item.Translations) != len(item.Availability.Game.Lines) {
 			return errors.New("Game-only translations do not align with Game text")
 		}
-	case lyricsrootmanifest.CoverageSatisfiedNoLyrics,
-		lyricsrootmanifest.CoverageAmbiguous, lyricsrootmanifest.CoverageMissing,
-		lyricsrootmanifest.CoverageIncomplete, lyricsrootmanifest.CoverageFailed:
+	case lyricscontract.CoverageSatisfiedNoLyrics,
+		lyricscontract.CoverageAmbiguous, lyricscontract.CoverageMissing,
+		lyricscontract.CoverageIncomplete, lyricscontract.CoverageFailed:
 		if item.Draft != nil || item.Availability == nil || item.Artifacts != nil || item.Translations != nil {
 			return errors.New("text-free recovery item leaked source artifacts or translations")
 		}
@@ -297,7 +298,7 @@ func validateItemAgainstResult(item Item, result lyricsrecovery.SongResult) erro
 		return nil
 	}
 	switch item.State {
-	case lyricsrootmanifest.CoverageComplete:
+	case lyricscontract.CoverageComplete:
 		document := item.Draft.Document
 		if result.Full == nil || document.ReasonCode != result.ReasonCode ||
 			!reflect.DeepEqual(document.Full, *result.Full) ||
@@ -305,13 +306,13 @@ func validateItemAgainstResult(item Item, result lyricsrecovery.SongResult) erro
 			!reflect.DeepEqual(item.Draft.Translations, result.Translations) {
 			return errors.New("Full draft drifted from the authoritative recovery composition")
 		}
-	case lyricsrootmanifest.CoverageGameOnly:
+	case lyricscontract.CoverageGameOnly:
 		if result.Game == nil || item.Availability.ReasonCode != result.ReasonCode ||
 			!reflect.DeepEqual(item.Availability.Game, result.Game) ||
 			!reflect.DeepEqual(item.Translations, result.Translations) {
 			return errors.New("Game-only availability drifted from the authoritative recovery composition")
 		}
-	case lyricsrootmanifest.CoverageSatisfiedNoLyrics:
+	case lyricscontract.CoverageSatisfiedNoLyrics:
 		if result.NoLyricsReason != lyricsrecovery.NoLyricsReasonCatalogInstrumental ||
 			item.Availability.NoLyricsReason != model.LyricsAvailabilityNoLyricsCatalogInstrumental {
 			return errors.New("satisfied no-lyrics reason drifted from recovery")
@@ -324,20 +325,20 @@ func validateItemAgainstResult(item Item, result lyricsrecovery.SongResult) erro
 	return nil
 }
 
-func availabilityStateMatchesCoverage(state model.LyricsAvailabilityState, coverage lyricsrootmanifest.CoverageState) bool {
+func availabilityStateMatchesCoverage(state model.LyricsAvailabilityState, coverage lyricscontract.CoverageState) bool {
 	return string(state) == string(coverage)
 }
 
-func coverageCountsMatch(coverage lyricsrootmanifest.Coverage, counts map[lyricsrootmanifest.CoverageState]int, total int) bool {
-	return coverage.Total == total && coverage.Complete == counts[lyricsrootmanifest.CoverageComplete] &&
-		coverage.GameOnly == counts[lyricsrootmanifest.CoverageGameOnly] &&
-		coverage.SatisfiedNoLyrics == counts[lyricsrootmanifest.CoverageSatisfiedNoLyrics] &&
-		coverage.CatalogReview == counts[lyricsrootmanifest.CoverageCatalogReview] &&
-		coverage.GameSizeEvidence == counts[lyricsrootmanifest.CoverageGameSizeEvidence] &&
-		coverage.Ambiguous == counts[lyricsrootmanifest.CoverageAmbiguous] &&
-		coverage.Missing == counts[lyricsrootmanifest.CoverageMissing] &&
-		coverage.Incomplete == counts[lyricsrootmanifest.CoverageIncomplete] &&
-		coverage.Failed == counts[lyricsrootmanifest.CoverageFailed]
+func coverageCountsMatch(coverage lyricscontract.Coverage, counts map[lyricscontract.CoverageState]int, total int) bool {
+	return coverage.Total == total && coverage.Complete == counts[lyricscontract.CoverageComplete] &&
+		coverage.GameOnly == counts[lyricscontract.CoverageGameOnly] &&
+		coverage.SatisfiedNoLyrics == counts[lyricscontract.CoverageSatisfiedNoLyrics] &&
+		coverage.CatalogReview == counts[lyricscontract.CoverageCatalogReview] &&
+		coverage.GameSizeEvidence == counts[lyricscontract.CoverageGameSizeEvidence] &&
+		coverage.Ambiguous == counts[lyricscontract.CoverageAmbiguous] &&
+		coverage.Missing == counts[lyricscontract.CoverageMissing] &&
+		coverage.Incomplete == counts[lyricscontract.CoverageIncomplete] &&
+		coverage.Failed == counts[lyricscontract.CoverageFailed]
 }
 
 func strictlyIncreasingPositiveInts(values []int) bool {
@@ -423,15 +424,15 @@ func cloneManifest(manifest Manifest) Manifest {
 	return manifest
 }
 
-func cloneStagingRenditionTranslations(input []lyricsstaging.RenditionTranslation) []lyricsstaging.RenditionTranslation {
+func cloneStagingRenditionTranslations(input []lyricscontract.RenditionTranslation) []lyricscontract.RenditionTranslation {
 	if input == nil {
 		return nil
 	}
-	result := make([]lyricsstaging.RenditionTranslation, len(input))
+	result := make([]lyricscontract.RenditionTranslation, len(input))
 	for index, item := range input {
 		result[index] = item
 		result[index].Translations = append([]string(nil), item.Translations...)
-		result[index].PeerTranslations = make([]lyricsstaging.RenditionPeerTranslation, len(item.PeerTranslations))
+		result[index].PeerTranslations = make([]lyricscontract.RenditionPeerTranslation, len(item.PeerTranslations))
 		for peerIndex, peer := range item.PeerTranslations {
 			result[index].PeerTranslations[peerIndex] = peer
 			result[index].PeerTranslations[peerIndex].Translations = append([]string(nil), peer.Translations...)

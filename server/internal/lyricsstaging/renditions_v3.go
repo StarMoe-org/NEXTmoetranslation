@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"moesekai/server/internal/lyricscompose"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 )
@@ -24,7 +24,7 @@ func BuildRecoveryPeerDraft(
 	associationMusicIDs []int,
 	document model.LyricsSourceDocument,
 	artifacts []Artifact,
-	translations []RenditionTranslation,
+	translations []lyricscontract.RenditionTranslation,
 ) (Draft, error) {
 	if musicID <= 0 || targetMusicID != musicID || strings.TrimSpace(japaneseTitle) == "" ||
 		!canonicalSHA256.MatchString(catalogFingerprint) {
@@ -114,18 +114,18 @@ func validateV3DraftPublicFields(draft Draft) error {
 	return nil
 }
 
-func cloneRenditionTranslations(input []RenditionTranslation) []RenditionTranslation {
+func cloneRenditionTranslations(input []lyricscontract.RenditionTranslation) []lyricscontract.RenditionTranslation {
 	if input == nil {
 		return nil
 	}
-	result := make([]RenditionTranslation, len(input))
+	result := make([]lyricscontract.RenditionTranslation, len(input))
 	for index, item := range input {
 		result[index] = item
 		result[index].Translations = append([]string(nil), item.Translations...)
 		if item.Translations == nil {
 			result[index].Translations = nil
 		}
-		result[index].PeerTranslations = make([]RenditionPeerTranslation, len(item.PeerTranslations))
+		result[index].PeerTranslations = make([]lyricscontract.RenditionPeerTranslation, len(item.PeerTranslations))
 		for peerIndex, peer := range item.PeerTranslations {
 			result[index].PeerTranslations[peerIndex] = peer
 			result[index].PeerTranslations[peerIndex].Translations = append([]string(nil), peer.Translations...)
@@ -140,8 +140,8 @@ func cloneRenditionTranslations(input []RenditionTranslation) []RenditionTransla
 	return result
 }
 
-func renditionTranslationMap(input []RenditionTranslation) map[string]RenditionTranslation {
-	result := make(map[string]RenditionTranslation, len(input))
+func renditionTranslationMap(input []lyricscontract.RenditionTranslation) map[string]lyricscontract.RenditionTranslation {
+	result := make(map[string]lyricscontract.RenditionTranslation, len(input))
 	for _, item := range input {
 		result[item.RenditionKey] = item
 	}
@@ -197,7 +197,7 @@ func validateRenditionTranslationLines(musicID int, renditionKey, label string, 
 	return total, nil
 }
 
-func validateRenditionTranslations(musicID int, renditions []model.LyricsSourceRendition, translations []RenditionTranslation) error {
+func validateRenditionTranslations(musicID int, renditions []model.LyricsSourceRendition, translations []lyricscontract.RenditionTranslation) error {
 	if translations == nil {
 		return nil
 	}
@@ -369,7 +369,7 @@ func validateV3FullMetadata(document model.LyricsSourceDocument) error {
 			if full == nil {
 				continue
 			}
-			if err := lyricscompose.ValidatePersistedPerformerMetadata(*full); err != nil {
+			if err := lyricscontract.ValidatePersistedPerformerMetadata(*full); err != nil {
 				return err
 			}
 			canonical, err := lyricssource.RecoveryPersistedRubyGeneratorVersion(full.RubyGeneratorVersion)

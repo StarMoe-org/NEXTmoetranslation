@@ -16,8 +16,8 @@ import (
 	"unicode/utf8"
 
 	"moesekai/server/internal/legacy"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
-	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
 )
 
@@ -1964,15 +1964,15 @@ func renditionLocalizationBackupDigest(
 		}
 		lines[key][record.Position] = record.Text
 	}
-	var translations []lyricsstaging.RenditionTranslation
+	var translations []lyricscontract.RenditionTranslation
 	if len(parents) > 0 {
-		translations = make([]lyricsstaging.RenditionTranslation, len(document.Renditions))
+		translations = make([]lyricscontract.RenditionTranslation, len(document.Renditions))
 		for index, rendition := range document.Renditions {
 			parent, found := parents[rendition.RenditionKey]
 			if !found {
 				return "", fmt.Errorf("lyrics rendition localization %d/%s is incomplete", documentID, rendition.RenditionKey)
 			}
-			item := lyricsstaging.RenditionTranslation{
+			item := lyricscontract.RenditionTranslation{
 				RenditionKey:       rendition.RenditionKey,
 				TranslationCredit:  parent.TranslationCredit,
 				ProofreadingCredit: parent.ProofreadingCredit,
@@ -2026,7 +2026,7 @@ func renditionLocalizationBackupDigest(
 	} else {
 		body, err = json.Marshal(struct {
 			Version      int                                          `json:"version"`
-			Translations []lyricsstaging.RenditionTranslation         `json:"translations"`
+			Translations []lyricscontract.RenditionTranslation        `json:"translations"`
 			PeerLines    []LyricsRenditionTranslationLineBackupRecord `json:"peerLines"`
 		}{Version: 2, Translations: translations, PeerLines: peerLines})
 	}

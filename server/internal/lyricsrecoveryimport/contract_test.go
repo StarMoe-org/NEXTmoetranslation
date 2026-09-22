@@ -5,25 +5,25 @@ import (
 	"strings"
 	"testing"
 
-	"moesekai/server/internal/lyricsrootmanifest"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
 )
 
 func textFreeManifestFixture(t *testing.T) Manifest {
 	t.Helper()
-	states := []lyricsrootmanifest.CoverageState{
-		lyricsrootmanifest.CoverageSatisfiedNoLyrics,
-		lyricsrootmanifest.CoverageAmbiguous,
-		lyricsrootmanifest.CoverageMissing,
-		lyricsrootmanifest.CoverageIncomplete,
+	states := []lyricscontract.CoverageState{
+		lyricscontract.CoverageSatisfiedNoLyrics,
+		lyricscontract.CoverageAmbiguous,
+		lyricscontract.CoverageMissing,
+		lyricscontract.CoverageIncomplete,
 	}
 	items := make([]Item, len(states))
 	for index, state := range states {
 		availabilityState := model.LyricsAvailabilityState(state)
 		reason := model.LyricsSourceVersionReasonVersionConflict
 		noLyricsReason := ""
-		if state == lyricsrootmanifest.CoverageSatisfiedNoLyrics {
+		if state == lyricscontract.CoverageSatisfiedNoLyrics {
 			reason = ""
 			noLyricsReason = model.LyricsAvailabilityNoLyricsCatalogInstrumental
 		}
@@ -43,17 +43,17 @@ func textFreeManifestFixture(t *testing.T) Manifest {
 			Availability: &document, AvailabilityDocumentSHA256: documentSHA,
 		}
 	}
-	musicIDsSHA, err := lyricsrootmanifest.OrderedMusicIDsSHA256([]int{1, 2, 3, 4})
+	musicIDsSHA, err := lyricscontract.OrderedMusicIDsSHA256([]int{1, 2, 3, 4})
 	if err != nil {
 		t.Fatal(err)
 	}
-	coverage := lyricsrootmanifest.Coverage{
+	coverage := lyricscontract.Coverage{
 		Total: 4, SatisfiedNoLyrics: 1, Ambiguous: 1, Missing: 1, Incomplete: 1,
 	}
 	manifest := Manifest{
 		SchemaVersion: ManifestSchemaVersion,
 		Root: RootBinding{
-			SchemaVersion: lyricsrootmanifest.SchemaVersionV2, RootID: "root-text-free-fixture",
+			SchemaVersion: lyricscontract.SchemaVersionV2, RootID: "root-text-free-fixture",
 			RootSHA256: strings.Repeat("f", 64), CatalogCount: 4, MusicIDsSHA256: musicIDsSHA, Coverage: coverage,
 		},
 		Items: items,
@@ -93,8 +93,8 @@ func TestTextFreeRecoveryImportManifestRoundTrip(t *testing.T) {
 
 func TestRecoveryImportManifestCloneDeepCopiesPeerTranslations(t *testing.T) {
 	manifest := textFreeManifestFixture(t)
-	manifest.Items[0].Draft = &lyricsstaging.Draft{RenditionTranslations: []lyricsstaging.RenditionTranslation{{
-		RenditionKey: "sekai", PeerTranslations: []lyricsstaging.RenditionPeerTranslation{{
+	manifest.Items[0].Draft = &lyricsstaging.Draft{RenditionTranslations: []lyricscontract.RenditionTranslation{{
+		RenditionKey: "sekai", PeerTranslations: []lyricscontract.RenditionPeerTranslation{{
 			Side: "game", Locale: "zh-CN", Translations: []string{"游戏译文"},
 		}},
 	}}}

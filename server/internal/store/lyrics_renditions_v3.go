@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"moesekai/server/internal/lyricsstaging"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/model"
 )
 
@@ -85,7 +85,7 @@ func sourceV3ComponentCount(document model.LyricsSourceDocument) int {
 	return len(bindings)
 }
 
-func insertLyricsRenditionLocalizationsTx(ctx context.Context, tx *sql.Tx, documentID int64, document model.LyricsSourceDocument, translations []lyricsstaging.RenditionTranslation, actor string, now int64) error {
+func insertLyricsRenditionLocalizationsTx(ctx context.Context, tx *sql.Tx, documentID int64, document model.LyricsSourceDocument, translations []lyricscontract.RenditionTranslation, actor string, now int64) error {
 	if document.SchemaVersion != model.LyricsSourceDocumentSchemaVersionV3 {
 		return nil
 	}
@@ -142,7 +142,7 @@ func insertLyricsRenditionLocalizationsTx(ctx context.Context, tx *sql.Tx, docum
 	return nil
 }
 
-func exportLyricsRenditionLocalizationsTx(ctx context.Context, tx *sql.Tx, documentID int64, document model.LyricsSourceDocument) ([]lyricsstaging.RenditionTranslation, error) {
+func exportLyricsRenditionLocalizationsTx(ctx context.Context, tx *sql.Tx, documentID int64, document model.LyricsSourceDocument) ([]lyricscontract.RenditionTranslation, error) {
 	if document.SchemaVersion != model.LyricsSourceDocumentSchemaVersionV3 {
 		return nil, nil
 	}
@@ -152,13 +152,13 @@ func exportLyricsRenditionLocalizationsTx(ctx context.Context, tx *sql.Tx, docum
 		return nil, err
 	}
 	defer rows.Close()
-	byKey := map[string]lyricsstaging.RenditionTranslation{}
+	byKey := map[string]lyricscontract.RenditionTranslation{}
 	expectedKeys := make(map[string]struct{}, len(document.Renditions))
 	for _, rendition := range document.Renditions {
 		expectedKeys[rendition.RenditionKey] = struct{}{}
 	}
 	for rows.Next() {
-		var item lyricsstaging.RenditionTranslation
+		var item lyricscontract.RenditionTranslation
 		if err := rows.Scan(&item.RenditionKey, &item.TranslationCredit, &item.ProofreadingCredit); err != nil {
 			return nil, err
 		}
@@ -205,7 +205,7 @@ func exportLyricsRenditionLocalizationsTx(ctx context.Context, tx *sql.Tx, docum
 	if err := lineRows.Close(); err != nil {
 		return nil, err
 	}
-	peerByKey := make(map[string][]lyricsstaging.RenditionPeerTranslation, len(byKey))
+	peerByKey := make(map[string][]lyricscontract.RenditionPeerTranslation, len(byKey))
 	var hasPeerTable int
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=29)`).Scan(&hasPeerTable); err != nil {
 		return nil, err
@@ -237,7 +237,7 @@ func exportLyricsRenditionLocalizationsTx(ctx context.Context, tx *sql.Tx, docum
 			}
 			peers := peerByKey[renditionKey]
 			if peerKey != lastPeerKey {
-				peers = append(peers, lyricsstaging.RenditionPeerTranslation{Side: side, Locale: locale})
+				peers = append(peers, lyricscontract.RenditionPeerTranslation{Side: side, Locale: locale})
 			}
 			if len(peers) == 0 || position != len(peers[len(peers)-1].Translations) {
 				peerRows.Close()
@@ -267,7 +267,7 @@ func exportLyricsRenditionLocalizationsTx(ctx context.Context, tx *sql.Tx, docum
 			}
 		}
 	}
-	result := make([]lyricsstaging.RenditionTranslation, 0, len(document.Renditions))
+	result := make([]lyricscontract.RenditionTranslation, 0, len(document.Renditions))
 	for _, rendition := range document.Renditions {
 		item, found := byKey[rendition.RenditionKey]
 		if !found {
@@ -296,7 +296,7 @@ func renditionLineCountForStore(rendition model.LyricsSourceRendition) int {
 	return 0
 }
 
-func v3TranslationsJSON(translations []lyricsstaging.RenditionTranslation) (string, error) {
+func v3TranslationsJSON(translations []lyricscontract.RenditionTranslation) (string, error) {
 	if translations == nil {
 		return "", nil
 	}
@@ -304,7 +304,7 @@ func v3TranslationsJSON(translations []lyricsstaging.RenditionTranslation) (stri
 	return string(body), err
 }
 
-func v3TranslationsDigest(translations []lyricsstaging.RenditionTranslation) (string, error) {
+func v3TranslationsDigest(translations []lyricscontract.RenditionTranslation) (string, error) {
 	body, err := v3TranslationsJSON(translations)
 	if err != nil {
 		return "", err
@@ -325,7 +325,7 @@ func sourceV3RenditionKeys(document model.LyricsSourceDocument) []string {
 	return keys
 }
 
-func sourceV3TranslationCreditPair(item lyricsstaging.RenditionTranslation) (string, string) {
+func sourceV3TranslationCreditPair(item lyricscontract.RenditionTranslation) (string, string) {
 	return strings.TrimSpace(item.TranslationCredit), strings.TrimSpace(item.ProofreadingCredit)
 }
 
@@ -366,7 +366,7 @@ type lyricsRenditionLocalizationState struct {
 	HasRows      bool
 	Revision     int
 	UpdatedAt    int64
-	Translations []lyricsstaging.RenditionTranslation
+	Translations []lyricscontract.RenditionTranslation
 	// SideTranslations contains only explicitly persisted non-primary peers.
 	// The historical primary side remains in Translations for backup and import
 	// compatibility (Full when present, otherwise Game).
@@ -678,10 +678,10 @@ func loadLyricsRenditionLocalizationState(q queryRower, documentID int64, docume
 		return lyricsRenditionLocalizationState{}, err
 	}
 	defer rows.Close()
-	byKey := make(map[string]lyricsstaging.RenditionTranslation, len(document.Renditions))
+	byKey := make(map[string]lyricscontract.RenditionTranslation, len(document.Renditions))
 	state := lyricsRenditionLocalizationState{}
 	for rows.Next() {
-		var item lyricsstaging.RenditionTranslation
+		var item lyricscontract.RenditionTranslation
 		var locale string
 		var updatedAt int64
 		var revision int
@@ -741,7 +741,7 @@ func loadLyricsRenditionLocalizationState(q queryRower, documentID int64, docume
 	if err := lineRows.Close(); err != nil {
 		return lyricsRenditionLocalizationState{}, err
 	}
-	state.Translations = make([]lyricsstaging.RenditionTranslation, 0, len(document.Renditions))
+	state.Translations = make([]lyricscontract.RenditionTranslation, 0, len(document.Renditions))
 	for _, rendition := range document.Renditions {
 		item, found := byKey[rendition.RenditionKey]
 		if !found {
@@ -825,7 +825,7 @@ func buildLyricsRenditionEditorDocument(bundle lyricsRenditionEditorBundle, loca
 		MusicID: bundle.musicID, Status: "draft", Revision: localization.Revision,
 		UpdatedAt: formatTimestamp(updatedAt), Renditions: make([]PublicLyricsV3Rendition, 0, len(bundle.document.Renditions)),
 	}
-	localizedByKey := make(map[string]lyricsstaging.RenditionTranslation, len(localization.Translations))
+	localizedByKey := make(map[string]lyricscontract.RenditionTranslation, len(localization.Translations))
 	for _, item := range localization.Translations {
 		localizedByKey[item.RenditionKey] = item
 	}
@@ -1424,11 +1424,11 @@ func lyricsRenditionEditorTranslations(
 	preserveRows bool,
 	peerBytes int,
 	validateRequestedLocalization bool,
-) ([]lyricsstaging.RenditionTranslation, error) {
+) ([]lyricscontract.RenditionTranslation, error) {
 	if len(input.Renditions) != len(current.Renditions) || len(input.Renditions) == 0 {
 		return nil, &LyricsRenditionContractError{Code: "source_drift", Details: []string{"plural rendition set changed"}}
 	}
-	result := make([]lyricsstaging.RenditionTranslation, len(input.Renditions))
+	result := make([]lyricscontract.RenditionTranslation, len(input.Renditions))
 	hasLocalization := preserveRows
 	totalBytes := peerBytes
 	for index := range input.Renditions {
@@ -1437,7 +1437,7 @@ func lyricsRenditionEditorTranslations(
 		if rendition.Key != currentRendition.Key {
 			return nil, &LyricsRenditionContractError{Code: "source_drift", Details: []string{"plural rendition order changed"}}
 		}
-		item := lyricsstaging.RenditionTranslation{RenditionKey: rendition.Key}
+		item := lyricscontract.RenditionTranslation{RenditionKey: rendition.Key}
 		if rendition.TranslationCredits != nil {
 			item.TranslationCredit = rendition.TranslationCredits.Translation
 			item.ProofreadingCredit = rendition.TranslationCredits.Proofreading

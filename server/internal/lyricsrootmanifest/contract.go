@@ -3,7 +3,6 @@ package lyricsrootmanifest
 
 import (
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsevidencepack"
 	"moesekai/server/internal/model"
 )
@@ -22,11 +22,9 @@ const (
 	SchemaVersionV1     = 1
 	CanonicalEncodingV1 = "moesekai-lyrics-root-manifest-ordered-json-v1"
 	DigestAlgorithmV1   = "sha256-moesekai-lyrics-root-manifest-v1"
-	SchemaVersionV2     = 2
 	CanonicalEncodingV2 = "moesekai-lyrics-root-manifest-ordered-json-v2"
 	DigestAlgorithmV2   = "sha256-moesekai-lyrics-root-manifest-v2"
 
-	MaxCatalogRecordCount   = 10_000
 	MaxManifestBytes        = 16 << 20
 	MaxAssemblyRequestBytes = 16 << 20
 	MaxJSONDepth            = 16
@@ -46,22 +44,10 @@ var (
 
 type ScopeKind string
 
-type CoverageState string
-
 const (
 	ScopeFinal   ScopeKind = "final"
 	ScopePartial ScopeKind = "partial"
 	ScopeRetry   ScopeKind = "retry"
-
-	CoverageComplete          CoverageState = "complete"
-	CoverageGameOnly          CoverageState = "game_only"
-	CoverageSatisfiedNoLyrics CoverageState = "satisfied_no_lyrics"
-	CoverageCatalogReview     CoverageState = "catalog_review"
-	CoverageGameSizeEvidence  CoverageState = "game_size_evidence"
-	CoverageAmbiguous         CoverageState = "ambiguous"
-	CoverageMissing           CoverageState = "missing"
-	CoverageIncomplete        CoverageState = "incomplete"
-	CoverageFailed            CoverageState = "failed"
 )
 
 // CatalogBinding contains only immutable catalog identity and hash material.
@@ -98,33 +84,15 @@ type ProviderOutcomeRef struct {
 }
 
 // SelectedEvidenceRef is the exact pack reference selected for one song.
-type SelectedEvidenceRef = lyricsevidencepack.EvidenceRef
+type SelectedEvidenceRef = lyricscontract.EvidenceRef
 
 // SongResultRef is the ordered compact per-song output binding.
 type SongResultRef struct {
-	MusicID          int                   `json:"musicId"`
-	State            CoverageState         `json:"state"`
-	ResultSHA256     string                `json:"resultSha256"`
-	ProviderOutcomes []ProviderOutcomeRef  `json:"providerOutcomes"`
-	SelectedEvidence []SelectedEvidenceRef `json:"selectedEvidence"`
-}
-
-// Coverage contains only counters derived from the ordered song refs.
-type Coverage struct {
-	Total                   int `json:"total"`
-	Complete                int `json:"complete"`
-	GameOnly                int `json:"gameOnly,omitempty"`
-	SatisfiedNoLyrics       int `json:"satisfiedNoLyrics,omitempty"`
-	CatalogReview           int `json:"catalogReview"`
-	GameSizeEvidence        int `json:"gameSizeEvidence"`
-	Ambiguous               int `json:"ambiguous"`
-	Missing                 int `json:"missing"`
-	Incomplete              int `json:"incomplete"`
-	Failed                  int `json:"failed"`
-	ProviderOutcomeRefCount int `json:"providerOutcomeRefCount"`
-	SelectionRefCount       int `json:"selectionRefCount"`
-	UniqueAcquisitionCount  int `json:"uniqueAcquisitionCount"`
-	UniqueEvidenceCount     int `json:"uniqueEvidenceCount"`
+	MusicID          int                          `json:"musicId"`
+	State            lyricscontract.CoverageState `json:"state"`
+	ResultSHA256     string                       `json:"resultSha256"`
+	ProviderOutcomes []ProviderOutcomeRef         `json:"providerOutcomes"`
+	SelectedEvidence []SelectedEvidenceRef        `json:"selectedEvidence"`
 }
 
 // PackShardBinding retains the required ordered shard digest sequence and counters.
@@ -160,22 +128,22 @@ type AssemblyRequest struct {
 // lyrics, raw payload, translation, romanization, private error, timestamp, or
 // path field.
 type Manifest struct {
-	SchemaVersion     int                 `json:"schemaVersion"`
-	CanonicalEncoding string              `json:"canonicalEncoding"`
-	DigestAlgorithm   string              `json:"digestAlgorithm"`
-	RootID            string              `json:"rootId"`
-	Scope             ScopeBinding        `json:"scope"`
-	Catalog           CatalogBinding      `json:"catalog"`
-	Plan              PlanBinding         `json:"plan"`
-	Songs             []SongResultRef     `json:"songs"`
-	EvidencePack      EvidencePackBinding `json:"evidencePack"`
-	Coverage          Coverage            `json:"coverage"`
-	RootSHA256        string              `json:"rootSha256"`
+	SchemaVersion     int                     `json:"schemaVersion"`
+	CanonicalEncoding string                  `json:"canonicalEncoding"`
+	DigestAlgorithm   string                  `json:"digestAlgorithm"`
+	RootID            string                  `json:"rootId"`
+	Scope             ScopeBinding            `json:"scope"`
+	Catalog           CatalogBinding          `json:"catalog"`
+	Plan              PlanBinding             `json:"plan"`
+	Songs             []SongResultRef         `json:"songs"`
+	EvidencePack      EvidencePackBinding     `json:"evidencePack"`
+	Coverage          lyricscontract.Coverage `json:"coverage"`
+	RootSHA256        string                  `json:"rootSha256"`
 }
 
 type requestDerived struct {
-	coverage Coverage
-	selected []lyricsevidencepack.EvidenceRef
+	coverage lyricscontract.Coverage
+	selected []lyricscontract.EvidenceRef
 }
 
 // Assemble derives a final root, all counters, and pack bindings and proves the
@@ -202,7 +170,7 @@ func AssembleAgainstParent(
 	if err := Validate(parent); err != nil {
 		return Manifest{}, fmt.Errorf("validate parent lyrics root: %w", err)
 	}
-	if _, err := validateRequest(request, SchemaVersionV2); err != nil {
+	if _, err := validateRequest(request, lyricscontract.SchemaVersionV2); err != nil {
 		return Manifest{}, err
 	}
 	if err := validateParentBinding(request, parent); err != nil {
@@ -215,7 +183,7 @@ func assemble(request AssemblyRequest, resolver *lyricsevidencepack.Resolver) (M
 	if resolver == nil {
 		return Manifest{}, errors.New("validated evidence pack resolver is required")
 	}
-	derived, err := validateRequest(request, SchemaVersionV2)
+	derived, err := validateRequest(request, lyricscontract.SchemaVersionV2)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -224,7 +192,7 @@ func assemble(request AssemblyRequest, resolver *lyricsevidencepack.Resolver) (M
 	}
 	packManifest := resolver.Manifest()
 	manifest := Manifest{
-		SchemaVersion: SchemaVersionV2, CanonicalEncoding: CanonicalEncodingV2, DigestAlgorithm: DigestAlgorithmV2,
+		SchemaVersion: lyricscontract.SchemaVersionV2, CanonicalEncoding: CanonicalEncodingV2, DigestAlgorithm: DigestAlgorithmV2,
 		RootID: request.RootID, Scope: request.Scope, Catalog: request.Catalog, Plan: request.Plan,
 		Songs: cloneSongs(request.Songs), EvidencePack: bindingFromPack(packManifest), Coverage: derived.coverage,
 	}
@@ -243,7 +211,7 @@ func assemble(request AssemblyRequest, resolver *lyricsevidencepack.Resolver) (M
 func Validate(manifest Manifest) error {
 	validEnvelope := manifest.SchemaVersion == SchemaVersionV1 &&
 		manifest.CanonicalEncoding == CanonicalEncodingV1 && manifest.DigestAlgorithm == DigestAlgorithmV1 ||
-		manifest.SchemaVersion == SchemaVersionV2 &&
+		manifest.SchemaVersion == lyricscontract.SchemaVersionV2 &&
 			manifest.CanonicalEncoding == CanonicalEncodingV2 && manifest.DigestAlgorithm == DigestAlgorithmV2
 	if !validEnvelope || !canonicalSHA256.MatchString(manifest.RootSHA256) {
 		return errors.New("lyrics root manifest envelope is invalid")
@@ -325,29 +293,6 @@ func MarshalCanonical(manifest Manifest) ([]byte, error) {
 	return body, nil
 }
 
-// OrderedMusicIDsSHA256 returns the domain-separated digest of one positive,
-// strictly increasing, unique, bounded catalog music-ID sequence.
-func OrderedMusicIDsSHA256(musicIDs []int) (string, error) {
-	if len(musicIDs) == 0 || len(musicIDs) > MaxCatalogRecordCount {
-		return "", errors.New("catalog ordered music IDs must have a positive bounded count")
-	}
-	digest := sha256.New()
-	_, _ = digest.Write([]byte("moesekai-lyrics-root-catalog-ordered-music-ids-v1\x00"))
-	var encoded [8]byte
-	binary.BigEndian.PutUint64(encoded[:], uint64(len(musicIDs)))
-	_, _ = digest.Write(encoded[:])
-	lastMusicID := 0
-	for index, musicID := range musicIDs {
-		if musicID <= 0 || index > 0 && musicID <= lastMusicID {
-			return "", errors.New("catalog ordered music IDs must be positive, strictly increasing, and unique")
-		}
-		binary.BigEndian.PutUint64(encoded[:], uint64(musicID))
-		_, _ = digest.Write(encoded[:])
-		lastMusicID = musicID
-	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
-}
-
 func validateParentBinding(request AssemblyRequest, parent Manifest) error {
 	if request.Scope.Kind != ScopePartial && request.Scope.Kind != ScopeRetry {
 		return errors.New("only partial or retry lyrics roots may bind a parent root")
@@ -376,12 +321,12 @@ func validateParentBinding(request AssemblyRequest, parent Manifest) error {
 
 func validateRequest(request AssemblyRequest, schemaVersion int) (requestDerived, error) {
 	var derived requestDerived
-	if schemaVersion != SchemaVersionV1 && schemaVersion != SchemaVersionV2 {
+	if schemaVersion != SchemaVersionV1 && schemaVersion != lyricscontract.SchemaVersionV2 {
 		return derived, errors.New("lyrics root request schema version is invalid")
 	}
 	if !validIdentity(request.RootID) || !validIdentity(request.Scope.ScopeID) || request.Catalog.SchemaVersion <= 0 ||
 		request.Catalog.RuntimeSchemaVersion < request.Catalog.SchemaVersion || request.Catalog.RecordCount <= 0 ||
-		request.Catalog.RecordCount > MaxCatalogRecordCount ||
+		request.Catalog.RecordCount > lyricscontract.MaxCatalogRecordCount ||
 		!validIdentity(request.Catalog.IdentityPolicyVersion) || !canonicalSHA256.MatchString(request.Catalog.SourceSHA256) ||
 		!canonicalSHA256.MatchString(request.Catalog.IdentitySHA256) ||
 		!canonicalSHA256.MatchString(request.Catalog.MusicIDsSHA256) || !validIdentity(request.Plan.PlanID) ||
@@ -403,7 +348,7 @@ func validateRequest(request AssemblyRequest, schemaVersion int) (requestDerived
 	default:
 		return derived, errors.New("lyrics root scope kind is invalid")
 	}
-	coverage := Coverage{Total: len(request.Songs)}
+	coverage := lyricscontract.Coverage{Total: len(request.Songs)}
 	musicIDs := make([]int, len(request.Songs))
 	acquisitions := make(map[string]SelectedEvidenceRef)
 	evidence := make(map[string]SelectedEvidenceRef)
@@ -417,32 +362,32 @@ func validateRequest(request AssemblyRequest, schemaVersion int) (requestDerived
 		lastMusicID = song.MusicID
 		musicIDs[songIndex] = song.MusicID
 		switch song.State {
-		case CoverageComplete:
+		case lyricscontract.CoverageComplete:
 			coverage.Complete++
 			if len(song.ProviderOutcomes) == 0 || len(song.SelectedEvidence) == 0 {
 				return derived, errors.New("complete song result requires provider outcomes and selected evidence")
 			}
-		case CoverageGameOnly:
-			if schemaVersion != SchemaVersionV2 || len(song.ProviderOutcomes) == 0 || len(song.SelectedEvidence) == 0 {
+		case lyricscontract.CoverageGameOnly:
+			if schemaVersion != lyricscontract.SchemaVersionV2 || len(song.ProviderOutcomes) == 0 || len(song.SelectedEvidence) == 0 {
 				return derived, errors.New("Game-only song result requires root v2 provider outcomes and selected evidence")
 			}
 			coverage.GameOnly++
-		case CoverageSatisfiedNoLyrics:
-			if schemaVersion != SchemaVersionV2 || len(song.ProviderOutcomes) == 0 || len(song.SelectedEvidence) != 0 {
+		case lyricscontract.CoverageSatisfiedNoLyrics:
+			if schemaVersion != lyricscontract.SchemaVersionV2 || len(song.ProviderOutcomes) == 0 || len(song.SelectedEvidence) != 0 {
 				return derived, errors.New("satisfied no-lyrics song result requires root v2 provider outcomes and no selected lyrics evidence")
 			}
 			coverage.SatisfiedNoLyrics++
-		case CoverageCatalogReview:
+		case lyricscontract.CoverageCatalogReview:
 			coverage.CatalogReview++
-		case CoverageGameSizeEvidence:
+		case lyricscontract.CoverageGameSizeEvidence:
 			coverage.GameSizeEvidence++
-		case CoverageAmbiguous:
+		case lyricscontract.CoverageAmbiguous:
 			coverage.Ambiguous++
-		case CoverageMissing:
+		case lyricscontract.CoverageMissing:
 			coverage.Missing++
-		case CoverageIncomplete:
+		case lyricscontract.CoverageIncomplete:
 			coverage.Incomplete++
-		case CoverageFailed:
+		case lyricscontract.CoverageFailed:
 			coverage.Failed++
 		default:
 			return derived, errors.New("song result has an invalid coverage state")
@@ -467,7 +412,7 @@ func validateRequest(request AssemblyRequest, schemaVersion int) (requestDerived
 		}
 	}
 	if request.Scope.Kind == ScopeFinal {
-		musicIDsSHA256, err := OrderedMusicIDsSHA256(musicIDs)
+		musicIDsSHA256, err := lyricscontract.OrderedMusicIDsSHA256(musicIDs)
 		if err != nil || musicIDsSHA256 != request.Catalog.MusicIDsSHA256 {
 			return derived, errors.New("final lyrics root ordered music IDs do not match the catalog binding")
 		}
@@ -475,7 +420,7 @@ func validateRequest(request AssemblyRequest, schemaVersion int) (requestDerived
 	coverage.UniqueAcquisitionCount = len(acquisitions)
 	coverage.UniqueEvidenceCount = len(evidence)
 	derived.coverage = coverage
-	derived.selected = make([]lyricsevidencepack.EvidenceRef, 0, len(evidence))
+	derived.selected = make([]lyricscontract.EvidenceRef, 0, len(evidence))
 	for _, selection := range evidence {
 		derived.selected = append(derived.selected, selection)
 	}
@@ -529,7 +474,7 @@ func validatePackBinding(binding EvidencePackBinding, derived requestDerived) er
 		binding.EncodedByteCount < 0 || binding.EncodedByteCount > lyricsevidencepack.MaxPackEncodedBytes {
 		return errors.New("lyrics root evidence pack binding is invalid")
 	}
-	selectionDigest, err := lyricsevidencepack.OrderedSelectionSHA256(derived.selected)
+	selectionDigest, err := lyricscontract.OrderedSelectionSHA256(derived.selected)
 	if err != nil || selectionDigest != binding.SelectionSHA256 {
 		return errors.New("lyrics root selected evidence union does not match its pack binding")
 	}
@@ -576,7 +521,7 @@ func rootDigest(manifest Manifest) (string, error) {
 	switch manifest.SchemaVersion {
 	case SchemaVersionV1:
 		domain = "moesekai-lyrics-root-manifest-v1\x00"
-	case SchemaVersionV2:
+	case lyricscontract.SchemaVersionV2:
 		domain = "moesekai-lyrics-root-manifest-v2\x00"
 	default:
 		return "", errors.New("lyrics root manifest digest schema version is invalid")

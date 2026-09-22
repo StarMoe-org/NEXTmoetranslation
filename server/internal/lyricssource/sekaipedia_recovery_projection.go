@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"moesekai/server/internal/lyricsreview"
 	"moesekai/server/internal/model"
 )
 
@@ -32,29 +31,6 @@ func RecoverSekaipediaProjection(
 	raw []byte,
 	expected FixedIndex,
 	policy PerformerSegmentationPolicy,
-) (SekaipediaRecoveryProjection, error) {
-	return recoverSekaipediaProjection(raw, expected, policy, 0, nil)
-}
-
-// RecoverSekaipediaProjectionWithReview applies the same content-free manual
-// review resolver used by exact replay before the reparsed projection crosses
-// into the recovery-import boundary.
-func RecoverSekaipediaProjectionWithReview(
-	raw []byte,
-	expected FixedIndex,
-	policy PerformerSegmentationPolicy,
-	musicID int,
-	resolver *lyricsreview.Resolver,
-) (SekaipediaRecoveryProjection, error) {
-	return recoverSekaipediaProjection(raw, expected, policy, musicID, resolver)
-}
-
-func recoverSekaipediaProjection(
-	raw []byte,
-	expected FixedIndex,
-	policy PerformerSegmentationPolicy,
-	musicID int,
-	resolver *lyricsreview.Resolver,
 ) (SekaipediaRecoveryProjection, error) {
 	if err := VerifySekaipediaRevisionContent(raw, expected); err != nil {
 		return SekaipediaRecoveryProjection{}, err
@@ -102,38 +78,6 @@ func recoverSekaipediaProjection(
 		Section: parsed.Section, RenditionKey: parsed.RenditionKey, ReasonCode: parsed.ReasonCode,
 		Full: full, Game: game, GameProjection: gameProjection, AlternateVocals: alternates,
 		FixedJapaneseWikitext: fixed, AuthoritativeStructured: parsed.AuthoritativeStructured,
-	}
-	if resolver != nil {
-		observation := lyricsreview.ProjectionObservation{
-			RevisionObservation: lyricsreview.RevisionObservation{
-				Provider:       ProviderSekaipedia,
-				PageID:         expected.PageID,
-				RevisionID:     expected.RevisionID,
-				Title:          expected.Title,
-				SHA1:           expected.SHA1,
-				ContentSHA256:  expected.ContentSHA256,
-				ResponseSHA256: expected.RawSHA256,
-			},
-			HasFull:           len(full.Lines) != 0,
-			HasGame:           game != nil,
-			HasGameProjection: gameProjection != nil,
-		}
-		for _, alternate := range alternates {
-			kind := ""
-			if alternate.Full != nil {
-				kind = alternate.Full.Version.Kind
-			} else if alternate.Game != nil {
-				kind = alternate.Game.Version.Kind
-			}
-			if kind == "another" || strings.Contains(strings.ToLower(alternate.TabLabel), "another") {
-				observation.AnotherCount++
-			} else {
-				observation.AlternateCount++
-			}
-		}
-		if err := resolver.ValidateProjection(musicID, observation); err != nil {
-			return SekaipediaRecoveryProjection{}, err
-		}
 	}
 	return projection, nil
 }

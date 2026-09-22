@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/model"
 )
 
@@ -86,10 +87,10 @@ func TestManifestV3SupportsMultipleProviderArtifactsAndComponentContributions(t 
 
 func TestRecoveryPeerDraftAcceptsIndependentGamePeerTranslationsAndRejectsExactProjection(t *testing.T) {
 	document, artifacts := recoveryPeerTranslationFixture(t, model.LyricsSourceRenditionRelationNone)
-	translations := []RenditionTranslation{{
+	translations := []lyricscontract.RenditionTranslation{{
 		RenditionKey: document.Renditions[0].RenditionKey,
 		Translations: []string{"主译文"},
-		PeerTranslations: []RenditionPeerTranslation{{
+		PeerTranslations: []lyricscontract.RenditionPeerTranslation{{
 			Side: "game", Locale: "zh-CN", Translations: []string{"游戏译文"},
 		}},
 	}}
@@ -110,10 +111,10 @@ func TestRecoveryPeerDraftAcceptsIndependentGamePeerTranslationsAndRejectsExactP
 	exactDocument, exactArtifacts := recoveryPeerTranslationFixture(t, model.LyricsSourceRenditionRelationExactProjection)
 	if _, err := BuildRecoveryPeerDraft(
 		42, "多版本试验曲", strings.Repeat("a", 64), 42, []int{}, exactDocument, exactArtifacts,
-		[]RenditionTranslation{{
+		[]lyricscontract.RenditionTranslation{{
 			RenditionKey: exactDocument.Renditions[0].RenditionKey,
 			Translations: []string{"主译文"},
-			PeerTranslations: []RenditionPeerTranslation{{
+			PeerTranslations: []lyricscontract.RenditionPeerTranslation{{
 				Side: "game", Locale: "zh-CN", Translations: []string{"禁止的派生译文"},
 			}},
 		}},
@@ -145,10 +146,10 @@ func TestRecoveryPeerDraftRejectsPrimaryAndPeerTranslationsOverDocumentBoundary(
 	}
 	_, err := BuildRecoveryPeerDraft(
 		42, "多版本试验曲", strings.Repeat("a", 64), 42, []int{}, document, artifacts,
-		[]RenditionTranslation{{
+		[]lyricscontract.RenditionTranslation{{
 			RenditionKey: document.Renditions[0].RenditionKey,
 			Translations: translations, TranslationCredit: "x",
-			PeerTranslations: []RenditionPeerTranslation{{
+			PeerTranslations: []lyricscontract.RenditionPeerTranslation{{
 				Side: "game", Locale: "zh-CN", Translations: peerTranslations,
 			}},
 		}},

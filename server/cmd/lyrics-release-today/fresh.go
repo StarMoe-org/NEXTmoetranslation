@@ -13,6 +13,7 @@ import (
 
 	"moesekai/server/internal/lyricsacquisition"
 	"moesekai/server/internal/lyricscompose"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsevidencepack"
 	"moesekai/server/internal/lyricsextractionplan"
 	"moesekai/server/internal/lyricsoutcomeartifact"
@@ -314,7 +315,7 @@ func validateReleasePlan(plan lyricsextractionplan.RecoveryPlan, planSHA string,
 	if err := validateReleaseProviderScopes(plan); err != nil {
 		return err
 	}
-	orderedDigest, err := lyricsrootmanifest.OrderedMusicIDsSHA256(plan.Scope.MusicIDs)
+	orderedDigest, err := lyricscontract.OrderedMusicIDsSHA256(plan.Scope.MusicIDs)
 	if err != nil || orderedDigest != releaseCatalogMusicIDsSHA256 {
 		return errors.New("recovery plan ordered 698 catalog digest does not match the reviewed release digest")
 	}
@@ -382,7 +383,7 @@ func validateReleaseRoot(root lyricsrootmanifest.Manifest, plan lyricsextraction
 		return errors.New("fresh release root must be final, compact, and complete for exactly 698 catalog targets")
 	}
 	for index, song := range root.Songs {
-		if song.MusicID != plan.Scope.MusicIDs[index] || song.State != lyricsrootmanifest.CoverageComplete {
+		if song.MusicID != plan.Scope.MusicIDs[index] || song.State != lyricscontract.CoverageComplete {
 			return errors.New("fresh release root songs do not exactly match the ordered 698 plan scope")
 		}
 	}
@@ -429,7 +430,7 @@ func validateFreshSongs(
 		if err != nil || !reflect.DeepEqual(rootRef, rootSong) || publishedResult.Full == nil {
 			return nil, nil, fmt.Errorf("music %d published song result does not exactly match the compact root", rootSong.MusicID)
 		}
-		if err := lyricscompose.ValidatePersistedPerformerMetadata(*publishedResult.Full); err != nil {
+		if err := lyricscontract.ValidatePersistedPerformerMetadata(*publishedResult.Full); err != nil {
 			return nil, nil, fmt.Errorf("music %d persisted performer metadata is unsafe", rootSong.MusicID)
 		}
 		orderedProviders, err := set.OrderedProviders(rootSong.MusicID)
@@ -607,9 +608,9 @@ func compareReplayToPublished(
 	return nil
 }
 
-func orderedEvidenceUnion(root lyricsrootmanifest.Manifest) ([]lyricsevidencepack.EvidenceRef, error) {
-	byID := make(map[string]lyricsevidencepack.EvidenceRef, root.Coverage.UniqueEvidenceCount)
-	byAcquisition := make(map[string]lyricsevidencepack.EvidenceRef, root.Coverage.UniqueAcquisitionCount)
+func orderedEvidenceUnion(root lyricsrootmanifest.Manifest) ([]lyricscontract.EvidenceRef, error) {
+	byID := make(map[string]lyricscontract.EvidenceRef, root.Coverage.UniqueEvidenceCount)
+	byAcquisition := make(map[string]lyricscontract.EvidenceRef, root.Coverage.UniqueAcquisitionCount)
 	for _, song := range root.Songs {
 		for _, ref := range song.SelectedEvidence {
 			if prior, found := byID[ref.EvidenceID]; found && prior != ref {
@@ -625,7 +626,7 @@ func orderedEvidenceUnion(root lyricsrootmanifest.Manifest) ([]lyricsevidencepac
 	if len(byID) != root.Coverage.UniqueEvidenceCount || len(byAcquisition) != root.Coverage.UniqueAcquisitionCount {
 		return nil, errors.New("fresh root evidence union does not match its complete coverage counters")
 	}
-	refs := make([]lyricsevidencepack.EvidenceRef, 0, len(byID))
+	refs := make([]lyricscontract.EvidenceRef, 0, len(byID))
 	for _, ref := range byID {
 		refs = append(refs, ref)
 	}

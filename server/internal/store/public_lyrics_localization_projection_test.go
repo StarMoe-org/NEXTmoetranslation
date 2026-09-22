@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"moesekai/server/internal/lyricsstaging"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/model"
 )
 
@@ -116,7 +116,7 @@ func TestPublishedLyricsLocalizationProjection(t *testing.T) {
 	for index := range fullTranslations {
 		fullTranslations[index] = "译文-" + sekaiRendition.Full.Lines[index].ID
 	}
-	translations := []lyricsstaging.RenditionTranslation{
+	translations := []lyricscontract.RenditionTranslation{
 		{
 			RenditionKey:      sekaiRendition.RenditionKey,
 			Translations:      fullTranslations,

@@ -14,9 +14,9 @@ import (
 	"unicode"
 
 	"moesekai/server/internal/lyricsacquisition"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsextractionplan"
 	"moesekai/server/internal/lyricsprovideroutcome"
-	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
@@ -150,7 +150,7 @@ func TestReal795ExactPublicArtifactAcquireLedgerReplayWithoutICUOrNetwork(t *tes
 			TargetMusicID: 795, AssociationMusicIDs: []int{}, Candidate: &stagedCandidate, LineCount: 65,
 			SearchAttempts: 1, FetchAttempts: 1,
 		},
-		lyricsstaging.CatalogIdentity{
+		lyricscontract.CatalogIdentity{
 			MusicID: 795, JapaneseTitle: identity.JapaneseTitle, ProducerMetadata: "いのうつはSA",
 			Lyricist: "いのうつはSA", Composer: "いのうつはSA", Arranger: "いのうつはSA",
 			Vocals:             []model.CatalogVocalSignal{{VocalID: 795, VocalType: "original_song", Caption: "バーチャル・シンガーver."}},
@@ -175,7 +175,7 @@ func TestReal795ExactPublicArtifactAcquireLedgerReplayWithoutICUOrNetwork(t *tes
 	}
 	firstBody, _ := MarshalSongResult(firstResult)
 	secondBody, _ := MarshalSongResult(secondResult)
-	if !bytes.Equal(firstBody, secondBody) || firstResult.State != lyricsrootmanifest.CoverageComplete ||
+	if !bytes.Equal(firstBody, secondBody) || firstResult.State != lyricscontract.CoverageComplete ||
 		firstResult.Full == nil || len(firstResult.Full.Lines) != 65 || len(firstResult.Translations) != 65 ||
 		firstResult.Translations[0] != "带着乱蓬蓬的睡发" || firstResult.Translations[64] != "要再来啊！" ||
 		len(firstResult.ProviderOutcomes) != 1 ||

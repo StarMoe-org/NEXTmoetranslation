@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 )
@@ -187,7 +188,7 @@ func TestBuildDraftKeepsOriginalPerformerFree(t *testing.T) {
 	}
 }
 
-func authoritativeVirtualSingerFixture(t *testing.T) (PreflightReport, CatalogIdentity, lyricssource.FixedRevision) {
+func authoritativeVirtualSingerFixture(t *testing.T) (PreflightReport, lyricscontract.CatalogIdentity, lyricssource.FixedRevision) {
 	t.Helper()
 	report, identity, fixed := validPreflightAndFixed(t)
 	base, err := BuildDraft(report.UniqueComplete[0], identity, fixed)
@@ -220,7 +221,7 @@ func authoritativeVirtualSingerFixture(t *testing.T) (PreflightReport, CatalogId
 	return report, identity, fixed
 }
 
-func legacyVocaloidFixture(t *testing.T) (PreflightReport, CatalogIdentity, lyricssource.FixedRevision) {
+func legacyVocaloidFixture(t *testing.T) (PreflightReport, lyricscontract.CatalogIdentity, lyricssource.FixedRevision) {
 	t.Helper()
 	report, identity, fixed := validPreflightAndFixed(t)
 	report.UniqueComplete[0].Candidate.RenditionKey = "full-vocaloid"

@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"moesekai/server/internal/lyricsproviderpolicy"
 	"moesekai/server/internal/model"
 )
 
@@ -160,7 +159,7 @@ func validateRecoveryRequestURL(
 	provider model.LyricsSourceProvider,
 	value string,
 ) (string, url.Values, error) {
-	endpoint, ok := lyricsproviderpolicy.CanonicalEndpointV1(lyricsproviderpolicy.Provider(provider))
+	endpoint, ok := recoveryCanonicalEndpoint(provider)
 	if !ok {
 		return "", nil, errors.New("recovery request provider is unsupported")
 	}

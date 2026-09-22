@@ -13,9 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"moesekai/server/internal/lyricscompose"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsperformers"
-	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
@@ -327,7 +326,7 @@ func loadValidatedCatalogVocals(
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	musicIDsSHA256, err := lyricsrootmanifest.OrderedMusicIDsSHA256(ids)
+	musicIDsSHA256, err := lyricscontract.OrderedMusicIDsSHA256(ids)
 	if err != nil || len(ids) != receipt.Catalog.RecordCount || musicIDsSHA256 != receipt.Catalog.MusicIDsSHA256 {
 		return nil, errors.New("validated release catalog rows do not match the receipt's exact ordered 698 scope")
 	}
@@ -344,7 +343,7 @@ func authoritativePublicPerformerIDs(
 	document model.LyricsSourceDocument,
 	vocals []model.CatalogVocalSignal,
 ) ([][][]int, error) {
-	if err := lyricscompose.ValidatePersistedPerformerMetadata(document.Full); err != nil {
+	if err := lyricscontract.ValidatePersistedPerformerMetadata(document.Full); err != nil {
 		return nil, errors.New("authoritative Full contains unsafe persisted performer metadata")
 	}
 	policy := lyricssource.PerformerSegmentationPolicyFromCatalogVocals(vocals)

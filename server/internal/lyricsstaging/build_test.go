@@ -13,11 +13,12 @@ import (
 	"testing"
 	"time"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 )
 
-func validPreflightAndFixed(t *testing.T) (PreflightReport, CatalogIdentity, lyricssource.FixedRevision) {
+func validPreflightAndFixed(t *testing.T) (PreflightReport, lyricscontract.CatalogIdentity, lyricssource.FixedRevision) {
 	t.Helper()
 	wikitext := []byte("== Lyrics ==\n初音歌う")
 	wikitextDigest := sha1.Sum(wikitext)
@@ -42,7 +43,7 @@ func validPreflightAndFixed(t *testing.T) (PreflightReport, CatalogIdentity, lyr
 		CatalogReview: []PreflightItem{}, GameSizeEvidence: []PreflightItem{}, UniqueComplete: []PreflightItem{item},
 		Ambiguous: []PreflightItem{}, Missing: []PreflightItem{}, Incomplete: []PreflightItem{}, Error: []PreflightItem{},
 	}
-	identity := CatalogIdentity{
+	identity := lyricscontract.CatalogIdentity{
 		MusicID: item.MusicID, JapaneseTitle: item.JapaneseTitle, CatalogFingerprint: item.CatalogFingerprint,
 		ProducerMetadata: "制作者", Lyricist: "制作者", Composer: "制作者", Arranger: "制作者",
 		Vocals: []model.CatalogVocalSignal{{VocalID: 1, VocalType: "sekai"}},
@@ -92,7 +93,7 @@ func TestBuildDraftRejectsAdvertisedSHA1UnrelatedToWikitext(t *testing.T) {
 	assertFixedRevisionHashMismatchFailsClosed(t, report, identity, fixed)
 }
 
-func assertFixedRevisionHashMismatchFailsClosed(t *testing.T, report PreflightReport, identity CatalogIdentity, fixed lyricssource.FixedRevision) {
+func assertFixedRevisionHashMismatchFailsClosed(t *testing.T, report PreflightReport, identity lyricscontract.CatalogIdentity, fixed lyricssource.FixedRevision) {
 	t.Helper()
 	draft, err := BuildDraft(report.UniqueComplete[0], identity, fixed)
 	if err == nil || !strings.Contains(err.Error(), "exact wikitext bytes") {
@@ -539,7 +540,7 @@ func TestBuildDraftPreservesExactSekaipediaRevisionTimestamp(t *testing.T) {
 	}
 }
 
-func sekaipediaPreflightAndFixed(t *testing.T) (PreflightReport, CatalogIdentity, lyricssource.FixedRevision) {
+func sekaipediaPreflightAndFixed(t *testing.T) (PreflightReport, lyricscontract.CatalogIdentity, lyricssource.FixedRevision) {
 	t.Helper()
 	report, identity, fixed := validPreflightAndFixed(t)
 	candidate := report.UniqueComplete[0].Candidate

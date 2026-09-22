@@ -8,12 +8,13 @@ import (
 	"reflect"
 	"sort"
 
-	"moesekai/server/internal/lyricscompose"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsevidencepack"
 	"moesekai/server/internal/lyricsoutcomeartifact"
 	"moesekai/server/internal/lyricsrecovery"
 	"moesekai/server/internal/lyricsreview"
 	"moesekai/server/internal/lyricssource"
+	"moesekai/server/internal/lyricssourceoffline"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
 )
@@ -148,7 +149,7 @@ func cloneTabPaths(input []model.LyricsSourceTabPath) []model.LyricsSourceTabPat
 	return result
 }
 
-func renditionTranslationsFromResult(result lyricsrecovery.SongResult) []lyricsstaging.RenditionTranslation {
+func renditionTranslationsFromResult(result lyricsrecovery.SongResult) []lyricscontract.RenditionTranslation {
 	any := false
 	for _, rendition := range result.Renditions {
 		any = any || rendition.Translations != nil || len(rendition.PeerTranslations) != 0
@@ -156,18 +157,18 @@ func renditionTranslationsFromResult(result lyricsrecovery.SongResult) []lyricss
 	if !any {
 		return nil
 	}
-	translations := make([]lyricsstaging.RenditionTranslation, len(result.Renditions))
+	translations := make([]lyricscontract.RenditionTranslation, len(result.Renditions))
 	for index, rendition := range result.Renditions {
-		translations[index] = lyricsstaging.RenditionTranslation{
+		translations[index] = lyricscontract.RenditionTranslation{
 			RenditionKey: rendition.RenditionKey,
 			Translations: append([]string(nil), rendition.Translations...),
 		}
 		if rendition.Translations == nil {
 			translations[index].Translations = nil
 		}
-		translations[index].PeerTranslations = make([]lyricsstaging.RenditionPeerTranslation, len(rendition.PeerTranslations))
+		translations[index].PeerTranslations = make([]lyricscontract.RenditionPeerTranslation, len(rendition.PeerTranslations))
 		for peerIndex, peer := range rendition.PeerTranslations {
-			translations[index].PeerTranslations[peerIndex] = lyricsstaging.RenditionPeerTranslation{
+			translations[index].PeerTranslations[peerIndex] = lyricscontract.RenditionPeerTranslation{
 				Side: peer.Side, Locale: peer.Locale,
 				Translations: append([]string(nil), peer.Translations...),
 			}
@@ -296,7 +297,7 @@ func v3OutcomeArtifact(
 	section := "Lyrics"
 	switch outcome.Provider {
 	case model.LyricsSourceProviderSekaipedia:
-		projection, err := lyricssource.RecoverSekaipediaProjectionWithReview(
+		projection, err := lyricssourceoffline.RecoverSekaipediaProjectionWithReview(
 			revisionEvidence.Raw,
 			lyricssource.FixedIndex{PageID: candidate.PageID, RevisionID: candidate.RevisionID,
 				RevisionTimestamp: revisionEvidence.RevisionTimestamp, SHA1: candidate.SHA1,
@@ -346,7 +347,7 @@ func v3OutcomeArtifact(
 }
 
 func matchesV3SelectedAcquisition(
-	selected lyricsevidencepack.EvidenceRef,
+	selected lyricscontract.EvidenceRef,
 	provider model.LyricsSourceProvider,
 	acquisition lyricsoutcomeartifact.AcquisitionRef,
 ) bool {
@@ -465,7 +466,7 @@ func comparableV3ProjectionFull(
 	if full == nil {
 		return nil, nil
 	}
-	comparable, err := lyricscompose.NormalizePersistedPerformerMetadata(*full)
+	comparable, err := lyricscontract.NormalizePersistedPerformerMetadata(*full)
 	if err != nil {
 		return nil, err
 	}

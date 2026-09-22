@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"moesekai/server/internal/lyricsacquisition"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsevidencepack"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
@@ -92,7 +93,7 @@ func TestRunBuildsPrivateEvidencePackOffline(t *testing.T) {
 	}
 	selection := lyricsevidencepack.Selection{
 		SchemaVersion: lyricsevidencepack.SchemaVersionV1,
-		Evidence:      []lyricsevidencepack.EvidenceRef{ref},
+		Evidence:      []lyricscontract.EvidenceRef{ref},
 	}
 	selectionBody, err := json.Marshal(selection)
 	if err != nil {

@@ -13,7 +13,7 @@ import (
 	"io"
 	"reflect"
 
-	"moesekai/server/internal/lyricscompose"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsimportreceipt"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
@@ -287,7 +287,7 @@ func verifyImportedManifest(ctx context.Context, database *sql.DB, manifest lyri
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := lyricscompose.ValidatePersistedPerformerMetadata(draft.Document.Full); err != nil {
+		if err := lyricscontract.ValidatePersistedPerformerMetadata(draft.Document.Full); err != nil {
 			return fmt.Errorf("imported music %d has unsafe performer metadata", draft.MusicID)
 		}
 		documentJSON, err := json.Marshal(draft.Document)

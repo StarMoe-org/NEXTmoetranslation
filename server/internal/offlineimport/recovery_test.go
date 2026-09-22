@@ -9,8 +9,8 @@ import (
 
 	"moesekai/server/internal/db"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsrecoveryimport"
-	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/model"
 )
 
@@ -207,13 +207,13 @@ func TestRecoveryImportCatalogTargetMatchesStateClosedSet(t *testing.T) {
 		Disposition: model.LyricsCatalogTargetFullTarget, TargetMusicID: 42,
 		AssociationMusicIDs: []int{},
 	}
-	for _, state := range []lyricsrootmanifest.CoverageState{
-		lyricsrootmanifest.CoverageComplete,
-		lyricsrootmanifest.CoverageGameOnly,
-		lyricsrootmanifest.CoverageAmbiguous,
-		lyricsrootmanifest.CoverageMissing,
-		lyricsrootmanifest.CoverageIncomplete,
-		lyricsrootmanifest.CoverageFailed,
+	for _, state := range []lyricscontract.CoverageState{
+		lyricscontract.CoverageComplete,
+		lyricscontract.CoverageGameOnly,
+		lyricscontract.CoverageAmbiguous,
+		lyricscontract.CoverageMissing,
+		lyricscontract.CoverageIncomplete,
+		lyricscontract.CoverageFailed,
 	} {
 		item := lyricsrecoveryimport.Item{
 			MusicID: 42, CatalogFingerprint: fingerprint, TargetMusicID: 42,
@@ -231,7 +231,7 @@ func TestRecoveryImportCatalogTargetMatchesStateClosedSet(t *testing.T) {
 	}
 	noLyrics := lyricsrecoveryimport.Item{
 		MusicID: 42, CatalogFingerprint: fingerprint, TargetMusicID: 42,
-		AssociationMusicIDs: []int{}, State: lyricsrootmanifest.CoverageSatisfiedNoLyrics,
+		AssociationMusicIDs: []int{}, State: lyricscontract.CoverageSatisfiedNoLyrics,
 	}
 	if !recoveryImportCatalogTargetMatches(noLyrics, instrumentalReview) {
 		t.Fatal("reviewed catalog instrumental was rejected for satisfied no-lyrics")
@@ -242,10 +242,10 @@ func TestRecoveryImportCatalogTargetMatchesRejectsCrossStateOrIdentityDrift(t *t
 	fingerprint := strings.Repeat("a", 64)
 	complete := lyricsrecoveryimport.Item{
 		MusicID: 42, CatalogFingerprint: fingerprint, TargetMusicID: 42,
-		AssociationMusicIDs: []int{}, State: lyricsrootmanifest.CoverageComplete,
+		AssociationMusicIDs: []int{}, State: lyricscontract.CoverageComplete,
 	}
 	noLyrics := complete
-	noLyrics.State = lyricsrootmanifest.CoverageSatisfiedNoLyrics
+	noLyrics.State = lyricscontract.CoverageSatisfiedNoLyrics
 	fullTarget := model.CatalogLyricsTarget{
 		MusicID: 42, CatalogFingerprint: fingerprint,
 		Disposition: model.LyricsCatalogTargetFullTarget, TargetMusicID: 42,
@@ -290,7 +290,7 @@ func TestRecoveryImportCatalogTargetMatchesRejectsCrossStateOrIdentityDrift(t *t
 		}()},
 		"unknown state": {item: func() lyricsrecoveryimport.Item {
 			item := complete
-			item.State = lyricsrootmanifest.CoverageState("future")
+			item.State = lyricscontract.CoverageState("future")
 			return item
 		}(), target: fullTarget},
 	}

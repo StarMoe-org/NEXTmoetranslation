@@ -11,8 +11,8 @@ import (
 	"regexp"
 	"sort"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
-	"moesekai/server/internal/model"
 )
 
 const (
@@ -29,7 +29,6 @@ const (
 	MaxShardEncodedBytes          = 32 << 20
 	MaxPackRawBytes         int64 = 512 << 20
 	MaxPackEncodedBytes     int64 = 1 << 30
-	MaxPackItems                  = 64 << 10
 )
 
 var (
@@ -39,33 +38,22 @@ var (
 	ErrAlreadyPublished = errors.New("lyrics evidence pack is already published")
 )
 
-// EvidenceRef is the compact exact acquisition/evidence identity used by roots
-// and shard manifests. SHA256 binds the evidence raw projection while
-// EnvelopeSHA256 binds the canonical evidence envelope retained by the pack.
-type EvidenceRef struct {
-	Provider       model.LyricsSourceProvider `json:"provider"`
-	AcquisitionID  string                     `json:"acquisitionId"`
-	EvidenceID     string                     `json:"evidenceId"`
-	SHA256         string                     `json:"sha256"`
-	EnvelopeSHA256 string                     `json:"envelopeSha256"`
-}
-
 // Selection is the closed command input that declares the exact global evidence union.
 type Selection struct {
-	SchemaVersion int           `json:"schemaVersion"`
-	Evidence      []EvidenceRef `json:"evidence"`
+	SchemaVersion int                          `json:"schemaVersion"`
+	Evidence      []lyricscontract.EvidenceRef `json:"evidence"`
 }
 
 // ShardManifest binds one deterministic shard without exposing a filesystem path.
 type ShardManifest struct {
-	Ordinal          int           `json:"ordinal"`
-	SHA256           string        `json:"sha256"`
-	EncodedByteCount int           `json:"encodedByteCount"`
-	RawByteCount     int           `json:"rawByteCount"`
-	ItemCount        int           `json:"itemCount"`
-	FirstEvidenceID  string        `json:"firstEvidenceId"`
-	LastEvidenceID   string        `json:"lastEvidenceId"`
-	Items            []EvidenceRef `json:"items"`
+	Ordinal          int                          `json:"ordinal"`
+	SHA256           string                       `json:"sha256"`
+	EncodedByteCount int                          `json:"encodedByteCount"`
+	RawByteCount     int                          `json:"rawByteCount"`
+	ItemCount        int                          `json:"itemCount"`
+	FirstEvidenceID  string                       `json:"firstEvidenceId"`
+	LastEvidenceID   string                       `json:"lastEvidenceId"`
+	Items            []lyricscontract.EvidenceRef `json:"items"`
 }
 
 // Totals fixes the aggregate private safety accounting.
@@ -78,14 +66,14 @@ type Totals struct {
 
 // Manifest is the compact, self-digested index for all bounded shard payloads.
 type Manifest struct {
-	SchemaVersion     int             `json:"schemaVersion"`
-	CanonicalEncoding string          `json:"canonicalEncoding"`
-	DigestAlgorithm   string          `json:"digestAlgorithm"`
-	SelectionSHA256   string          `json:"selectionSha256"`
-	Selected          []EvidenceRef   `json:"selected"`
-	Shards            []ShardManifest `json:"shards"`
-	Totals            Totals          `json:"totals"`
-	PackSHA256        string          `json:"packSha256"`
+	SchemaVersion     int                          `json:"schemaVersion"`
+	CanonicalEncoding string                       `json:"canonicalEncoding"`
+	DigestAlgorithm   string                       `json:"digestAlgorithm"`
+	SelectionSHA256   string                       `json:"selectionSha256"`
+	Selected          []lyricscontract.EvidenceRef `json:"selected"`
+	Shards            []ShardManifest              `json:"shards"`
+	Totals            Totals                       `json:"totals"`
+	PackSHA256        string                       `json:"packSha256"`
 }
 
 type shardEnvelope struct {
@@ -94,83 +82,29 @@ type shardEnvelope struct {
 	Items         []lyricssource.IndexEvidence `json:"items"`
 }
 
-func validateEvidenceRef(ref EvidenceRef) error {
-	if !model.IsValidLyricsSourceProvider(ref.Provider) || !canonicalSHA256.MatchString(ref.AcquisitionID) ||
-		!canonicalEvidence.MatchString(ref.EvidenceID) || !canonicalSHA256.MatchString(ref.SHA256) ||
-		!canonicalSHA256.MatchString(ref.EnvelopeSHA256) {
-		return errors.New("exact acquisition/evidence reference is invalid")
-	}
-	return nil
-}
-
-func evidenceRefLess(left, right EvidenceRef) bool {
+func evidenceRefLess(left, right lyricscontract.EvidenceRef) bool {
 	return left.EvidenceID < right.EvidenceID
 }
 
-func canonicalSelection(input []EvidenceRef) ([]EvidenceRef, error) {
-	if input == nil || len(input) > MaxPackItems {
+func canonicalSelection(input []lyricscontract.EvidenceRef) ([]lyricscontract.EvidenceRef, error) {
+	if input == nil || len(input) > lyricscontract.MaxPackItems {
 		return nil, errors.New("selected evidence must be an explicit bounded array")
 	}
-	selected := append([]EvidenceRef{}, input...)
+	selected := append([]lyricscontract.EvidenceRef{}, input...)
 	sort.Slice(selected, func(left, right int) bool { return evidenceRefLess(selected[left], selected[right]) })
-	if err := validateOrderedSelection(selected); err != nil {
+	if err := lyricscontract.ValidateOrderedSelection(selected); err != nil {
 		return nil, err
 	}
 	return selected, nil
 }
 
-func validateOrderedSelection(selected []EvidenceRef) error {
-	if selected == nil || len(selected) > MaxPackItems {
-		return errors.New("selected evidence must be an explicit bounded array")
-	}
-	acquisitions := make(map[string]EvidenceRef, len(selected))
-	for index, ref := range selected {
-		if err := validateEvidenceRef(ref); err != nil {
-			return err
-		}
-		if index > 0 && selected[index-1].EvidenceID >= ref.EvidenceID {
-			if selected[index-1].EvidenceID == ref.EvidenceID && selected[index-1] == ref {
-				return errors.New("selected evidence contains a duplicate identity")
-			}
-			return errors.New("selected evidence contains a conflicting or unordered identity")
-		}
-		if previous, exists := acquisitions[ref.AcquisitionID]; exists && previous != ref {
-			return errors.New("one acquisition ID resolves to conflicting selected evidence")
-		}
-		acquisitions[ref.AcquisitionID] = ref
-	}
-	return nil
-}
-
 // SelectionSHA256 returns the domain-separated digest of the canonical unique selection.
-func SelectionSHA256(refs []EvidenceRef) (string, error) {
+func SelectionSHA256(refs []lyricscontract.EvidenceRef) (string, error) {
 	selected, err := canonicalSelection(refs)
 	if err != nil {
 		return "", err
 	}
-	return OrderedSelectionSHA256(selected)
-}
-
-// OrderedSelectionSHA256 validates and hashes an already ordered unique exact
-// selection in one pass without copying the reference slice.
-func OrderedSelectionSHA256(selected []EvidenceRef) (string, error) {
-	if err := validateOrderedSelection(selected); err != nil {
-		return "", err
-	}
-	digest := sha256.New()
-	_, _ = digest.Write([]byte("moesekai-lyrics-evidence-selection-v1\x00["))
-	for index, ref := range selected {
-		if index > 0 {
-			_, _ = digest.Write([]byte{','})
-		}
-		body, err := json.Marshal(ref)
-		if err != nil {
-			return "", err
-		}
-		_, _ = digest.Write(body)
-	}
-	_, _ = digest.Write([]byte{']'})
-	return hex.EncodeToString(digest.Sum(nil)), nil
+	return lyricscontract.OrderedSelectionSHA256(selected)
 }
 
 func manifestDigest(manifest Manifest) (string, error) {
@@ -238,14 +172,14 @@ func ValidateManifest(manifest Manifest) error {
 		!canonicalSHA256.MatchString(manifest.PackSHA256) {
 		return errors.New("evidence pack manifest envelope is invalid")
 	}
-	if err := validateOrderedSelection(manifest.Selected); err != nil {
+	if err := lyricscontract.ValidateOrderedSelection(manifest.Selected); err != nil {
 		return err
 	}
-	selectionDigest, err := OrderedSelectionSHA256(manifest.Selected)
+	selectionDigest, err := lyricscontract.OrderedSelectionSHA256(manifest.Selected)
 	if err != nil || selectionDigest != manifest.SelectionSHA256 {
 		return errors.New("evidence pack selection digest does not match")
 	}
-	if manifest.Shards == nil || len(manifest.Shards) > MaxPackItems {
+	if manifest.Shards == nil || len(manifest.Shards) > lyricscontract.MaxPackItems {
 		return errors.New("evidence pack shards must be an explicit bounded array")
 	}
 	selectedIndex := 0
@@ -258,7 +192,7 @@ func ValidateManifest(manifest Manifest) error {
 			shard.LastEvidenceID != shard.Items[len(shard.Items)-1].EvidenceID {
 			return fmt.Errorf("evidence shard manifest %d is invalid", shardIndex)
 		}
-		if err := validateOrderedSelection(shard.Items); err != nil {
+		if err := lyricscontract.ValidateOrderedSelection(shard.Items); err != nil {
 			return fmt.Errorf("evidence shard manifest %d: %w", shardIndex, err)
 		}
 		for _, ref := range shard.Items {
@@ -309,7 +243,7 @@ func MarshalManifest(manifest Manifest) ([]byte, error) {
 
 // ShardFileName derives the only allowed shard filename from its ordinal and digest.
 func ShardFileName(ordinal int, digest string) (string, error) {
-	if ordinal < 0 || ordinal >= MaxPackItems || !canonicalSHA256.MatchString(digest) {
+	if ordinal < 0 || ordinal >= lyricscontract.MaxPackItems || !canonicalSHA256.MatchString(digest) {
 		return "", errors.New("evidence shard file identity is invalid")
 	}
 	return fmt.Sprintf("shard-%06d-%s.json", ordinal, digest), nil

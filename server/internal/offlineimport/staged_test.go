@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"moesekai/server/internal/db"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
@@ -321,7 +322,7 @@ func setupStagedManifestImportStore(t *testing.T, songs []stagedImportSong) (*st
 			fixed.FixedIdentities = []model.LyricsSourceFixedIdentity{fixedIdentity}
 			fixed.Document = &document
 		}
-		draft, err := lyricsstaging.BuildDraft(item, lyricsstaging.CatalogIdentity{
+		draft, err := lyricsstaging.BuildDraft(item, lyricscontract.CatalogIdentity{
 			MusicID: identity.MusicID, JapaneseTitle: identity.JapaneseTitle, ProducerMetadata: identity.ProducerMetadata,
 			Lyricist: identity.Lyricist, Composer: identity.Composer, Arranger: identity.Arranger,
 			Vocals: append([]model.CatalogVocalSignal{}, identity.Vocals...), CatalogFingerprint: identity.CatalogFingerprint,
@@ -661,9 +662,9 @@ func stagedV3DraftWithTranslations(t *testing.T, s *store.Store, staged lyricsst
 			t.Fatalf("build recovery artifact %q: %v", identity.RenditionKey, err)
 		}
 	}
-	translations := make([]lyricsstaging.RenditionTranslation, len(document.Renditions))
+	translations := make([]lyricscontract.RenditionTranslation, len(document.Renditions))
 	for index, rendition := range document.Renditions {
-		translations[index] = lyricsstaging.RenditionTranslation{
+		translations[index] = lyricscontract.RenditionTranslation{
 			RenditionKey: rendition.RenditionKey, Translations: []string{translation},
 		}
 	}

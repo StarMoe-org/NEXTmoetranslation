@@ -9,12 +9,13 @@ import (
 	"strings"
 	"testing"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 )
 
 func TestEvidencePublicationOperationsStayBoundToLockedDirectory(t *testing.T) {
 	item := testEvidence(t, 1, 0)
-	refs := []EvidenceRef{evidenceRef(item)}
+	refs := []lyricscontract.EvidenceRef{evidenceRef(item)}
 	for _, operation := range []string{evidenceFSCreate, evidenceFSLink, evidenceFSVerify, evidenceFSCleanup, evidenceFSSync} {
 		t.Run(operation, func(t *testing.T) {
 			base := canonicalTestRoot(t)
@@ -78,7 +79,7 @@ func TestEvidenceResolverInventoryStaysBoundToLockedDirectory(t *testing.T) {
 
 func TestEvidenceBuildRechecksExactInventoryAfterFinalSync(t *testing.T) {
 	item := testEvidence(t, 1, 0)
-	refs := []EvidenceRef{evidenceRef(item)}
+	refs := []lyricscontract.EvidenceRef{evidenceRef(item)}
 	directory := filepath.Join(canonicalTestRoot(t), "pack")
 	if err := os.Mkdir(directory, 0o700); err != nil {
 		t.Fatal(err)
@@ -111,7 +112,7 @@ func TestEvidenceBuildRechecksExactInventoryAfterFinalSync(t *testing.T) {
 
 func TestEvidenceCleanupRejectsLateHardlinkWithoutRemovingStage(t *testing.T) {
 	item := testEvidence(t, 1, 0)
-	refs := []EvidenceRef{evidenceRef(item)}
+	refs := []lyricscontract.EvidenceRef{evidenceRef(item)}
 	plans, _, err := planShards([]lyricssource.IndexEvidence{item}, refs, defaultBuildLimits)
 	if err != nil || len(plans) != 1 {
 		t.Fatalf("plans=%v err=%v", plans, err)
@@ -151,7 +152,7 @@ func TestEvidenceCleanupRejectsLateHardlinkWithoutRemovingStage(t *testing.T) {
 
 func TestEvidencePublicationOperationBoundaryLeafSwapsPreserveVictims(t *testing.T) {
 	item := testEvidence(t, 1, 0)
-	refs := []EvidenceRef{evidenceRef(item)}
+	refs := []lyricscontract.EvidenceRef{evidenceRef(item)}
 	plans, _, err := planShards([]lyricssource.IndexEvidence{item}, refs, defaultBuildLimits)
 	if err != nil || len(plans) != 1 {
 		t.Fatalf("plans=%v err=%v", plans, err)
@@ -304,7 +305,7 @@ func TestEvidenceVerificationRejectsSameByteInodeReplacementAtOpenBoundary(t *te
 
 func TestEvidenceRejectsLexicalParentAliases(t *testing.T) {
 	item := testEvidence(t, 1, 0)
-	refs := []EvidenceRef{evidenceRef(item)}
+	refs := []lyricscontract.EvidenceRef{evidenceRef(item)}
 	source := sliceExactSource{items: []lyricssource.IndexEvidence{item}}
 
 	t.Run("direct parent symlink", func(t *testing.T) {
@@ -409,7 +410,7 @@ func TestEvidencePublicationRejectsAncestorSwapBeforeFirstWrite(t *testing.T) {
 		return os.Mkdir(filepath.Join(reviewed, "parent", "pack"), 0o700)
 	}
 	t.Cleanup(func() { testHookBeforeFilesystemOperation = nil })
-	if _, err := Build(context.Background(), directory, []EvidenceRef{evidenceRef(item)}, sliceExactSource{
+	if _, err := Build(context.Background(), directory, []lyricscontract.EvidenceRef{evidenceRef(item)}, sliceExactSource{
 		items: []lyricssource.IndexEvidence{item},
 	}); err == nil {
 		t.Fatal("publication accepted an ancestor swap")
@@ -445,7 +446,7 @@ func TestEvidencePublicationRejectsLeafSwapBeforeFirstWrite(t *testing.T) {
 		return os.Mkdir(directory, 0o700)
 	}
 	t.Cleanup(func() { testHookBeforeFilesystemOperation = nil })
-	if _, err := Build(context.Background(), directory, []EvidenceRef{evidenceRef(item)}, sliceExactSource{
+	if _, err := Build(context.Background(), directory, []lyricscontract.EvidenceRef{evidenceRef(item)}, sliceExactSource{
 		items: []lyricssource.IndexEvidence{item},
 	}); err == nil {
 		t.Fatal("publication accepted a leaf-directory swap")
@@ -471,7 +472,7 @@ func TestEvidencePublicationNeverWritesThroughLeafSymlinkOutsideReviewedTree(t *
 	if err := os.Symlink(outside, filepath.Join(reviewed, "pack")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Build(context.Background(), filepath.Join(reviewed, "pack"), []EvidenceRef{evidenceRef(item)}, sliceExactSource{
+	if _, err := Build(context.Background(), filepath.Join(reviewed, "pack"), []lyricscontract.EvidenceRef{evidenceRef(item)}, sliceExactSource{
 		items: []lyricssource.IndexEvidence{item},
 	}); err == nil {
 		t.Fatal("publication followed an output leaf symlink")

@@ -8,6 +8,7 @@ import (
 	"io"
 	"unicode/utf8"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 )
 
@@ -20,7 +21,7 @@ func DecodeSelection(body []byte) (Selection, error) {
 	if selection.SchemaVersion != SchemaVersionV1 {
 		return Selection{}, errors.New("evidence selection schema version is invalid")
 	}
-	if err := validateOrderedSelection(selection.Evidence); err != nil {
+	if err := lyricscontract.ValidateOrderedSelection(selection.Evidence); err != nil {
 		return Selection{}, err
 	}
 	return selection, nil
@@ -123,7 +124,7 @@ func splitJSONArrayElements(body []byte) ([][]byte, error) {
 				}
 				items = append(items, body[start:index])
 				start = index + 1
-				if len(items) > MaxPackItems {
+				if len(items) > lyricscontract.MaxPackItems {
 					return nil, errors.New("evidence shard exceeds the item ceiling")
 				}
 			}
@@ -133,7 +134,7 @@ func splitJSONArrayElements(body []byte) ([][]byte, error) {
 		return nil, errors.New("evidence shard item array is invalid")
 	}
 	items = append(items, body[start:])
-	if len(items) > MaxPackItems {
+	if len(items) > lyricscontract.MaxPackItems {
 		return nil, errors.New("evidence shard exceeds the item ceiling")
 	}
 	return items, nil

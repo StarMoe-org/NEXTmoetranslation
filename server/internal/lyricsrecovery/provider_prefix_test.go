@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"moesekai/server/internal/lyricsacquisition"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsevidencepack"
 	"moesekai/server/internal/lyricsextractionplan"
 	"moesekai/server/internal/lyricsoutcomeartifact"
@@ -120,7 +121,7 @@ func TestSekaipediaOnlyPlanStopsAfterSekaipediaMissWithoutFallback(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != lyricsrootmanifest.CoverageMissing || len(result.ProviderOutcomes) != 1 || result.Full != nil ||
+	if result.State != lyricscontract.CoverageMissing || len(result.ProviderOutcomes) != 1 || result.Full != nil ||
 		result.SelectedEvidence == nil {
 		t.Fatalf("Sekaipedia-only missing result=%+v", result)
 	}
@@ -225,7 +226,7 @@ func TestProviderPrefixMoegirlExplicitGameOnlyStopsWithoutFandom(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != lyricsrootmanifest.CoverageGameOnly || result.Full != nil || result.Game == nil ||
+	if result.State != lyricscontract.CoverageGameOnly || result.Full != nil || result.Game == nil ||
 		len(result.ProviderOutcomes) != 2 {
 		t.Fatalf("Game-only result or provider prefix=%+v", result)
 	}

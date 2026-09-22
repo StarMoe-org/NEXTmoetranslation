@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/model"
 )
 
@@ -488,11 +489,11 @@ func selectFixedRenditionPerformerCandidate(
 			continue
 		}
 		selectedFull := fixedRenditionSideFull(selected.rendition, side)
-		normalizedSelected, err := NormalizePersistedPerformerMetadata(*selectedFull)
+		normalizedSelected, err := lyricscontract.NormalizePersistedPerformerMetadata(*selectedFull)
 		if err != nil {
 			return fixedRenditionCandidate{}, false, err
 		}
-		normalizedFull, err := NormalizePersistedPerformerMetadata(*full)
+		normalizedFull, err := lyricscontract.NormalizePersistedPerformerMetadata(*full)
 		if err != nil {
 			return fixedRenditionCandidate{}, false, err
 		}
@@ -551,7 +552,7 @@ func copyFixedPerformerSegmentation(target, source *model.LyricsSourceFull) erro
 	if target == nil || source == nil || len(target.Lines) != len(source.Lines) {
 		return fmt.Errorf("%w: selected performer source line shape differs", ErrComponentConflict)
 	}
-	normalizedSource, err := NormalizePersistedPerformerMetadata(*source)
+	normalizedSource, err := lyricscontract.NormalizePersistedPerformerMetadata(*source)
 	if err != nil {
 		return err
 	}
@@ -692,7 +693,7 @@ func normalizedFixedSourcePerformerIDs(rendition model.LyricsSourceRendition) ([
 		if full == nil {
 			continue
 		}
-		normalized, err := NormalizePersistedPerformerMetadata(*full)
+		normalized, err := lyricscontract.NormalizePersistedPerformerMetadata(*full)
 		if err != nil || len(normalized.Performers) != len(full.Performers) {
 			return nil, fmt.Errorf("%w: peer source roster cannot be normalized", ErrInvalidSource)
 		}

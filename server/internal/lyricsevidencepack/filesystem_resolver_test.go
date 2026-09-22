@@ -10,10 +10,11 @@ import (
 	"sync"
 	"testing"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 )
 
-func buildTestPack(t *testing.T, itemCount int) (string, Manifest, []EvidenceRef) {
+func buildTestPack(t *testing.T, itemCount int) (string, Manifest, []lyricscontract.EvidenceRef) {
 	t.Helper()
 	items := make([]lyricssource.IndexEvidence, 0, itemCount)
 	for index := 0; index < itemCount; index++ {
@@ -30,7 +31,7 @@ func buildTestPack(t *testing.T, itemCount int) (string, Manifest, []EvidenceRef
 
 func TestPublicationModesAndNoOverwrite(t *testing.T) {
 	item := testEvidence(t, 1, 0)
-	refs := []EvidenceRef{evidenceRef(item)}
+	refs := []lyricscontract.EvidenceRef{evidenceRef(item)}
 	directory := filepath.Join(canonicalTestRoot(t), "pack")
 	manifest, err := Build(context.Background(), directory, refs, sliceExactSource{items: []lyricssource.IndexEvidence{item}})
 	if err != nil {
@@ -61,7 +62,7 @@ func TestPublicationModesAndNoOverwrite(t *testing.T) {
 
 func TestConcurrentPublicationIsCreateExclusive(t *testing.T) {
 	item := testEvidence(t, 1, 0)
-	refs := []EvidenceRef{evidenceRef(item)}
+	refs := []lyricscontract.EvidenceRef{evidenceRef(item)}
 	directory := filepath.Join(canonicalTestRoot(t), "pack")
 	const publishers = 8
 	errorsByPublisher := make([]error, publishers)
@@ -148,7 +149,7 @@ func TestResolverRejectsTamperSymlinkAndModeDrift(t *testing.T) {
 
 func TestPublicationRecoversCrashPairs(t *testing.T) {
 	item := testEvidence(t, 1, 0)
-	refs := []EvidenceRef{evidenceRef(item)}
+	refs := []lyricscontract.EvidenceRef{evidenceRef(item)}
 	t.Cleanup(func() {
 		testHookAfterLink = nil
 		testHookBeforeManifest = nil
@@ -283,7 +284,7 @@ func TestResolverValidatesShardsOnceAndHydratesByExactID(t *testing.T) {
 
 func TestEmptyPackHasExplicitZeroUnion(t *testing.T) {
 	directory := filepath.Join(canonicalTestRoot(t), "pack")
-	manifest, err := Build(context.Background(), directory, []EvidenceRef{}, sliceExactSource{items: []lyricssource.IndexEvidence{}})
+	manifest, err := Build(context.Background(), directory, []lyricscontract.EvidenceRef{}, sliceExactSource{items: []lyricssource.IndexEvidence{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +295,7 @@ func TestEmptyPackHasExplicitZeroUnion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolver.ValidatedShardCount() != 0 || resolver.ValidateSelected([]EvidenceRef{}) != nil {
+	if resolver.ValidatedShardCount() != 0 || resolver.ValidateSelected([]lyricscontract.EvidenceRef{}) != nil {
 		t.Fatalf("empty resolver=%+v", resolver)
 	}
 }

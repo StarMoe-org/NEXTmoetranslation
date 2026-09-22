@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 )
 
@@ -23,7 +24,7 @@ type buildLimits struct {
 
 var defaultBuildLimits = buildLimits{
 	shardRaw: MaxShardRawBytes, shardEncoded: MaxShardEncodedBytes,
-	totalRaw: MaxPackRawBytes, totalEncoded: MaxPackEncodedBytes, items: MaxPackItems,
+	totalRaw: MaxPackRawBytes, totalEncoded: MaxPackEncodedBytes, items: lyricscontract.MaxPackItems,
 }
 
 type plannedShard struct {
@@ -37,17 +38,17 @@ var testHookBeforeManifest func() error
 // Build replays every selected acquisition by exact content address,
 // deterministically shards the resulting exact evidence union, and publishes a
 // private create-exclusive pack in directory.
-func Build(ctx context.Context, directory string, selected []EvidenceRef, source ExactAcquisitionSource) (Manifest, error) {
+func Build(ctx context.Context, directory string, selected []lyricscontract.EvidenceRef, source ExactAcquisitionSource) (Manifest, error) {
 	return buildWithLimits(ctx, directory, selected, source, defaultBuildLimits)
 }
 
-func buildWithLimits(ctx context.Context, directory string, selectedInput []EvidenceRef, source ExactAcquisitionSource, limits buildLimits) (Manifest, error) {
+func buildWithLimits(ctx context.Context, directory string, selectedInput []lyricscontract.EvidenceRef, source ExactAcquisitionSource, limits buildLimits) (Manifest, error) {
 	if ctx == nil || source == nil {
 		return Manifest{}, errors.New("context and exact acquisition source are required")
 	}
 	if limits.shardRaw <= 0 || limits.shardRaw > MaxShardRawBytes || limits.shardEncoded <= 0 ||
 		limits.shardEncoded > MaxShardEncodedBytes || limits.totalRaw <= 0 || limits.totalRaw > MaxPackRawBytes ||
-		limits.totalEncoded <= 0 || limits.totalEncoded > MaxPackEncodedBytes || limits.items <= 0 || limits.items > MaxPackItems {
+		limits.totalEncoded <= 0 || limits.totalEncoded > MaxPackEncodedBytes || limits.items <= 0 || limits.items > lyricscontract.MaxPackItems {
 		return Manifest{}, errors.New("evidence pack build limits are invalid")
 	}
 	selected, err := canonicalSelection(selectedInput)
@@ -77,13 +78,13 @@ func buildWithLimits(ctx context.Context, directory string, selectedInput []Evid
 	if err != nil {
 		return Manifest{}, err
 	}
-	selectionDigest, err := OrderedSelectionSHA256(selected)
+	selectionDigest, err := lyricscontract.OrderedSelectionSHA256(selected)
 	if err != nil {
 		return Manifest{}, err
 	}
 	manifest := Manifest{
 		SchemaVersion: SchemaVersionV1, CanonicalEncoding: CanonicalEncodingV1, DigestAlgorithm: DigestAlgorithmV1,
-		SelectionSHA256: selectionDigest, Selected: append([]EvidenceRef{}, selected...),
+		SelectionSHA256: selectionDigest, Selected: append([]lyricscontract.EvidenceRef{}, selected...),
 		Shards: make([]ShardManifest, len(plans)),
 		Totals: Totals{ItemCount: len(selected), ShardCount: len(plans), RawByteCount: rawTotal, EncodedByteCount: encodedTotal},
 	}
@@ -153,7 +154,7 @@ func buildWithLimits(ctx context.Context, directory string, selectedInput []Evid
 	return manifest, nil
 }
 
-func planShards(evidence []lyricssource.IndexEvidence, selected []EvidenceRef, limits buildLimits) ([]plannedShard, int64, error) {
+func planShards(evidence []lyricssource.IndexEvidence, selected []lyricscontract.EvidenceRef, limits buildLimits) ([]plannedShard, int64, error) {
 	if len(evidence) == 0 {
 		return []plannedShard{}, 0, nil
 	}
@@ -200,7 +201,7 @@ func planShards(evidence []lyricssource.IndexEvidence, selected []EvidenceRef, l
 		if measuredBytes != encoded {
 			return nil, 0, errors.New("evidence shard encoded planning drifted")
 		}
-		items := append([]EvidenceRef(nil), selected[start:end]...)
+		items := append([]lyricscontract.EvidenceRef(nil), selected[start:end]...)
 		manifest := ShardManifest{
 			Ordinal: ordinal, SHA256: digest, EncodedByteCount: encoded, RawByteCount: raw, ItemCount: end - start,
 			FirstEvidenceID: items[0].EvidenceID, LastEvidenceID: items[len(items)-1].EvidenceID, Items: items,

@@ -12,6 +12,7 @@ import (
 	"sort"
 
 	"moesekai/server/internal/lyricsacquisition"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsevidencepack"
 	"moesekai/server/internal/lyricsextractionplan"
 	"moesekai/server/internal/lyricsoutcomeartifact"
@@ -39,7 +40,7 @@ func AssembleAndPublish(
 		return lyricsrootmanifest.Manifest{}, errors.New("lyrics recovery results do not exactly cover the plan scope")
 	}
 	songs := make([]lyricsrootmanifest.SongResultRef, len(sortedResults))
-	selectedByEvidence := make(map[string]lyricsevidencepack.EvidenceRef)
+	selectedByEvidence := make(map[string]lyricscontract.EvidenceRef)
 	for index, result := range sortedResults {
 		if result.MusicID != plan.Scope.MusicIDs[index] {
 			return lyricsrootmanifest.Manifest{}, errors.New("lyrics recovery result music IDs do not exactly match the plan scope")
@@ -59,7 +60,7 @@ func AssembleAndPublish(
 	if err := validatePublishedRecoveryArtifacts(plan, sortedResults); err != nil {
 		return lyricsrootmanifest.Manifest{}, err
 	}
-	selected := make([]lyricsevidencepack.EvidenceRef, 0, len(selectedByEvidence))
+	selected := make([]lyricscontract.EvidenceRef, 0, len(selectedByEvidence))
 	for _, evidence := range selectedByEvidence {
 		selected = append(selected, evidence)
 	}
@@ -199,9 +200,9 @@ func validatePublishedRecoveryArtifacts(
 	if err != nil {
 		return err
 	}
-	availableBySong := make(map[int]map[lyricsevidencepack.EvidenceRef]struct{}, len(results))
+	availableBySong := make(map[int]map[lyricscontract.EvidenceRef]struct{}, len(results))
 	seenAcquisitionIDs := make(map[string]struct{})
-	evidenceBySong := make(map[int]map[string]lyricsevidencepack.EvidenceRef, len(results))
+	evidenceBySong := make(map[int]map[string]lyricscontract.EvidenceRef, len(results))
 	for _, name := range outcomeNames {
 		expected := expectedOutcomes[name]
 		artifact, err := lyricsoutcomeartifact.Open(filepath.Join(plan.Outputs.ProviderOutcomes, name))
@@ -217,11 +218,11 @@ func validatePublishedRecoveryArtifacts(
 		}
 		available := availableBySong[artifact.MusicID]
 		if available == nil {
-			available = make(map[lyricsevidencepack.EvidenceRef]struct{})
+			available = make(map[lyricscontract.EvidenceRef]struct{})
 			availableBySong[artifact.MusicID] = available
 		}
 		for _, ref := range artifact.Acquisitions {
-			exact := lyricsevidencepack.EvidenceRef{
+			exact := lyricscontract.EvidenceRef{
 				Provider: artifact.Provider, AcquisitionID: ref.AcquisitionID, EvidenceID: ref.EvidenceID,
 				SHA256: ref.SHA256, EnvelopeSHA256: ref.EnvelopeSHA256,
 			}
@@ -231,7 +232,7 @@ func validatePublishedRecoveryArtifacts(
 			seenAcquisitionIDs[ref.AcquisitionID] = struct{}{}
 			byEvidence := evidenceBySong[artifact.MusicID]
 			if byEvidence == nil {
-				byEvidence = make(map[string]lyricsevidencepack.EvidenceRef)
+				byEvidence = make(map[string]lyricscontract.EvidenceRef)
 				evidenceBySong[artifact.MusicID] = byEvidence
 			}
 			if existing, duplicate := byEvidence[ref.EvidenceID]; duplicate && existing != exact {

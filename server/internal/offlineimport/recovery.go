@@ -15,7 +15,7 @@ import (
 	"unicode/utf8"
 
 	"moesekai/server/internal/db"
-	"moesekai/server/internal/lyricscompose"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsevidencepack"
 	"moesekai/server/internal/lyricsrecoveryimport"
 	"moesekai/server/internal/lyricsrootmanifest"
@@ -42,7 +42,7 @@ var ErrLyricsRecoveryImportDrift = errors.New("lyrics recovery import no longer 
 // Changed is false only for an exact replay of an already committed batch.
 type RecoveryLyricsImportItem struct {
 	MusicID                    int
-	State                      lyricsrootmanifest.CoverageState
+	State                      lyricscontract.CoverageState
 	Changed                    bool
 	Revision                   int
 	DocumentSHA256             string
@@ -138,7 +138,7 @@ func ImportRecoveryLyricsManifestWithCommitHook(
 			// the two stores have independent revisions and would silently drift.
 			continue
 		}
-		if item.State == lyricsrootmanifest.CoverageComplete {
+		if item.State == lyricscontract.CoverageComplete {
 			lyrics, err := stagedManifestLyricsDraft(*item.Draft, catalogItem.vocals, performers)
 			if err != nil {
 				return nil, false, err
@@ -220,7 +220,7 @@ func ImportRecoveryLyricsManifestWithCommitHook(
 			// Plural source-v3 editor documents start at revision 1 in their
 			// localization envelope, but never own a legacy SongLyrics revision.
 			result.Revision = 0
-		} else if item.State == lyricsrootmanifest.CoverageComplete {
+		} else if item.State == lyricscontract.CoverageComplete {
 			if batchExists {
 				revision, err := verifyRecoveryCompleteItemTx(ctx, tx, manifest.BatchSHA256, item, preparedLyrics[item.MusicID])
 				if err != nil {
@@ -374,7 +374,7 @@ func recoveryImportCatalogTargetMatches(item lyricsrecoveryimport.Item, target m
 		return false
 	}
 	switch item.State {
-	case lyricsrootmanifest.CoverageSatisfiedNoLyrics:
+	case lyricscontract.CoverageSatisfiedNoLyrics:
 		// Catalog review targets deliberately have no elected Full anchor. The
 		// recovery item remains self-targeted, and only the closed instrumental
 		// reason may satisfy the reviewed no-lyrics state.
@@ -382,9 +382,9 @@ func recoveryImportCatalogTargetMatches(item lyricsrecoveryimport.Item, target m
 			target.ReasonCode == "instrumental_no_vocals" &&
 			target.TargetMusicID == 0 && len(target.AssociationMusicIDs) == 0 &&
 			item.TargetMusicID == item.MusicID && len(item.AssociationMusicIDs) == 0
-	case lyricsrootmanifest.CoverageComplete, lyricsrootmanifest.CoverageGameOnly,
-		lyricsrootmanifest.CoverageAmbiguous, lyricsrootmanifest.CoverageMissing,
-		lyricsrootmanifest.CoverageIncomplete, lyricsrootmanifest.CoverageFailed:
+	case lyricscontract.CoverageComplete, lyricscontract.CoverageGameOnly,
+		lyricscontract.CoverageAmbiguous, lyricscontract.CoverageMissing,
+		lyricscontract.CoverageIncomplete, lyricscontract.CoverageFailed:
 		return target.Disposition == model.LyricsCatalogTargetFullTarget &&
 			target.TargetMusicID == item.TargetMusicID &&
 			sameStagedAssociationIDs(target.AssociationMusicIDs, item.AssociationMusicIDs)
@@ -514,7 +514,7 @@ func verifyRecoveryImportItemTx(ctx context.Context, tx *sql.Tx, batchSHA256 str
 	return nil
 }
 
-func insertOrVerifyRecoveryEvidenceTx(ctx context.Context, tx *sql.Tx, ref lyricsevidencepack.EvidenceRef,
+func insertOrVerifyRecoveryEvidenceTx(ctx context.Context, tx *sql.Tx, ref lyricscontract.EvidenceRef,
 	evidence lyricssource.IndexEvidence, now int64,
 ) error {
 	categoriesJSON, err := recoveryCategoriesJSON(evidence.Categories)
@@ -829,7 +829,7 @@ func validateStoreLyricsAvailabilityDocument(document model.LyricsAvailabilityDo
 	if document.Game == nil {
 		return nil
 	}
-	if err := lyricscompose.ValidatePersistedPerformerMetadata(*document.Game); err != nil {
+	if err := lyricscontract.ValidatePersistedPerformerMetadata(*document.Game); err != nil {
 		return errors.New("unsafe persisted lyrics performer metadata")
 	}
 	canonicalRubyVersion, err := lyricssource.RecoveryPersistedRubyGeneratorVersion(document.Game.RubyGeneratorVersion)

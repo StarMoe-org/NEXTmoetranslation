@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"moesekai/server/internal/lyricsstaging"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/model"
 )
 
@@ -175,9 +175,9 @@ func loadMaterializedLyricsTranslationEdition(q queryRower, documentID int64, ed
 	if err != nil {
 		return lyricsRenditionLocalizationState{}, err
 	}
-	parents := make(map[string]lyricsstaging.RenditionTranslation, len(document.Renditions))
+	parents := make(map[string]lyricscontract.RenditionTranslation, len(document.Renditions))
 	for rows.Next() {
-		var item lyricsstaging.RenditionTranslation
+		var item lyricscontract.RenditionTranslation
 		var locale string
 		if err := rows.Scan(&item.RenditionKey, &locale, &item.TranslationCredit, &item.ProofreadingCredit); err != nil {
 			rows.Close()
@@ -242,7 +242,7 @@ func loadMaterializedLyricsTranslationEdition(q queryRower, documentID int64, ed
 	}
 	state := lyricsRenditionLocalizationState{
 		HasRows: true, Revision: revision, UpdatedAt: updatedAt,
-		Translations:     make([]lyricsstaging.RenditionTranslation, 0, len(document.Renditions)),
+		Translations:     make([]lyricscontract.RenditionTranslation, 0, len(document.Renditions)),
 		SideTranslations: map[string]map[string][]string{},
 	}
 	for _, rendition := range document.Renditions {
@@ -390,7 +390,7 @@ func rewriteLegacyLyricsTranslationMirrorTx(tx *sql.Tx, bundle lyricsRenditionEd
 	if _, err := tx.Exec(`DELETE FROM song_lyrics_rendition_localizations WHERE document_id=?`, bundle.documentID); err != nil {
 		return err
 	}
-	primary := make(map[string]lyricsstaging.RenditionTranslation, len(state.Translations))
+	primary := make(map[string]lyricscontract.RenditionTranslation, len(state.Translations))
 	for _, item := range state.Translations {
 		primary[item.RenditionKey] = item
 	}

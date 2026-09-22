@@ -20,11 +20,11 @@ import (
 	"time"
 
 	"moesekai/server/internal/httpx"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsextractionplan"
 	"moesekai/server/internal/lyricsprovidercoord"
 	"moesekai/server/internal/lyricsproviderpolicy"
 	"moesekai/server/internal/lyricsrecovery"
-	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/model"
 )
 
@@ -243,7 +243,7 @@ func writeSyntheticRecoveryCommandTestCatalog(root string) (string, lyricsextrac
 		}
 	}
 	sourceDigest := sha256.Sum256(body)
-	musicIDsSHA256, err := lyricsrootmanifest.OrderedMusicIDsSHA256(musicIDs)
+	musicIDsSHA256, err := lyricscontract.OrderedMusicIDsSHA256(musicIDs)
 	if err != nil {
 		return "", lyricsextractionplan.RecoveryCatalogBinding{}, err
 	}

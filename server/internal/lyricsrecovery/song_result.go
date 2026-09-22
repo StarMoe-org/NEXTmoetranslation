@@ -15,7 +15,7 @@ import (
 	"unicode/utf8"
 
 	"moesekai/server/internal/lyricscompose"
-	"moesekai/server/internal/lyricsevidencepack"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsprovideroutcome"
 	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/lyricssource"
@@ -44,11 +44,11 @@ type SongResult struct {
 	CanonicalEncoding string                                  `json:"canonicalEncoding"`
 	DigestAlgorithm   string                                  `json:"digestAlgorithm"`
 	MusicID           int                                     `json:"musicId"`
-	State             lyricsrootmanifest.CoverageState        `json:"state"`
+	State             lyricscontract.CoverageState            `json:"state"`
 	ReasonCode        model.LyricsSourceVersionReasonCode     `json:"reasonCode"`
 	NoLyricsReason    string                                  `json:"noLyricsReason,omitempty"`
 	ProviderOutcomes  []lyricsrootmanifest.ProviderOutcomeRef `json:"providerOutcomes"`
-	SelectedEvidence  []lyricsevidencepack.EvidenceRef        `json:"selectedEvidence"`
+	SelectedEvidence  []lyricscontract.EvidenceRef            `json:"selectedEvidence"`
 	Components        ComponentEvidence                       `json:"components"`
 	Full              *model.LyricsSourceFull                 `json:"full"`
 	Game              *model.LyricsSourceFull                 `json:"game,omitempty"`
@@ -67,7 +67,7 @@ func NewSongResult(replay ReplayResult) (SongResult, error) {
 		SchemaVersion: SongResultSchemaVersionV2, CanonicalEncoding: SongResultCanonicalEncodingV2,
 		DigestAlgorithm: SongResultDigestAlgorithmV2, MusicID: replay.MusicID,
 		ProviderOutcomes: make([]lyricsrootmanifest.ProviderOutcomeRef, len(replay.Providers)),
-		SelectedEvidence: append([]lyricsevidencepack.EvidenceRef(nil), replay.Selected...),
+		SelectedEvidence: append([]lyricscontract.EvidenceRef(nil), replay.Selected...),
 		Components:       cloneComponentEvidence(replay.Components),
 	}
 	for index, provider := range replay.Providers {
@@ -84,10 +84,10 @@ func NewSongResult(replay ReplayResult) (SongResult, error) {
 		if replay.Composition != nil {
 			return SongResult{}, errors.New("catalog-proven instrumental conflicts with recovered lyrics composition")
 		}
-		result.State = lyricsrootmanifest.CoverageSatisfiedNoLyrics
+		result.State = lyricscontract.CoverageSatisfiedNoLyrics
 		result.NoLyricsReason = NoLyricsReasonCatalogInstrumental
 		result.Components = emptyComponentEvidence()
-		result.SelectedEvidence = []lyricsevidencepack.EvidenceRef{}
+		result.SelectedEvidence = []lyricscontract.EvidenceRef{}
 	case replay.Composition != nil && replay.Composition.Game != nil && len(replay.Composition.Full.Lines) == 0:
 		composition := replay.Composition
 		if len(composition.Full.Lines) != 0 || composition.GameProjection != nil {
@@ -95,9 +95,9 @@ func NewSongResult(replay ReplayResult) (SongResult, error) {
 		}
 		result.AlternateVocals = model.CloneLyricsSourceAlternateVocals(composition.AlternateVocals)
 		hadPerformerSegmentation := songResultFullHasPerformerSegmentation(*composition.Game)
-		game, err := lyricscompose.NormalizePersistedPerformerMetadata(*composition.Game)
+		game, err := lyricscontract.NormalizePersistedPerformerMetadata(*composition.Game)
 		if err != nil {
-			return SongResult{}, fmt.Errorf("lyrics recovery Game-only result: %w", lyricscompose.ErrUnsafePerformerMetadata)
+			return SongResult{}, fmt.Errorf("lyrics recovery Game-only result: %w", lyricscontract.ErrUnsafePerformerMetadata)
 		}
 		if hadPerformerSegmentation && !songResultFullHasPerformerSegmentation(game) {
 			omitSongResultPerformerSegmentationEvidence(&result)
@@ -107,7 +107,7 @@ func NewSongResult(replay ReplayResult) (SongResult, error) {
 			return SongResult{}, err
 		}
 		game.RubyGeneratorVersion = persistedRubyVersion
-		result.State = lyricsrootmanifest.CoverageGameOnly
+		result.State = lyricscontract.CoverageGameOnly
 		result.ReasonCode = composition.ReasonCode
 		result.Game = &game
 		translations, err := songResultTranslations(*composition, replay.Providers)
@@ -119,9 +119,9 @@ func NewSongResult(replay ReplayResult) (SongResult, error) {
 		composition := replay.Composition
 		result.AlternateVocals = model.CloneLyricsSourceAlternateVocals(composition.AlternateVocals)
 		hadPerformerSegmentation := songResultFullHasPerformerSegmentation(composition.Full)
-		full, err := lyricscompose.NormalizePersistedPerformerMetadata(composition.Full)
+		full, err := lyricscontract.NormalizePersistedPerformerMetadata(composition.Full)
 		if err != nil {
-			return SongResult{}, fmt.Errorf("lyrics recovery song result: %w", lyricscompose.ErrUnsafePerformerMetadata)
+			return SongResult{}, fmt.Errorf("lyrics recovery song result: %w", lyricscontract.ErrUnsafePerformerMetadata)
 		}
 		if hadPerformerSegmentation && !songResultFullHasPerformerSegmentation(full) {
 			omitSongResultPerformerSegmentationEvidence(&result)
@@ -131,14 +131,14 @@ func NewSongResult(replay ReplayResult) (SongResult, error) {
 			return SongResult{}, err
 		}
 		full.RubyGeneratorVersion = persistedRubyVersion
-		result.State = lyricsrootmanifest.CoverageComplete
+		result.State = lyricscontract.CoverageComplete
 		result.ReasonCode = composition.ReasonCode
 		result.Full = &full
 		if composition.Game != nil {
 			gameHadPerformerSegmentation := songResultFullHasPerformerSegmentation(*composition.Game)
-			game, gameErr := lyricscompose.NormalizePersistedPerformerMetadata(*composition.Game)
+			game, gameErr := lyricscontract.NormalizePersistedPerformerMetadata(*composition.Game)
 			if gameErr != nil {
-				return SongResult{}, fmt.Errorf("lyrics recovery Game artifact: %w", lyricscompose.ErrUnsafePerformerMetadata)
+				return SongResult{}, fmt.Errorf("lyrics recovery Game artifact: %w", lyricscontract.ErrUnsafePerformerMetadata)
 			}
 			if gameHadPerformerSegmentation && !songResultFullHasPerformerSegmentation(game) {
 				omitSongResultPerformerSegmentationEvidence(&result)
@@ -164,7 +164,7 @@ func NewSongResult(replay ReplayResult) (SongResult, error) {
 		result.State = closedCoverageState(replay.Providers)
 		result.ReasonCode = model.LyricsSourceVersionReasonVersionConflict
 		result.Components = emptyComponentEvidence()
-		result.SelectedEvidence = []lyricsevidencepack.EvidenceRef{}
+		result.SelectedEvidence = []lyricscontract.EvidenceRef{}
 	}
 	result.ResultSHA256 = ""
 	if err := validateSongResult(result, false); err != nil {
@@ -241,7 +241,7 @@ func validateSongResult(result SongResult, requireDigest bool) error {
 		return err
 	}
 	switch result.State {
-	case lyricsrootmanifest.CoverageComplete:
+	case lyricscontract.CoverageComplete:
 		if result.Full == nil || result.NoLyricsReason != "" || len(result.SelectedEvidence) == 0 ||
 			len(result.ProviderOutcomes) == 0 || !model.IsValidLyricsSourceVersionReasonCode(result.ReasonCode) ||
 			result.ReasonCode == model.LyricsSourceVersionReasonVersionConflict {
@@ -261,7 +261,7 @@ func validateSongResult(result SongResult, requireDigest bool) error {
 		if result.Game != nil && result.GameProjection != nil && !songResultGameMatchesProjection(*result.Game, *result.Full, *result.GameProjection) {
 			return errors.New("complete lyrics recovery Game does not match its Full projection")
 		}
-	case lyricsrootmanifest.CoverageGameOnly:
+	case lyricscontract.CoverageGameOnly:
 		if result.SchemaVersion != SongResultSchemaVersionV2 || result.Full != nil || result.Game == nil ||
 			result.GameProjection != nil || result.NoLyricsReason != "" || len(result.SelectedEvidence) == 0 ||
 			len(result.ProviderOutcomes) == 0 ||
@@ -272,15 +272,15 @@ func validateSongResult(result SongResult, requireDigest bool) error {
 		if err := validateSongResultLyrics(*result.Game, result.Translations, result.Components); err != nil {
 			return err
 		}
-	case lyricsrootmanifest.CoverageSatisfiedNoLyrics:
+	case lyricscontract.CoverageSatisfiedNoLyrics:
 		if result.SchemaVersion != SongResultSchemaVersionV2 || result.NoLyricsReason != NoLyricsReasonCatalogInstrumental ||
 			result.Full != nil || result.Game != nil || result.GameProjection != nil || result.Translations != nil ||
 			len(result.SelectedEvidence) != 0 || len(result.ProviderOutcomes) == 0 ||
 			!componentEvidenceEmpty(result.Components) || result.ReasonCode != "" {
 			return errors.New("satisfied no-lyrics recovery song result is invalid")
 		}
-	case lyricsrootmanifest.CoverageAmbiguous, lyricsrootmanifest.CoverageMissing,
-		lyricsrootmanifest.CoverageIncomplete, lyricsrootmanifest.CoverageFailed:
+	case lyricscontract.CoverageAmbiguous, lyricscontract.CoverageMissing,
+		lyricscontract.CoverageIncomplete, lyricscontract.CoverageFailed:
 		if result.NoLyricsReason != "" || result.Full != nil || result.Game != nil || result.GameProjection != nil ||
 			result.Translations != nil || len(result.SelectedEvidence) != 0 || !componentEvidenceEmpty(result.Components) ||
 			result.ReasonCode != model.LyricsSourceVersionReasonVersionConflict {
@@ -297,8 +297,8 @@ func validateSongResultLyrics(
 	translations []string,
 	components ComponentEvidence,
 ) error {
-	if err := lyricscompose.ValidatePersistedPerformerMetadata(full); err != nil {
-		return fmt.Errorf("lyrics recovery song result: %w", lyricscompose.ErrUnsafePerformerMetadata)
+	if err := lyricscontract.ValidatePersistedPerformerMetadata(full); err != nil {
+		return fmt.Errorf("lyrics recovery song result: %w", lyricscontract.ErrUnsafePerformerMetadata)
 	}
 	authoritativeVocaloidSegmentation := full.Version.Kind == "vocaloid" &&
 		songResultFullHasPerformerSegmentation(full) && len(components.PerformerSegmentation) != 0
@@ -363,17 +363,17 @@ func RootSongRef(result SongResult) (lyricsrootmanifest.SongResultRef, error) {
 	}, nil
 }
 
-func closedCoverageState(providers []ProviderReplay) lyricsrootmanifest.CoverageState {
-	state := lyricsrootmanifest.CoverageMissing
+func closedCoverageState(providers []ProviderReplay) lyricscontract.CoverageState {
+	state := lyricscontract.CoverageMissing
 	for _, provider := range providers {
 		switch provider.Outcome.Status {
 		case lyricsprovideroutcome.StatusTransportError:
-			return lyricsrootmanifest.CoverageFailed
+			return lyricscontract.CoverageFailed
 		case lyricsprovideroutcome.StatusAmbiguous, lyricsprovideroutcome.StatusStale:
-			state = lyricsrootmanifest.CoverageAmbiguous
+			state = lyricscontract.CoverageAmbiguous
 		case lyricsprovideroutcome.StatusUnsupported:
-			if state == lyricsrootmanifest.CoverageMissing {
-				state = lyricsrootmanifest.CoverageIncomplete
+			if state == lyricscontract.CoverageMissing {
+				state = lyricscontract.CoverageIncomplete
 			}
 		}
 	}
@@ -400,7 +400,7 @@ func validateSongOutcomeRefs(refs []lyricsrootmanifest.ProviderOutcomeRef) error
 	return nil
 }
 
-func validateSongEvidenceRefs(refs []lyricsevidencepack.EvidenceRef) error {
+func validateSongEvidenceRefs(refs []lyricscontract.EvidenceRef) error {
 	last := ""
 	for _, ref := range refs {
 		if !model.IsValidLyricsSourceProvider(ref.Provider) ||
@@ -417,17 +417,17 @@ func validateSongEvidenceRefs(refs []lyricsevidencepack.EvidenceRef) error {
 
 func validateComponentEvidence(
 	components ComponentEvidence,
-	selected []lyricsevidencepack.EvidenceRef,
-	state lyricsrootmanifest.CoverageState,
+	selected []lyricscontract.EvidenceRef,
+	state lyricscontract.CoverageState,
 	schemaVersion int,
 	hasGame bool,
 	hasAlternateVocals bool,
 ) error {
-	available := make(map[lyricsevidencepack.EvidenceRef]struct{}, len(selected))
+	available := make(map[lyricscontract.EvidenceRef]struct{}, len(selected))
 	for _, ref := range selected {
 		available[ref] = struct{}{}
 	}
-	used := make(map[lyricsevidencepack.EvidenceRef]struct{}, len(selected))
+	used := make(map[lyricscontract.EvidenceRef]struct{}, len(selected))
 	for _, refs := range requiredComponentEvidenceLists(components) {
 		if refs == nil {
 			return errors.New("lyrics recovery component evidence must use explicit bounded arrays")
@@ -447,12 +447,12 @@ func validateComponentEvidence(
 		}
 	}
 	switch state {
-	case lyricsrootmanifest.CoverageComplete:
+	case lyricscontract.CoverageComplete:
 		if len(components.FullText) == 0 || hasGame != (len(components.GameText) != 0) ||
 			hasAlternateVocals != (len(components.AlternateVocals) != 0) {
 			return errors.New("lyrics recovery component evidence does not bind authoritative Full/Game")
 		}
-	case lyricsrootmanifest.CoverageGameOnly:
+	case lyricscontract.CoverageGameOnly:
 		if schemaVersion != SongResultSchemaVersionV2 || len(components.FullText) != 0 || len(components.GameText) == 0 ||
 			hasAlternateVocals != (len(components.AlternateVocals) != 0) {
 			return errors.New("lyrics recovery component evidence does not bind authoritative Game")
@@ -469,9 +469,9 @@ func validateComponentEvidence(
 }
 
 func bindComponentEvidenceRefs(
-	refs []lyricsevidencepack.EvidenceRef,
-	available map[lyricsevidencepack.EvidenceRef]struct{},
-	used map[lyricsevidencepack.EvidenceRef]struct{},
+	refs []lyricscontract.EvidenceRef,
+	available map[lyricscontract.EvidenceRef]struct{},
+	used map[lyricscontract.EvidenceRef]struct{},
 ) error {
 	if err := validateSongEvidenceRefs(refs); err != nil {
 		return err
@@ -626,12 +626,12 @@ func songResultFullHasPerformerSegmentation(full model.LyricsSourceFull) bool {
 }
 
 func omitSongResultPerformerSegmentationEvidence(result *SongResult) {
-	removedOnly := make(map[lyricsevidencepack.EvidenceRef]struct{}, len(result.Components.PerformerSegmentation))
+	removedOnly := make(map[lyricscontract.EvidenceRef]struct{}, len(result.Components.PerformerSegmentation))
 	for _, ref := range result.Components.PerformerSegmentation {
 		removedOnly[ref] = struct{}{}
 	}
-	result.Components.PerformerSegmentation = []lyricsevidencepack.EvidenceRef{}
-	for _, refs := range [][]lyricsevidencepack.EvidenceRef{
+	result.Components.PerformerSegmentation = []lyricscontract.EvidenceRef{}
+	for _, refs := range [][]lyricscontract.EvidenceRef{
 		result.Components.FullText,
 		result.Components.GameText,
 		result.Components.GameProjection,
@@ -645,7 +645,7 @@ func omitSongResultPerformerSegmentationEvidence(result *SongResult) {
 	if len(removedOnly) == 0 {
 		return
 	}
-	selected := make([]lyricsevidencepack.EvidenceRef, 0, len(result.SelectedEvidence))
+	selected := make([]lyricscontract.EvidenceRef, 0, len(result.SelectedEvidence))
 	for _, ref := range result.SelectedEvidence {
 		if _, removed := removedOnly[ref]; !removed {
 			selected = append(selected, ref)
@@ -761,7 +761,7 @@ func cloneComponentEvidence(input ComponentEvidence) ComponentEvidence {
 	}
 }
 
-func cloneOptionalEvidenceRefs(input []lyricsevidencepack.EvidenceRef) []lyricsevidencepack.EvidenceRef {
+func cloneOptionalEvidenceRefs(input []lyricscontract.EvidenceRef) []lyricscontract.EvidenceRef {
 	if input == nil {
 		return nil
 	}
@@ -770,17 +770,17 @@ func cloneOptionalEvidenceRefs(input []lyricsevidencepack.EvidenceRef) []lyricse
 
 func emptyComponentEvidence() ComponentEvidence {
 	return ComponentEvidence{
-		FullText:              []lyricsevidencepack.EvidenceRef{},
-		GameText:              []lyricsevidencepack.EvidenceRef{},
-		PerformerSegmentation: []lyricsevidencepack.EvidenceRef{},
-		GameProjection:        []lyricsevidencepack.EvidenceRef{},
-		Ruby:                  []lyricsevidencepack.EvidenceRef{},
-		VersionEvidence:       []lyricsevidencepack.EvidenceRef{},
+		FullText:              []lyricscontract.EvidenceRef{},
+		GameText:              []lyricscontract.EvidenceRef{},
+		PerformerSegmentation: []lyricscontract.EvidenceRef{},
+		GameProjection:        []lyricscontract.EvidenceRef{},
+		Ruby:                  []lyricscontract.EvidenceRef{},
+		VersionEvidence:       []lyricscontract.EvidenceRef{},
 	}
 }
 
-func requiredComponentEvidenceLists(input ComponentEvidence) [][]lyricsevidencepack.EvidenceRef {
-	return [][]lyricsevidencepack.EvidenceRef{
+func requiredComponentEvidenceLists(input ComponentEvidence) [][]lyricscontract.EvidenceRef {
+	return [][]lyricscontract.EvidenceRef{
 		input.FullText,
 		input.PerformerSegmentation,
 		input.GameProjection,

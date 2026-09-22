@@ -6,6 +6,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"moesekai/server/internal/lyricscontract"
 )
 
 // ValidateSource validates one complete, immutable composition view. Optional
@@ -55,7 +57,7 @@ func Compose(base Source, supplements ...Source) (Result, error) {
 	}
 	canonicalBase, err := canonicalizeCompositionSource(base)
 	if err != nil {
-		return Result{}, ErrUnsafePerformerMetadata
+		return Result{}, lyricscontract.ErrUnsafePerformerMetadata
 	}
 	base = canonicalBase
 	all := make([]Source, 0, len(supplements)+1)
@@ -76,7 +78,7 @@ func Compose(base Source, supplements ...Source) (Result, error) {
 		}
 		canonicalSupplement, err := canonicalizeCompositionSource(supplement)
 		if err != nil {
-			return Result{}, ErrUnsafePerformerMetadata
+			return Result{}, lyricscontract.ErrUnsafePerformerMetadata
 		}
 		all = append(all, canonicalSupplement)
 	}
@@ -178,9 +180,9 @@ func ValidateResult(result Result) error {
 		performers[performer.ID] = struct{}{}
 	}
 	for _, performer := range result.Performers {
-		persisted, known, err := normalizeAuditedPerformerValues(performer.ID, performer.Name)
+		persisted, known, err := lyricscontract.NormalizeAuditedPerformerValues(performer.ID, performer.Name)
 		if err != nil || !known || performer.ID != persisted.ID || performer.Name != persisted.Name {
-			return ErrUnsafePerformerMetadata
+			return lyricscontract.ErrUnsafePerformerMetadata
 		}
 	}
 	hasReading := false
@@ -446,7 +448,7 @@ func segmentationEqual(left, right Segmentation) bool {
 	}
 	for index := range left.Lines {
 		if !segmentsEqual(left.Lines[index].Segments, right.Lines[index].Segments) ||
-			!stringsEqual(left.Lines[index].TrailingPerformerIDs, right.Lines[index].TrailingPerformerIDs) {
+			!lyricscontract.StringsEqual(left.Lines[index].TrailingPerformerIDs, right.Lines[index].TrailingPerformerIDs) {
 			return false
 		}
 	}
@@ -458,7 +460,7 @@ func segmentsEqual(left, right []Segment) bool {
 		return false
 	}
 	for index := range left {
-		if left[index].Text != right[index].Text || !stringsEqual(left[index].PerformerIDs, right[index].PerformerIDs) {
+		if left[index].Text != right[index].Text || !lyricscontract.StringsEqual(left[index].PerformerIDs, right[index].PerformerIDs) {
 			return false
 		}
 	}
@@ -513,16 +515,4 @@ func clonePerformers(input []Performer) []Performer {
 
 func cloneStrings(input []string) []string {
 	return append([]string{}, input...)
-}
-
-func stringsEqual(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
 }

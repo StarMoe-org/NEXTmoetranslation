@@ -418,9 +418,9 @@ func ReviewedSekaipediaProviderConfig(targets []SekaipediaPageTarget, aliases []
 			RawSHA256:         "b381f24fa9d584d1aa58ab9a33030e7a557293beb77e145823505ab14a86cc88",
 			Title:             "List of songs",
 		}},
-		SekaipediaTargets:   cloneSekaipediaPageTargets(targets),
-		ContributorAliases:  cloneProviderContributorAliases(aliases),
-		CrawlDelay:          defaultProviderCrawlDelay, CacheTTL: defaultProviderCacheTTL,
+		SekaipediaTargets:  cloneSekaipediaPageTargets(targets),
+		ContributorAliases: cloneProviderContributorAliases(aliases),
+		CrawlDelay:         defaultProviderCrawlDelay, CacheTTL: defaultProviderCacheTTL,
 	}
 }
 

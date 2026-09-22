@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"moesekai/server/internal/legacy"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsevidencepack"
 	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/lyricsstaging"
@@ -26,17 +27,17 @@ const (
 // validated, bounded evidence pack. Raw evidence remains in the pack's shards
 // and is hydrated only by exact EvidenceRef during private import.
 type EvidenceReceipt struct {
-	SchemaVersion    int                              `json:"schemaVersion"`
-	RootID           string                           `json:"rootId"`
-	RootSHA256       string                           `json:"rootSha256"`
-	PackSHA256       string                           `json:"packSha256"`
-	SelectionSHA256  string                           `json:"selectionSha256"`
-	EvidenceCount    int                              `json:"evidenceCount"`
-	ShardCount       int                              `json:"shardCount"`
-	RawByteCount     int64                            `json:"rawByteCount"`
-	EncodedByteCount int64                            `json:"encodedByteCount"`
-	Evidence         []lyricsevidencepack.EvidenceRef `json:"evidence"`
-	ReceiptSHA256    string                           `json:"receiptSha256"`
+	SchemaVersion    int                          `json:"schemaVersion"`
+	RootID           string                       `json:"rootId"`
+	RootSHA256       string                       `json:"rootSha256"`
+	PackSHA256       string                       `json:"packSha256"`
+	SelectionSHA256  string                       `json:"selectionSha256"`
+	EvidenceCount    int                          `json:"evidenceCount"`
+	ShardCount       int                          `json:"shardCount"`
+	RawByteCount     int64                        `json:"rawByteCount"`
+	EncodedByteCount int64                        `json:"encodedByteCount"`
+	Evidence         []lyricscontract.EvidenceRef `json:"evidence"`
+	ReceiptSHA256    string                       `json:"receiptSha256"`
 }
 
 func NewEvidenceReceipt(
@@ -69,7 +70,7 @@ func NewEvidenceReceipt(
 		PackSHA256: pack.PackSHA256, SelectionSHA256: pack.SelectionSHA256,
 		EvidenceCount: pack.Totals.ItemCount, ShardCount: pack.Totals.ShardCount,
 		RawByteCount: pack.Totals.RawByteCount, EncodedByteCount: pack.Totals.EncodedByteCount,
-		Evidence: append([]lyricsevidencepack.EvidenceRef{}, pack.Selected...),
+		Evidence: append([]lyricscontract.EvidenceRef{}, pack.Selected...),
 	}
 	digest, err := evidenceReceiptDigest(receipt)
 	if err != nil {
@@ -87,13 +88,13 @@ func ValidateEvidenceReceipt(receipt EvidenceReceipt) error {
 		!canonicalSHA256.MatchString(receipt.RootSHA256) || !canonicalSHA256.MatchString(receipt.PackSHA256) ||
 		!canonicalSHA256.MatchString(receipt.SelectionSHA256) || receipt.Evidence == nil ||
 		receipt.EvidenceCount != len(receipt.Evidence) || receipt.EvidenceCount < 0 ||
-		receipt.EvidenceCount > lyricsevidencepack.MaxPackItems || receipt.ShardCount < 0 ||
+		receipt.EvidenceCount > lyricscontract.MaxPackItems || receipt.ShardCount < 0 ||
 		receipt.RawByteCount < 0 || receipt.RawByteCount > lyricsevidencepack.MaxPackRawBytes ||
 		receipt.EncodedByteCount < 0 || receipt.EncodedByteCount > lyricsevidencepack.MaxPackEncodedBytes ||
 		!canonicalSHA256.MatchString(receipt.ReceiptSHA256) {
 		return errors.New("recovery import evidence receipt envelope is invalid")
 	}
-	selectionSHA, err := lyricsevidencepack.OrderedSelectionSHA256(receipt.Evidence)
+	selectionSHA, err := lyricscontract.OrderedSelectionSHA256(receipt.Evidence)
 	if err != nil || selectionSHA != receipt.SelectionSHA256 {
 		return errors.New("recovery import evidence receipt selection digest does not match")
 	}
@@ -134,8 +135,8 @@ func ValidateEvidenceReceiptAgainst(
 	return nil
 }
 
-func validateManifestEvidenceUnion(manifest Manifest, selected []lyricsevidencepack.EvidenceRef) error {
-	selectedByID := make(map[string]lyricsevidencepack.EvidenceRef, len(selected))
+func validateManifestEvidenceUnion(manifest Manifest, selected []lyricscontract.EvidenceRef) error {
+	selectedByID := make(map[string]lyricscontract.EvidenceRef, len(selected))
 	for _, reference := range selected {
 		selectedByID[reference.EvidenceID] = reference
 	}
@@ -218,6 +219,6 @@ func DecodeEvidenceReceipt(body []byte) (EvidenceReceipt, error) {
 }
 
 func cloneEvidenceReceipt(receipt EvidenceReceipt) EvidenceReceipt {
-	receipt.Evidence = append([]lyricsevidencepack.EvidenceRef{}, receipt.Evidence...)
+	receipt.Evidence = append([]lyricscontract.EvidenceRef{}, receipt.Evidence...)
 	return receipt
 }

@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"moesekai/server/internal/lyricsacquisition"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsextractionplan"
-	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 )
@@ -194,7 +194,7 @@ func sekaipediaCanaryCatalogBinding(
 ) (lyricsextractionplan.RecoveryCatalogBinding, []int) {
 	t.Helper()
 	musicIDs := []int{2, 235, 999}
-	musicIDsSHA256, err := lyricsrootmanifest.OrderedMusicIDsSHA256(musicIDs)
+	musicIDsSHA256, err := lyricscontract.OrderedMusicIDsSHA256(musicIDs)
 	if err != nil {
 		t.Fatal(err)
 	}

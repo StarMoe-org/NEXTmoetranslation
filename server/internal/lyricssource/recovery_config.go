@@ -8,9 +8,24 @@ import (
 	"sync"
 	"time"
 
-	"moesekai/server/internal/lyricsproviderpolicy"
 	"moesekai/server/internal/model"
 )
+
+// recoveryCanonicalEndpoint maps a live MediaWiki provider to the API endpoint
+// this package already owns. Values are pinned to the reviewed provider policy
+// table by TestRecoveryCanonicalEndpointMatchesProviderPolicy.
+func recoveryCanonicalEndpoint(provider model.LyricsSourceProvider) (string, bool) {
+	switch provider {
+	case ProviderVocaloidFandom:
+		return vocaloidWikiAPI, true
+	case ProviderMoegirl:
+		return moegirlAPI, true
+	case ProviderSekaipedia:
+		return sekaipediaAPI, true
+	default:
+		return "", false
+	}
+}
 
 // RecoveryProviderConfig constructs one provider configuration from reviewed
 // plan data while retaining endpoint, origin, and rights ownership here.
@@ -29,7 +44,7 @@ func RecoveryProviderConfig(
 	if len(targetSets) == 1 {
 		targets = cloneSekaipediaPageTargets(targetSets[0])
 	}
-	endpoint, ok := lyricsproviderpolicy.CanonicalEndpointV1(lyricsproviderpolicy.Provider(provider))
+	endpoint, ok := recoveryCanonicalEndpoint(provider)
 	if !ok {
 		return ProviderConfig{}, errors.New("recovery provider is unsupported")
 	}

@@ -8,6 +8,7 @@ import (
 
 	"moesekai/server/internal/lyricsacquisition"
 	"moesekai/server/internal/lyricscompose"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsevidencepack"
 	"moesekai/server/internal/lyricsoutcomeartifact"
 	"moesekai/server/internal/lyricsprovideroutcome"
@@ -19,7 +20,7 @@ type ProviderReplay struct {
 	Outcome      lyricsprovideroutcome.Outcome[lyricssource.Candidate]
 	Artifact     lyricsoutcomeartifact.Artifact
 	Fixed        *lyricssource.FixedRevision
-	EvidenceRefs []lyricsevidencepack.EvidenceRef
+	EvidenceRefs []lyricscontract.EvidenceRef
 }
 
 type ReplayResult struct {
@@ -27,25 +28,25 @@ type ReplayResult struct {
 	Instrumental        bool
 	Providers           []ProviderReplay
 	Composition         *lyricscompose.FixedArtifactComposition
-	Selected            []lyricsevidencepack.EvidenceRef
+	Selected            []lyricscontract.EvidenceRef
 	Components          ComponentEvidence
 	RenditionComponents []RenditionComponentEvidence
 }
 
 type ComponentEvidence struct {
-	FullText              []lyricsevidencepack.EvidenceRef `json:"fullText"`
-	GameText              []lyricsevidencepack.EvidenceRef `json:"gameText,omitempty"`
-	AlternateVocals       []lyricsevidencepack.EvidenceRef `json:"alternateVocals,omitempty"`
-	PerformerSegmentation []lyricsevidencepack.EvidenceRef `json:"performerSegmentation"`
-	GameProjection        []lyricsevidencepack.EvidenceRef `json:"gameProjection"`
-	Ruby                  []lyricsevidencepack.EvidenceRef `json:"ruby"`
-	VersionEvidence       []lyricsevidencepack.EvidenceRef `json:"versionEvidence"`
+	FullText              []lyricscontract.EvidenceRef `json:"fullText"`
+	GameText              []lyricscontract.EvidenceRef `json:"gameText,omitempty"`
+	AlternateVocals       []lyricscontract.EvidenceRef `json:"alternateVocals,omitempty"`
+	PerformerSegmentation []lyricscontract.EvidenceRef `json:"performerSegmentation"`
+	GameProjection        []lyricscontract.EvidenceRef `json:"gameProjection"`
+	Ruby                  []lyricscontract.EvidenceRef `json:"ruby"`
+	VersionEvidence       []lyricscontract.EvidenceRef `json:"versionEvidence"`
 }
 
 type RenditionComponentEvidenceRef struct {
 	Component model.LyricsSourceRenditionComponentKind `json:"component"`
 	OutcomeID string                                   `json:"outcomeId"`
-	Evidence  []lyricsevidencepack.EvidenceRef         `json:"evidence"`
+	Evidence  []lyricscontract.EvidenceRef             `json:"evidence"`
 }
 
 type RenditionComponentEvidence struct {
@@ -230,7 +231,7 @@ func bindReplayComposition(
 		}
 		providersBySource[provider.Artifact.OutcomeID] = provider
 	}
-	selectedByEvidence := make(map[string]lyricsevidencepack.EvidenceRef)
+	selectedByEvidence := make(map[string]lyricscontract.EvidenceRef)
 	for _, sourceKey := range composition.SelectedSourceKeys {
 		provider, found := providersBySource[sourceKey]
 		if !found || provider.Outcome.Status != lyricsprovideroutcome.StatusCandidate || provider.Fixed == nil {
@@ -243,7 +244,7 @@ func bindReplayComposition(
 			selectedByEvidence[ref.EvidenceID] = ref
 		}
 	}
-	selected := make([]lyricsevidencepack.EvidenceRef, 0, len(selectedByEvidence))
+	selected := make([]lyricscontract.EvidenceRef, 0, len(selectedByEvidence))
 	for _, ref := range selectedByEvidence {
 		selected = append(selected, ref)
 	}
@@ -317,8 +318,8 @@ func AllowsFallback(
 
 func replayReferences(
 	acquired []lyricsacquisition.Acquisition,
-) ([]lyricsevidencepack.EvidenceRef, []lyricsoutcomeartifact.AcquisitionRef, error) {
-	evidenceRefs := make([]lyricsevidencepack.EvidenceRef, len(acquired))
+) ([]lyricscontract.EvidenceRef, []lyricsoutcomeartifact.AcquisitionRef, error) {
+	evidenceRefs := make([]lyricscontract.EvidenceRef, len(acquired))
 	artifactRefs := make([]lyricsoutcomeartifact.AcquisitionRef, len(acquired))
 	for index, item := range acquired {
 		ref, err := lyricsevidencepack.EvidenceRefFromAcquisition(item)
@@ -342,7 +343,7 @@ func replayReferences(
 
 func outcomeReferencesResolved(
 	outcome lyricsprovideroutcome.Outcome[lyricssource.Candidate],
-	refs []lyricsevidencepack.EvidenceRef,
+	refs []lyricscontract.EvidenceRef,
 ) error {
 	available := make(map[string]string, len(refs))
 	for _, ref := range refs {
@@ -363,9 +364,9 @@ func componentEvidenceForComposition(
 	composition lyricscompose.FixedArtifactComposition,
 	providers []ProviderReplay,
 ) ComponentEvidence {
-	bySource := make(map[string][]lyricsevidencepack.EvidenceRef, len(providers))
+	bySource := make(map[string][]lyricscontract.EvidenceRef, len(providers))
 	for _, provider := range providers {
-		bySource[provider.Artifact.OutcomeID] = append([]lyricsevidencepack.EvidenceRef(nil), provider.EvidenceRefs...)
+		bySource[provider.Artifact.OutcomeID] = append([]lyricscontract.EvidenceRef(nil), provider.EvidenceRefs...)
 	}
 	return ComponentEvidence{
 		FullText:              cloneEvidenceRefs(bySource[composition.Components.FullText]),
@@ -433,6 +434,6 @@ func cloneRenditionComponentEvidence(input []RenditionComponentEvidence) []Rendi
 	return result
 }
 
-func cloneEvidenceRefs(input []lyricsevidencepack.EvidenceRef) []lyricsevidencepack.EvidenceRef {
-	return append([]lyricsevidencepack.EvidenceRef{}, input...)
+func cloneEvidenceRefs(input []lyricscontract.EvidenceRef) []lyricscontract.EvidenceRef {
+	return append([]lyricscontract.EvidenceRef{}, input...)
 }

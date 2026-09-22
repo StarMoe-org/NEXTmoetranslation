@@ -14,31 +14,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"moesekai/server/internal/lyricscompose"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 )
-
-type CatalogIdentity struct {
-	MusicID            int
-	JapaneseTitle      string
-	ProducerMetadata   string
-	Lyricist           string
-	Composer           string
-	Arranger           string
-	Vocals             []model.CatalogVocalSignal
-	CatalogFingerprint string
-}
-
-func (identity CatalogIdentity) SourceIdentity() lyricssource.MusicIdentity {
-	return lyricssource.MusicIdentity{
-		MusicID: identity.MusicID, JapaneseTitle: identity.JapaneseTitle,
-		ProducerMetadata: identity.ProducerMetadata, Lyricist: identity.Lyricist,
-		Composer: identity.Composer, Arranger: identity.Arranger,
-		PerformerSegmentationPolicy: lyricssource.PerformerSegmentationPolicyFromCatalogVocals(identity.Vocals),
-		Instrumental:                model.CatalogVocalSignalsAreInstrumental(identity.Vocals),
-	}
-}
 
 func effectiveCompositionReason(item PreflightItem) model.LyricsSourceVersionReasonCode {
 	if item.CompositionReason != "" {
@@ -51,7 +30,7 @@ func effectiveCompositionReason(item PreflightItem) model.LyricsSourceVersionRea
 }
 
 func canonicalizeStagedFull(full model.LyricsSourceFull) (model.LyricsSourceFull, error) {
-	canonical, err := lyricscompose.NormalizePersistedPerformerMetadata(full)
+	canonical, err := lyricscontract.NormalizePersistedPerformerMetadata(full)
 	if err != nil {
 		return model.LyricsSourceFull{}, errors.New("unsafe persisted lyrics performer metadata")
 	}
@@ -215,8 +194,8 @@ func BuildRecoveryDraft(
 	return draft, nil
 }
 
-func BuildDraft(item PreflightItem, identity CatalogIdentity, fixed lyricssource.FixedRevision) (Draft, error) {
-	if err := ValidateFixedPerformerSegmentationPolicy(identity, fixed); err != nil {
+func BuildDraft(item PreflightItem, identity lyricscontract.CatalogIdentity, fixed lyricssource.FixedRevision) (Draft, error) {
+	if err := lyricscontract.ValidateFixedPerformerSegmentationPolicy(identity, fixed); err != nil {
 		return Draft{}, catalogPerformerPolicyError(item.MusicID, err)
 	}
 	if item.Candidate == nil {
@@ -389,7 +368,7 @@ func validateFixedRevisionContentBinding(candidate CandidateIdentity, fixed lyri
 // classification that the legacy FixedRevision shape cannot represent.
 func BuildDraftWithProvenance(
 	item PreflightItem,
-	identity CatalogIdentity,
+	identity lyricscontract.CatalogIdentity,
 	fixed lyricssource.FixedRevision,
 	fixedIdentity model.LyricsSourceFixedIdentity,
 	reasonCode model.LyricsSourceVersionReasonCode,

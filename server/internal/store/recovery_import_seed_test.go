@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"sort"
 
-	"moesekai/server/internal/lyricsevidencepack"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsrecoveryimport"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/lyricsstaging"
@@ -21,7 +21,7 @@ import (
 // the same rows so store tests can exercise readers of a recovery-imported song
 // without importing that package.
 
-func seedRecoveryEvidenceTx(ctx context.Context, tx *sql.Tx, ref lyricsevidencepack.EvidenceRef,
+func seedRecoveryEvidenceTx(ctx context.Context, tx *sql.Tx, ref lyricscontract.EvidenceRef,
 	evidence lyricssource.IndexEvidence, now int64,
 ) error {
 	var existing int

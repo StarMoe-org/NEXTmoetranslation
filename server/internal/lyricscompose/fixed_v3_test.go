@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/model"
 )
 
@@ -246,7 +247,7 @@ func TestNormalizedFixedSourcePerformerIDsRetainsFixedExternalNenerobo(t *testin
 			full.Lines[lineIndex].TrailingPerformerIDs[performerIndex] = sourceID
 		}
 	}
-	normalized, err := NormalizePersistedPerformerMetadata(*full)
+	normalized, err := lyricscontract.NormalizePersistedPerformerMetadata(*full)
 	if err != nil || len(normalized.Performers) != 1 || normalized.Performers[0].PerformerID != sourceID ||
 		normalized.Performers[0].Name != "Nenerobo" {
 		t.Fatalf("fixed external performer normalization=%+v err=%v", normalized.Performers, err)

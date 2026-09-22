@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"moesekai/server/internal/lyricsstaging"
+	"moesekai/server/internal/lyricscontract"
 )
 
 // seedRestoreRecoveryGraph installs a recovery import graph without touching the
@@ -54,7 +54,7 @@ func restoreGraphRowCounts(t *testing.T, s *Store) map[string]int {
 func TestLegacyRestoreClearsSourceV3DocumentsAndRecoveryGraph(t *testing.T) {
 	s := setupLyricsStore(t)
 	document, evidenceByIdentity := renditionV3PersistenceDocument(t)
-	if err := insertRenditionV3PersistenceGraph(t, s, document, evidenceByIdentity, []lyricsstaging.RenditionTranslation{
+	if err := insertRenditionV3PersistenceGraph(t, s, document, evidenceByIdentity, []lyricscontract.RenditionTranslation{
 		{RenditionKey: document.Renditions[0].RenditionKey},
 		{RenditionKey: document.Renditions[1].RenditionKey},
 	}); err != nil {
@@ -96,7 +96,7 @@ func localizationProjectionFixtureStore(t *testing.T, prefix string) *Store {
 	for index := range translations {
 		translations[index] = prefix + "-" + sekai.Full.Lines[index].ID
 	}
-	if err := insertRenditionV3PersistenceGraph(t, s, document, evidenceByIdentity, []lyricsstaging.RenditionTranslation{
+	if err := insertRenditionV3PersistenceGraph(t, s, document, evidenceByIdentity, []lyricscontract.RenditionTranslation{
 		{RenditionKey: sekai.RenditionKey, Translations: translations, TranslationCredit: "雪莹ちゃん"},
 		{RenditionKey: document.Renditions[1].RenditionKey},
 	}); err != nil {

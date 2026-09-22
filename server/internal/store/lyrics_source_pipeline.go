@@ -16,10 +16,9 @@ import (
 	"unicode/utf8"
 
 	"moesekai/server/internal/legacy"
-	"moesekai/server/internal/lyricscompose"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsdiscovery"
 	"moesekai/server/internal/lyricssource"
-	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
 )
 
@@ -302,7 +301,7 @@ func (s *Store) CompleteLyricsFetch(ctx context.Context, params CompleteLyricsFe
 	if err != nil || identity.CatalogFingerprint != job.Target.CatalogFingerprint {
 		return model.LyricsSourceReviewItem{}, lyricsdiscovery.NewError(lyricsdiscovery.CodeSourceDrift, err)
 	}
-	if err := lyricsstaging.ValidateFixedPerformerSegmentationPolicy(lyricsstaging.CatalogIdentity{
+	if err := lyricscontract.ValidateFixedPerformerSegmentationPolicy(lyricscontract.CatalogIdentity{
 		MusicID: identity.MusicID, JapaneseTitle: identity.JapaneseTitle, ProducerMetadata: identity.ProducerMetadata,
 		Lyricist: identity.Lyricist, Composer: identity.Composer, Arranger: identity.Arranger,
 		Vocals: append([]model.CatalogVocalSignal{}, identity.Vocals...), CatalogFingerprint: identity.CatalogFingerprint,
@@ -623,7 +622,7 @@ func canonicalizeLyricsSourceAnalysisMetadata(
 	lines []model.LyricsSourceExtractedLine,
 ) ([]model.LyricsSourcePerformer, string, []model.LyricsSourceExtractedLine, error) {
 	full := model.NewLyricsSourceFullFromLegacy(version, performers, rubyGeneratorVersion, lines)
-	canonicalFull, err := lyricscompose.NormalizePersistedPerformerMetadata(full)
+	canonicalFull, err := lyricscontract.NormalizePersistedPerformerMetadata(full)
 	if err != nil {
 		return nil, "", nil, errors.New("unsafe persisted lyrics source performer metadata")
 	}

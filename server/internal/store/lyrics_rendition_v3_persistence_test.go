@@ -13,18 +13,18 @@ import (
 	"testing"
 	"time"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
-	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
 )
 
 func TestV3LocalizationImportExportPreservesPeerOnlyAndCredits(t *testing.T) {
 	s := setupLyricsStore(t)
 	document, evidenceByIdentity := renditionV3PersistenceDocument(t)
-	translations := []lyricsstaging.RenditionTranslation{
+	translations := []lyricscontract.RenditionTranslation{
 		{
 			RenditionKey: document.Renditions[0].RenditionKey,
-			PeerTranslations: []lyricsstaging.RenditionPeerTranslation{{
+			PeerTranslations: []lyricscontract.RenditionPeerTranslation{{
 				Side: "game", Locale: "zh-CN", Translations: []string{"peer-only-1", "peer-only-2"},
 			}},
 			TranslationCredit: "peer-translator", ProofreadingCredit: "peer-proofreader",
@@ -76,7 +76,7 @@ func TestV3LocalizationImportExportPreservesPeerOnlyAndCredits(t *testing.T) {
 func TestV3LocalizationExportWithoutPeerTableSupportsHistoricalRuntime(t *testing.T) {
 	s := setupLyricsStore(t)
 	document, evidenceByIdentity := renditionV3PersistenceDocument(t)
-	translations := []lyricsstaging.RenditionTranslation{
+	translations := []lyricscontract.RenditionTranslation{
 		{RenditionKey: document.Renditions[0].RenditionKey, Translations: []string{"main-1", "main-2"}},
 		{RenditionKey: document.Renditions[1].RenditionKey, Translations: []string{"main-3"}},
 	}
@@ -119,11 +119,11 @@ func TestV3LocalizationExportWithoutPeerTableSupportsHistoricalRuntime(t *testin
 func TestV3LocalizationImportExportRoundTripPreservesIndependentGamePeer(t *testing.T) {
 	s := setupLyricsStore(t)
 	document, evidenceByIdentity := renditionV3PersistenceDocument(t)
-	translations := []lyricsstaging.RenditionTranslation{
+	translations := []lyricscontract.RenditionTranslation{
 		{
 			RenditionKey: document.Renditions[0].RenditionKey,
 			Translations: []string{"sekai-main-1", "sekai-main-2"},
-			PeerTranslations: []lyricsstaging.RenditionPeerTranslation{{
+			PeerTranslations: []lyricscontract.RenditionPeerTranslation{{
 				Side: "game", Locale: "zh-CN", Translations: []string{"sekai-game-1", "sekai-game-2"},
 			}},
 		},
@@ -439,11 +439,11 @@ func TestRenditionV3ContentBackupRejectsDocumentRenditionReorderingAndCrossFamil
 	}
 }
 
-func setupRenditionV3PersistenceStore(t *testing.T) (*Store, []lyricsstaging.RenditionTranslation) {
+func setupRenditionV3PersistenceStore(t *testing.T) (*Store, []lyricscontract.RenditionTranslation) {
 	t.Helper()
 	s := setupLyricsStore(t)
 	document, evidenceByIdentity := renditionV3PersistenceDocument(t)
-	translations := []lyricsstaging.RenditionTranslation{
+	translations := []lyricscontract.RenditionTranslation{
 		{
 			RenditionKey:       document.Renditions[0].RenditionKey,
 			Translations:       []string{"sekai-translation-1", "sekai-translation-2"},
@@ -537,7 +537,7 @@ func renditionV3PersistenceDocument(t *testing.T) (model.LyricsSourceDocument, [
 }
 
 func insertRenditionV3PersistenceGraph(t *testing.T, s *Store, document model.LyricsSourceDocument,
-	evidenceByIdentity [][]lyricssource.IndexEvidence, translations []lyricsstaging.RenditionTranslation,
+	evidenceByIdentity [][]lyricssource.IndexEvidence, translations []lyricscontract.RenditionTranslation,
 ) error {
 	t.Helper()
 	ctx := context.Background()
@@ -628,7 +628,7 @@ func insertRenditionV3PersistenceGraph(t *testing.T, s *Store, document model.Ly
 	return tx.Commit()
 }
 
-func assertRenditionV3BackupShape(t *testing.T, content LyricsContentExport, translations []lyricsstaging.RenditionTranslation) {
+func assertRenditionV3BackupShape(t *testing.T, content LyricsContentExport, translations []lyricscontract.RenditionTranslation) {
 	t.Helper()
 	if len(content.SourceDocuments) != 1 || len(content.SourceArtifacts) != 4 || len(content.SourceContributions) == 0 ||
 		len(content.RenditionLocalizations) != len(translations) || len(content.RenditionTranslationLines) != 3 {

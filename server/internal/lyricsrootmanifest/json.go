@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"unicode/utf8"
+
+	"moesekai/server/internal/lyricscontract"
 )
 
 // DecodeAssemblyRequest accepts only canonical, closed, duplicate-free request JSON.
@@ -15,7 +17,7 @@ func DecodeAssemblyRequest(body []byte) (AssemblyRequest, error) {
 	if err := decodeCanonicalJSON(body, &request, MaxAssemblyRequestBytes, "lyrics root assembly request"); err != nil {
 		return AssemblyRequest{}, err
 	}
-	if _, err := validateRequest(request, SchemaVersionV2); err != nil {
+	if _, err := validateRequest(request, lyricscontract.SchemaVersionV2); err != nil {
 		return AssemblyRequest{}, err
 	}
 	return request, nil

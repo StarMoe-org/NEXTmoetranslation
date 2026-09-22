@@ -7,13 +7,13 @@ import (
 	"sort"
 	"strings"
 
-	"moesekai/server/internal/lyricscompose"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsevidencepack"
 	"moesekai/server/internal/lyricsoutcomeartifact"
 	"moesekai/server/internal/lyricsrecovery"
 	"moesekai/server/internal/lyricsreview"
-	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/lyricssource"
+	"moesekai/server/internal/lyricssourceoffline"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
 )
@@ -73,7 +73,7 @@ func BuildItemWithReview(
 	}
 
 	switch result.State {
-	case lyricsrootmanifest.CoverageComplete, lyricsrootmanifest.CoverageGameOnly:
+	case lyricscontract.CoverageComplete, lyricscontract.CoverageGameOnly:
 		identity, artifact, err := recoverySourceArtifact(
 			result, outcomes, resolver, catalog.PerformerSegmentationPolicy, reviewResolver,
 		)
@@ -82,7 +82,7 @@ func BuildItemWithReview(
 		}
 		component := &model.LyricsSourceComponentRef{RenditionKey: identity.RenditionKey}
 		privateReview := recoveryPrivateReview(result)
-		if result.State == lyricsrootmanifest.CoverageComplete {
+		if result.State == lyricscontract.CoverageComplete {
 			document := model.LyricsSourceDocument{
 				SchemaVersion: model.LyricsSourceDocumentSchemaVersion, ReasonCode: result.ReasonCode,
 				FixedIdentities: []model.LyricsSourceFixedIdentity{identity},
@@ -147,19 +147,19 @@ func BuildItemWithReview(
 		}
 		return item, nil
 
-	case lyricsrootmanifest.CoverageSatisfiedNoLyrics:
+	case lyricscontract.CoverageSatisfiedNoLyrics:
 		return buildTextFreeItem(item, model.LyricsAvailabilityStateSatisfiedNoLyrics, "",
 			model.LyricsAvailabilityNoLyricsCatalogInstrumental)
-	case lyricsrootmanifest.CoverageAmbiguous:
+	case lyricscontract.CoverageAmbiguous:
 		return buildTextFreeItem(item, model.LyricsAvailabilityStateAmbiguous,
 			model.LyricsSourceVersionReasonVersionConflict, "")
-	case lyricsrootmanifest.CoverageMissing:
+	case lyricscontract.CoverageMissing:
 		return buildTextFreeItem(item, model.LyricsAvailabilityStateMissing,
 			model.LyricsSourceVersionReasonVersionConflict, "")
-	case lyricsrootmanifest.CoverageIncomplete:
+	case lyricscontract.CoverageIncomplete:
 		return buildTextFreeItem(item, model.LyricsAvailabilityStateIncomplete,
 			model.LyricsSourceVersionReasonVersionConflict, "")
-	case lyricsrootmanifest.CoverageFailed:
+	case lyricscontract.CoverageFailed:
 		return buildTextFreeItem(item, model.LyricsAvailabilityStateFailed,
 			model.LyricsSourceVersionReasonVersionConflict, "")
 	default:
@@ -249,7 +249,7 @@ func recoverySourceArtifact(
 	}
 
 	source := result.Full
-	if result.State == lyricsrootmanifest.CoverageGameOnly {
+	if result.State == lyricscontract.CoverageGameOnly {
 		source = result.Game
 	}
 	if source == nil {
@@ -260,7 +260,7 @@ func recoverySourceArtifact(
 	var sourceRaw []byte
 	switch outcome.Provider {
 	case model.LyricsSourceProviderSekaipedia:
-		projection, err := lyricssource.RecoverSekaipediaProjectionWithReview(
+		projection, err := lyricssourceoffline.RecoverSekaipediaProjectionWithReview(
 			revisionEvidence.Raw,
 			lyricssource.FixedIndex{
 				PageID: candidate.PageID, RevisionID: candidate.RevisionID,
@@ -275,8 +275,8 @@ func recoverySourceArtifact(
 		if projection.RenditionKey != candidate.RenditionKey || projection.ReasonCode != candidate.VersionReason {
 			return model.LyricsSourceFixedIdentity{}, lyricsstaging.Artifact{}, errors.New("reparsed Sekaipedia rendition identity does not match the provider outcome")
 		}
-		if result.State == lyricsrootmanifest.CoverageComplete {
-			parsedFull, fullErr := lyricscompose.NormalizePersistedPerformerMetadata(projection.Full)
+		if result.State == lyricscontract.CoverageComplete {
+			parsedFull, fullErr := lyricscontract.NormalizePersistedPerformerMetadata(projection.Full)
 			if fullErr != nil {
 				return model.LyricsSourceFixedIdentity{}, lyricsstaging.Artifact{}, errors.New("reparsed Sekaipedia performer metadata is unsafe")
 			}
@@ -293,7 +293,7 @@ func recoverySourceArtifact(
 				if projection.Game == nil {
 					return model.LyricsSourceFixedIdentity{}, lyricsstaging.Artifact{}, errors.New("reparsed Sekaipedia revision lost the independent Game artifact")
 				}
-				parsedGame, gameErr := lyricscompose.NormalizePersistedPerformerMetadata(*projection.Game)
+				parsedGame, gameErr := lyricscontract.NormalizePersistedPerformerMetadata(*projection.Game)
 				if gameErr != nil {
 					return model.LyricsSourceFixedIdentity{}, lyricsstaging.Artifact{}, errors.New("reparsed Sekaipedia Game metadata is unsafe")
 				}
@@ -308,7 +308,7 @@ func recoverySourceArtifact(
 			if projection.Game == nil {
 				return model.LyricsSourceFixedIdentity{}, lyricsstaging.Artifact{}, errors.New("reparsed Sekaipedia Game-only revision has no Game artifact")
 			}
-			parsedGame, gameErr := lyricscompose.NormalizePersistedPerformerMetadata(*projection.Game)
+			parsedGame, gameErr := lyricscontract.NormalizePersistedPerformerMetadata(*projection.Game)
 			if gameErr != nil {
 				return model.LyricsSourceFixedIdentity{}, lyricsstaging.Artifact{}, errors.New("reparsed Sekaipedia Game metadata is unsafe")
 			}
@@ -487,7 +487,7 @@ func compareDeterministicPublicRuby(actual []model.LyricsSourceRubySpan, text st
 	return nil
 }
 
-func outcomeUsesSelectedEvidence(outcome lyricsoutcomeartifact.Artifact, selected []lyricsevidencepack.EvidenceRef) bool {
+func outcomeUsesSelectedEvidence(outcome lyricsoutcomeartifact.Artifact, selected []lyricscontract.EvidenceRef) bool {
 	for _, acquisition := range outcome.Acquisitions {
 		if _, found := selectedEvidence(selected, acquisition.EvidenceID); found {
 			return true
@@ -496,12 +496,12 @@ func outcomeUsesSelectedEvidence(outcome lyricsoutcomeartifact.Artifact, selecte
 	return false
 }
 
-func selectedEvidence(selected []lyricsevidencepack.EvidenceRef, evidenceID string) (lyricsevidencepack.EvidenceRef, bool) {
+func selectedEvidence(selected []lyricscontract.EvidenceRef, evidenceID string) (lyricscontract.EvidenceRef, bool) {
 	index := sort.Search(len(selected), func(index int) bool { return selected[index].EvidenceID >= evidenceID })
 	if index < len(selected) && selected[index].EvidenceID == evidenceID {
 		return selected[index], true
 	}
-	return lyricsevidencepack.EvidenceRef{}, false
+	return lyricscontract.EvidenceRef{}, false
 }
 
 func reviewImportObservations(

@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"moesekai/server/internal/lyricsacquisition"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsevidencepack"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
@@ -102,7 +103,7 @@ func rootTestAcquisition(item lyricssource.IndexEvidence) lyricsacquisition.Acqu
 	}
 }
 
-func rootEvidenceRef(item lyricssource.IndexEvidence) lyricsevidencepack.EvidenceRef {
+func rootEvidenceRef(item lyricssource.IndexEvidence) lyricscontract.EvidenceRef {
 	ref, err := lyricsevidencepack.EvidenceRefFromAcquisition(rootTestAcquisition(item))
 	if err != nil {
 		panic(err)
@@ -112,7 +113,7 @@ func rootEvidenceRef(item lyricssource.IndexEvidence) lyricsevidencepack.Evidenc
 
 func rootResolver(t *testing.T, items ...lyricssource.IndexEvidence) *lyricsevidencepack.Resolver {
 	t.Helper()
-	refs := make([]lyricsevidencepack.EvidenceRef, len(items))
+	refs := make([]lyricscontract.EvidenceRef, len(items))
 	for index, item := range items {
 		refs[index] = rootEvidenceRef(item)
 	}
@@ -136,7 +137,7 @@ func sequentialMusicIDs(first, count int) []int {
 }
 
 func requestForMusicIDs(kind ScopeKind, catalogMusicIDs, songMusicIDs []int) AssemblyRequest {
-	musicIDsSHA256, err := OrderedMusicIDsSHA256(catalogMusicIDs)
+	musicIDsSHA256, err := lyricscontract.OrderedMusicIDsSHA256(catalogMusicIDs)
 	if err != nil {
 		panic(err)
 	}
@@ -162,7 +163,7 @@ func requestForMusicIDs(kind ScopeKind, catalogMusicIDs, songMusicIDs []int) Ass
 	}
 	for index, musicID := range songMusicIDs {
 		request.Songs[index] = SongResultRef{
-			MusicID: musicID, State: CoverageMissing, ResultSHA256: digestText(fmt.Sprintf("result-%d", musicID)),
+			MusicID: musicID, State: lyricscontract.CoverageMissing, ResultSHA256: digestText(fmt.Sprintf("result-%d", musicID)),
 			ProviderOutcomes: []ProviderOutcomeRef{}, SelectedEvidence: []SelectedEvidenceRef{},
 		}
 	}
@@ -221,7 +222,7 @@ func TestFinalRootUsesBoundedCatalogCountAndOrderedMusicIDBinding(t *testing.T) 
 	mismatchedDigest := baseRequest(ScopeFinal, currentCatalogCount)
 	otherMusicIDs := sequentialMusicIDs(1, currentCatalogCount)
 	otherMusicIDs[len(otherMusicIDs)-1] += 100
-	mismatchedDigest.Catalog.MusicIDsSHA256, err = OrderedMusicIDsSHA256(otherMusicIDs)
+	mismatchedDigest.Catalog.MusicIDsSHA256, err = lyricscontract.OrderedMusicIDsSHA256(otherMusicIDs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +231,7 @@ func TestFinalRootUsesBoundedCatalogCountAndOrderedMusicIDBinding(t *testing.T) 
 	}
 
 	overMaximum := baseRequest(ScopeFinal, currentCatalogCount)
-	overMaximum.Catalog.RecordCount = MaxCatalogRecordCount + 1
+	overMaximum.Catalog.RecordCount = lyricscontract.MaxCatalogRecordCount + 1
 	if _, err := Assemble(overMaximum, resolver); err == nil || !strings.Contains(err.Error(), "identity bindings") {
 		t.Fatalf("over-maximum catalog error=%v", err)
 	}
@@ -425,7 +426,7 @@ func TestRootBindsSelectedAcquisitionsEvidenceOutcomesAndPackUnion(t *testing.T)
 	}
 	outcome := ProviderOutcomeRef{Provider: item.Provider, OutcomeID: "provider-outcome-001", SHA256: strings.Repeat("f", 64)}
 	for index := range request.Songs {
-		request.Songs[index].State = CoverageComplete
+		request.Songs[index].State = lyricscontract.CoverageComplete
 		request.Songs[index].ProviderOutcomes = []ProviderOutcomeRef{outcome}
 		request.Songs[index].SelectedEvidence = []SelectedEvidenceRef{selection}
 	}
@@ -497,10 +498,10 @@ func TestRootV2CountsGameOnlyAndSatisfiedNoLyrics(t *testing.T) {
 		Provider: item.Provider, OutcomeID: "provider-outcome-recovery-v2", SHA256: strings.Repeat("f", 64),
 	}
 	request := baseRequest(ScopeFinal, currentCatalogCount)
-	request.Songs[0].State = CoverageGameOnly
+	request.Songs[0].State = lyricscontract.CoverageGameOnly
 	request.Songs[0].ProviderOutcomes = []ProviderOutcomeRef{outcome}
 	request.Songs[0].SelectedEvidence = []SelectedEvidenceRef{selection}
-	request.Songs[1].State = CoverageSatisfiedNoLyrics
+	request.Songs[1].State = lyricscontract.CoverageSatisfiedNoLyrics
 	request.Songs[1].ProviderOutcomes = []ProviderOutcomeRef{outcome}
 	request.Songs[1].SelectedEvidence = []SelectedEvidenceRef{}
 
@@ -508,7 +509,7 @@ func TestRootV2CountsGameOnlyAndSatisfiedNoLyrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.SchemaVersion != SchemaVersionV2 || manifest.Coverage.GameOnly != 1 ||
+	if manifest.SchemaVersion != lyricscontract.SchemaVersionV2 || manifest.Coverage.GameOnly != 1 ||
 		manifest.Coverage.SatisfiedNoLyrics != 1 || manifest.Coverage.Missing != currentCatalogCount-2 ||
 		manifest.Coverage.SelectionRefCount != 1 || manifest.Coverage.UniqueEvidenceCount != 1 {
 		t.Fatalf("recovery-v2 root coverage=%+v", manifest.Coverage)

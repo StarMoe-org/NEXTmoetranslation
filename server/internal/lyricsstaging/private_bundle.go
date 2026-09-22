@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 )
@@ -1250,7 +1251,7 @@ func ValidatePrivateEvidenceReceiptForCandidates(receipt PrivateEvidenceReceipt,
 // BuildDraftFromFixedArtifacts builds one manifest draft from a strict private
 // plural-artifact handoff. Every documented fixed identity must resolve to one
 // provider-specific candidate and one exact raw revision.
-func BuildDraftFromFixedArtifacts(item PreflightItem, identity CatalogIdentity, bundle FixedArtifactBundle) (Draft, error) {
+func BuildDraftFromFixedArtifacts(item PreflightItem, identity lyricscontract.CatalogIdentity, bundle FixedArtifactBundle) (Draft, error) {
 	if item.PostFetchState == PostFetchStateVersionConflict || bundle.PostFetchState == PostFetchStateVersionConflict {
 		return Draft{}, fmt.Errorf("%w: plural post-fetch version conflict cannot produce a manifest draft", ErrManifestRebuildRequired)
 	}
@@ -1316,7 +1317,7 @@ func BuildDraftFromFixedArtifacts(item PreflightItem, identity CatalogIdentity, 
 
 	primary := bundle.Artifacts[primaryIndex]
 	primaryArtifactKey := artifactKeys[primaryIndex]
-	if err := ValidateFixedPerformerSegmentationPolicy(identity, primary.Fixed); err != nil {
+	if err := lyricscontract.ValidateFixedPerformerSegmentationPolicy(identity, primary.Fixed); err != nil {
 		return Draft{}, catalogPerformerPolicyError(item.MusicID, err)
 	}
 	if primary.Fixed.Document == nil {

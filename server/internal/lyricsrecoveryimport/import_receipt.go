@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"moesekai/server/internal/legacy"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/model"
 )
@@ -33,11 +34,11 @@ const (
 )
 
 type ImportReceiptItem struct {
-	MusicID                    int                              `json:"musicId"`
-	State                      lyricsrootmanifest.CoverageState `json:"state"`
-	Revision                   int                              `json:"revision"`
-	DocumentSHA256             string                           `json:"documentSha256,omitempty"`
-	AvailabilityDocumentSHA256 string                           `json:"availabilityDocumentSha256,omitempty"`
+	MusicID                    int                          `json:"musicId"`
+	State                      lyricscontract.CoverageState `json:"state"`
+	Revision                   int                          `json:"revision"`
+	DocumentSHA256             string                       `json:"documentSha256,omitempty"`
+	AvailabilityDocumentSHA256 string                       `json:"availabilityDocumentSha256,omitempty"`
 }
 
 type ImportStorageCounts struct {
@@ -52,40 +53,40 @@ type ImportStorageCounts struct {
 }
 
 type ImportReceipt struct {
-	SchemaVersion             int                         `json:"schemaVersion"`
-	Kind                      string                      `json:"kind"`
-	RuntimeSchemaVersion      int                         `json:"runtimeSchemaVersion"`
-	DatabaseAuditAction       string                      `json:"databaseAuditAction"`
-	CommitProtocol            string                      `json:"commitProtocol"`
-	ReceiptAuditAction        string                      `json:"receiptAuditAction"`
-	RootManifestFileSHA256    string                      `json:"rootManifestFileSha256"`
-	RootID                    string                      `json:"rootId"`
-	RootSHA256                string                      `json:"rootSha256"`
-	ImportManifestFileSHA256  string                      `json:"importManifestFileSha256"`
-	BatchSHA256               string                      `json:"batchSha256"`
-	EvidenceReceiptFileSHA256 string                      `json:"evidenceReceiptFileSha256"`
-	EvidenceReceiptSHA256     string                      `json:"evidenceReceiptSha256"`
-	PackSHA256                string                      `json:"packSha256"`
-	SelectionSHA256           string                      `json:"selectionSha256"`
-	CatalogCount              int                         `json:"catalogCount"`
-	MusicIDsSHA256            string                      `json:"musicIdsSha256"`
-	Coverage                  lyricsrootmanifest.Coverage `json:"coverage"`
-	BackupSHA256              string                      `json:"backupSha256"`
-	StateDigestVersion        string                      `json:"stateDigestVersion"`
-	BackupStateSHA256         string                      `json:"backupStateSha256"`
-	PreImportDatabaseSHA256   string                      `json:"preImportDatabaseSha256"`
-	PreImportStateSHA256      string                      `json:"preImportStateSha256"`
-	PostImportStateSHA256     string                      `json:"postImportStateSha256"`
-	ProtectedDigestVersion    string                      `json:"protectedDigestVersion"`
-	PreImportProtectedSHA256  string                      `json:"preImportProtectedSha256"`
-	PostImportProtectedSHA256 string                      `json:"postImportProtectedSha256"`
-	AuditBoundaryID           int64                       `json:"auditBoundaryId"`
-	DatabasePath              string                      `json:"databasePath"`
-	RecoveryDatabasePath      string                      `json:"recoveryDatabasePath"`
-	ReceiptPath               string                      `json:"receiptPath"`
-	Actor                     string                      `json:"actor"`
-	BatchCreatedAt            string                      `json:"batchCreatedAt"`
-	PreparedAt                string                      `json:"preparedAt"`
+	SchemaVersion             int                     `json:"schemaVersion"`
+	Kind                      string                  `json:"kind"`
+	RuntimeSchemaVersion      int                     `json:"runtimeSchemaVersion"`
+	DatabaseAuditAction       string                  `json:"databaseAuditAction"`
+	CommitProtocol            string                  `json:"commitProtocol"`
+	ReceiptAuditAction        string                  `json:"receiptAuditAction"`
+	RootManifestFileSHA256    string                  `json:"rootManifestFileSha256"`
+	RootID                    string                  `json:"rootId"`
+	RootSHA256                string                  `json:"rootSha256"`
+	ImportManifestFileSHA256  string                  `json:"importManifestFileSha256"`
+	BatchSHA256               string                  `json:"batchSha256"`
+	EvidenceReceiptFileSHA256 string                  `json:"evidenceReceiptFileSha256"`
+	EvidenceReceiptSHA256     string                  `json:"evidenceReceiptSha256"`
+	PackSHA256                string                  `json:"packSha256"`
+	SelectionSHA256           string                  `json:"selectionSha256"`
+	CatalogCount              int                     `json:"catalogCount"`
+	MusicIDsSHA256            string                  `json:"musicIdsSha256"`
+	Coverage                  lyricscontract.Coverage `json:"coverage"`
+	BackupSHA256              string                  `json:"backupSha256"`
+	StateDigestVersion        string                  `json:"stateDigestVersion"`
+	BackupStateSHA256         string                  `json:"backupStateSha256"`
+	PreImportDatabaseSHA256   string                  `json:"preImportDatabaseSha256"`
+	PreImportStateSHA256      string                  `json:"preImportStateSha256"`
+	PostImportStateSHA256     string                  `json:"postImportStateSha256"`
+	ProtectedDigestVersion    string                  `json:"protectedDigestVersion"`
+	PreImportProtectedSHA256  string                  `json:"preImportProtectedSha256"`
+	PostImportProtectedSHA256 string                  `json:"postImportProtectedSha256"`
+	AuditBoundaryID           int64                   `json:"auditBoundaryId"`
+	DatabasePath              string                  `json:"databasePath"`
+	RecoveryDatabasePath      string                  `json:"recoveryDatabasePath"`
+	ReceiptPath               string                  `json:"receiptPath"`
+	Actor                     string                  `json:"actor"`
+	BatchCreatedAt            string                  `json:"batchCreatedAt"`
+	PreparedAt                string                  `json:"preparedAt"`
 	// CommittedAt is populated only when DecodeImportReceiptCanonical projects
 	// a historical v1 receipt. It is never serialized into or accepted for v2.
 	CommittedAt   string              `json:"-"`
@@ -117,29 +118,29 @@ type ImportReceiptBinding struct {
 }
 
 type importReceiptV1 struct {
-	SchemaVersion             int                         `json:"schemaVersion"`
-	Kind                      string                      `json:"kind"`
-	RuntimeSchemaVersion      int                         `json:"runtimeSchemaVersion"`
-	DatabaseAuditAction       string                      `json:"databaseAuditAction"`
-	RootManifestFileSHA256    string                      `json:"rootManifestFileSha256"`
-	RootID                    string                      `json:"rootId"`
-	RootSHA256                string                      `json:"rootSha256"`
-	ImportManifestFileSHA256  string                      `json:"importManifestFileSha256"`
-	BatchSHA256               string                      `json:"batchSha256"`
-	EvidenceReceiptFileSHA256 string                      `json:"evidenceReceiptFileSha256"`
-	EvidenceReceiptSHA256     string                      `json:"evidenceReceiptSha256"`
-	PackSHA256                string                      `json:"packSha256"`
-	SelectionSHA256           string                      `json:"selectionSha256"`
-	CatalogCount              int                         `json:"catalogCount"`
-	MusicIDsSHA256            string                      `json:"musicIdsSha256"`
-	Coverage                  lyricsrootmanifest.Coverage `json:"coverage"`
-	DatabasePath              string                      `json:"databasePath"`
-	ReceiptPath               string                      `json:"receiptPath"`
-	Actor                     string                      `json:"actor"`
-	CommittedAt               string                      `json:"committedAt"`
-	Counts                    ImportStorageCounts         `json:"counts"`
-	Items                     []ImportReceiptItem         `json:"items"`
-	ReceiptSHA256             string                      `json:"receiptSha256"`
+	SchemaVersion             int                     `json:"schemaVersion"`
+	Kind                      string                  `json:"kind"`
+	RuntimeSchemaVersion      int                     `json:"runtimeSchemaVersion"`
+	DatabaseAuditAction       string                  `json:"databaseAuditAction"`
+	RootManifestFileSHA256    string                  `json:"rootManifestFileSha256"`
+	RootID                    string                  `json:"rootId"`
+	RootSHA256                string                  `json:"rootSha256"`
+	ImportManifestFileSHA256  string                  `json:"importManifestFileSha256"`
+	BatchSHA256               string                  `json:"batchSha256"`
+	EvidenceReceiptFileSHA256 string                  `json:"evidenceReceiptFileSha256"`
+	EvidenceReceiptSHA256     string                  `json:"evidenceReceiptSha256"`
+	PackSHA256                string                  `json:"packSha256"`
+	SelectionSHA256           string                  `json:"selectionSha256"`
+	CatalogCount              int                     `json:"catalogCount"`
+	MusicIDsSHA256            string                  `json:"musicIdsSha256"`
+	Coverage                  lyricscontract.Coverage `json:"coverage"`
+	DatabasePath              string                  `json:"databasePath"`
+	ReceiptPath               string                  `json:"receiptPath"`
+	Actor                     string                  `json:"actor"`
+	CommittedAt               string                  `json:"committedAt"`
+	Counts                    ImportStorageCounts     `json:"counts"`
+	Items                     []ImportReceiptItem     `json:"items"`
+	ReceiptSHA256             string                  `json:"receiptSha256"`
 }
 
 func NewImportReceipt(root lyricsrootmanifest.Manifest, manifest Manifest, evidence EvidenceReceipt, binding ImportReceiptBinding) (ImportReceipt, error) {
@@ -289,8 +290,8 @@ func ValidateImportReceipt(receipt ImportReceipt) error {
 	return nil
 }
 
-func validateImportReceiptItems(items []ImportReceiptItem, coverage lyricsrootmanifest.Coverage) error {
-	states := map[lyricsrootmanifest.CoverageState]int{}
+func validateImportReceiptItems(items []ImportReceiptItem, coverage lyricscontract.Coverage) error {
+	states := map[lyricscontract.CoverageState]int{}
 	lastMusicID := 0
 	for index, item := range items {
 		if item.MusicID <= lastMusicID {
@@ -298,19 +299,19 @@ func validateImportReceiptItems(items []ImportReceiptItem, coverage lyricsrootma
 		}
 		lastMusicID = item.MusicID
 		switch item.State {
-		case lyricsrootmanifest.CoverageComplete:
+		case lyricscontract.CoverageComplete:
 			if item.Revision < 0 || !canonicalSHA256.MatchString(item.DocumentSHA256) || item.AvailabilityDocumentSHA256 != "" {
 				return fmt.Errorf("recovery import receipt complete item %d is invalid", index)
 			}
-		case lyricsrootmanifest.CoverageGameOnly:
+		case lyricscontract.CoverageGameOnly:
 			if item.DocumentSHA256 != "" && item.AvailabilityDocumentSHA256 != "" ||
 				item.DocumentSHA256 == "" && item.AvailabilityDocumentSHA256 == "" ||
 				item.DocumentSHA256 != "" && !canonicalSHA256.MatchString(item.DocumentSHA256) ||
 				item.AvailabilityDocumentSHA256 != "" && !canonicalSHA256.MatchString(item.AvailabilityDocumentSHA256) || item.Revision < 0 {
 				return fmt.Errorf("recovery import receipt Game-only item %d is invalid", index)
 			}
-		case lyricsrootmanifest.CoverageSatisfiedNoLyrics, lyricsrootmanifest.CoverageAmbiguous,
-			lyricsrootmanifest.CoverageMissing, lyricsrootmanifest.CoverageIncomplete, lyricsrootmanifest.CoverageFailed:
+		case lyricscontract.CoverageSatisfiedNoLyrics, lyricscontract.CoverageAmbiguous,
+			lyricscontract.CoverageMissing, lyricscontract.CoverageIncomplete, lyricscontract.CoverageFailed:
 			if item.Revision != 0 || item.DocumentSHA256 != "" || !canonicalSHA256.MatchString(item.AvailabilityDocumentSHA256) {
 				return fmt.Errorf("recovery import receipt availability item %d is invalid", index)
 			}
@@ -326,11 +327,11 @@ func validateImportReceiptItems(items []ImportReceiptItem, coverage lyricsrootma
 }
 
 func importReceiptItemOwnsEditableLyrics(item Item) bool {
-	if item.State != lyricsrootmanifest.CoverageComplete && item.State != lyricsrootmanifest.CoverageGameOnly {
+	if item.State != lyricscontract.CoverageComplete && item.State != lyricscontract.CoverageGameOnly {
 		return false
 	}
 	if item.Draft == nil {
-		return item.State == lyricsrootmanifest.CoverageComplete
+		return item.State == lyricscontract.CoverageComplete
 	}
 	return item.Draft.Document.SchemaVersion != model.LyricsSourceDocumentSchemaVersionV3
 }
@@ -351,12 +352,12 @@ func ExpectedImportStorageCounts(manifest Manifest, evidence EvidenceReceipt) Im
 			} else {
 				counts.ComponentContributions += sourceProvenanceComponentCount(item.Draft.Document.Provenance)
 			}
-		} else if item.Availability != nil && item.State == lyricsrootmanifest.CoverageGameOnly {
+		} else if item.Availability != nil && item.State == lyricscontract.CoverageGameOnly {
 			counts.ComponentContributions += availabilityProvenanceComponentCount(item.Availability.Provenance)
 		} else if item.Availability != nil {
 			counts.AvailabilityDocuments++
 		}
-		if item.Draft == nil && item.Availability != nil && item.State == lyricsrootmanifest.CoverageGameOnly {
+		if item.Draft == nil && item.Availability != nil && item.State == lyricscontract.CoverageGameOnly {
 			counts.AvailabilityDocuments++
 		}
 		counts.Artifacts += len(artifacts)

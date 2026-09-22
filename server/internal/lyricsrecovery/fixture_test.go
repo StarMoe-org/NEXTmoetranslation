@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"moesekai/server/internal/lyricsacquisition"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsevidencepack"
 	"moesekai/server/internal/lyricsextractionplan"
 	"moesekai/server/internal/lyricsoutcomeartifact"
@@ -229,7 +230,7 @@ func TestOfflineFixtureCanaryRealCatalogExactReplayAndCompactRoot(t *testing.T) 
 				}
 			}
 		}
-		if firstResult.State != lyricsrootmanifest.CoverageComplete ||
+		if firstResult.State != lyricscontract.CoverageComplete ||
 			firstResult.SchemaVersion != SongResultSchemaVersionV3 || firstResult.Full != nil ||
 			len(firstResult.Renditions) < 2 || len(fulls) == 0 || len(firstResult.SelectedEvidence) != 2 {
 			terminals := make([]string, len(first.Providers))
@@ -494,7 +495,7 @@ func recoveryReplayCandidate(
 	digit string,
 ) ProviderReplay {
 	t.Helper()
-	ref := lyricsevidencepack.EvidenceRef{
+	ref := lyricscontract.EvidenceRef{
 		Provider: provider, AcquisitionID: strings.Repeat(digit, 64), EvidenceID: evidenceID,
 		SHA256: strings.Repeat("a", 64), EnvelopeSHA256: strings.Repeat("b", 64),
 	}
@@ -517,7 +518,7 @@ func recoveryReplayCandidate(
 			Provider: provider, OutcomeID: outcomeID,
 			Candidate: &lyricsoutcomeartifact.CandidateIdentity{RenditionKey: renditionKey},
 		},
-		Fixed: &fixed, EvidenceRefs: []lyricsevidencepack.EvidenceRef{ref},
+		Fixed: &fixed, EvidenceRefs: []lyricscontract.EvidenceRef{ref},
 	}
 }
 
@@ -573,14 +574,14 @@ func jsonStringPathsContaining(body []byte, token string) []string {
 	return paths
 }
 
-func exactSelectedUnion(results []SongResult) []lyricsevidencepack.EvidenceRef {
-	byID := make(map[string]lyricsevidencepack.EvidenceRef)
+func exactSelectedUnion(results []SongResult) []lyricscontract.EvidenceRef {
+	byID := make(map[string]lyricscontract.EvidenceRef)
 	for _, result := range results {
 		for _, ref := range result.SelectedEvidence {
 			byID[ref.EvidenceID] = ref
 		}
 	}
-	refs := make([]lyricsevidencepack.EvidenceRef, 0, len(byID))
+	refs := make([]lyricscontract.EvidenceRef, 0, len(byID))
 	for _, ref := range byID {
 		refs = append(refs, ref)
 	}
@@ -829,7 +830,7 @@ func fixtureParentRoot(t *testing.T, ctx context.Context, root string, ledger *l
 	catalog lyricsextractionplan.RecoveryCatalogBinding, musicIDs []int) lyricsrootmanifest.Manifest {
 	t.Helper()
 	packPath := filepath.Join(root, "parent-pack")
-	if _, err := lyricsevidencepack.Build(ctx, packPath, []lyricsevidencepack.EvidenceRef{}, ledger); err != nil {
+	if _, err := lyricsevidencepack.Build(ctx, packPath, []lyricscontract.EvidenceRef{}, ledger); err != nil {
 		t.Fatal(err)
 	}
 	resolver, err := lyricsevidencepack.OpenResolver(packPath)
@@ -839,9 +840,9 @@ func fixtureParentRoot(t *testing.T, ctx context.Context, root string, ledger *l
 	songs := make([]lyricsrootmanifest.SongResultRef, len(musicIDs))
 	for index, musicID := range musicIDs {
 		songs[index] = lyricsrootmanifest.SongResultRef{
-			MusicID: musicID, State: lyricsrootmanifest.CoverageMissing,
+			MusicID: musicID, State: lyricscontract.CoverageMissing,
 			ResultSHA256: fmt.Sprintf("%064x", musicID), ProviderOutcomes: []lyricsrootmanifest.ProviderOutcomeRef{},
-			SelectedEvidence: []lyricsevidencepack.EvidenceRef{},
+			SelectedEvidence: []lyricscontract.EvidenceRef{},
 		}
 	}
 	parent, err := lyricsrootmanifest.Assemble(lyricsrootmanifest.AssemblyRequest{

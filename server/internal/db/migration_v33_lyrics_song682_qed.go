@@ -19,4 +19,3 @@ WHERE document_id IN (SELECT document_id FROM song_lyrics_source_documents WHERE
 `
 
 const MigrationV33Song682TranslationQEDCorrectionSQL = migrationV33Song682TranslationQEDCorrectionSQL
-

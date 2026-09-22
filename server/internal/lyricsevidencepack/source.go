@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"moesekai/server/internal/lyricsacquisition"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 )
@@ -19,15 +20,15 @@ type ExactAcquisitionSource interface {
 
 // EvidenceRefFromAcquisition derives the sole compact pack reference from one
 // exact offline replay and validates its canonical evidence envelope.
-func EvidenceRefFromAcquisition(acquired lyricsacquisition.Acquisition) (EvidenceRef, error) {
+func EvidenceRefFromAcquisition(acquired lyricsacquisition.Acquisition) (lyricscontract.EvidenceRef, error) {
 	ref, _, err := exactEvidenceFromAcquisition(acquired)
 	return ref, err
 }
 
 func exactEvidenceFromAcquisition(
 	acquired lyricsacquisition.Acquisition,
-) (EvidenceRef, lyricssource.IndexEvidence, error) {
-	ref := EvidenceRef{
+) (lyricscontract.EvidenceRef, lyricssource.IndexEvidence, error) {
+	ref := lyricscontract.EvidenceRef{
 		Provider:       model.LyricsSourceProvider(acquired.Request.Provider),
 		AcquisitionID:  string(acquired.AcquisitionID),
 		EvidenceID:     acquired.Evidence.EvidenceID,
@@ -35,19 +36,19 @@ func exactEvidenceFromAcquisition(
 		EnvelopeSHA256: acquired.EvidenceEnvelopeSHA256,
 	}
 	if !acquired.ReplayOnly {
-		return EvidenceRef{}, lyricssource.IndexEvidence{}, errors.New("evidence pack requires an exact offline acquisition replay")
+		return lyricscontract.EvidenceRef{}, lyricssource.IndexEvidence{}, errors.New("evidence pack requires an exact offline acquisition replay")
 	}
-	if err := validateEvidenceRef(ref); err != nil || sha256Hex(acquired.Evidence.Raw) != ref.SHA256 ||
+	if err := lyricscontract.ValidateEvidenceRef(ref); err != nil || sha256Hex(acquired.Evidence.Raw) != ref.SHA256 ||
 		sha256Hex(acquired.EvidenceEnvelope) != ref.EnvelopeSHA256 {
-		return EvidenceRef{}, lyricssource.IndexEvidence{}, errors.New("exact acquisition does not match its compact evidence reference")
+		return lyricscontract.EvidenceRef{}, lyricssource.IndexEvidence{}, errors.New("exact acquisition does not match its compact evidence reference")
 	}
 	envelope, err := DecodeCanonicalEnvelope(acquired.EvidenceEnvelope)
 	if err != nil {
-		return EvidenceRef{}, lyricssource.IndexEvidence{}, err
+		return lyricscontract.EvidenceRef{}, lyricssource.IndexEvidence{}, err
 	}
 	if envelope.Provider != ref.Provider || envelope.EvidenceID != ref.EvidenceID || envelope.SHA256 != ref.SHA256 ||
 		envelope.RawSHA256 != ref.SHA256 || !bytes.Equal(envelope.Raw, acquired.Evidence.Raw) {
-		return EvidenceRef{}, lyricssource.IndexEvidence{}, errors.New("exact acquisition does not bind its canonical evidence envelope")
+		return lyricscontract.EvidenceRef{}, lyricssource.IndexEvidence{}, errors.New("exact acquisition does not bind its canonical evidence envelope")
 	}
 	return ref, envelope, nil
 }
@@ -55,7 +56,7 @@ func exactEvidenceFromAcquisition(
 func resolveExactAcquisition(
 	ctx context.Context,
 	source ExactAcquisitionSource,
-	ref EvidenceRef,
+	ref lyricscontract.EvidenceRef,
 ) (lyricssource.IndexEvidence, error) {
 	if ctx == nil || source == nil {
 		return lyricssource.IndexEvidence{}, errors.New("context and exact acquisition source are required")

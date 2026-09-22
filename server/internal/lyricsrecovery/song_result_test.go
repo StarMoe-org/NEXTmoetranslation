@@ -11,8 +11,7 @@ import (
 	"testing"
 
 	"moesekai/server/internal/lyricsacquisition"
-	"moesekai/server/internal/lyricsevidencepack"
-	"moesekai/server/internal/lyricsrootmanifest"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/model"
 )
 
@@ -86,7 +85,7 @@ func TestSongResultStrictCanonicalNoRomanizationAndTamperChecks(t *testing.T) {
 
 	unreferenced := cloneSongResult(result)
 	unreferenced.ResultSHA256 = ""
-	unreferenced.SelectedEvidence = append(unreferenced.SelectedEvidence, lyricsevidencepack.EvidenceRef{
+	unreferenced.SelectedEvidence = append(unreferenced.SelectedEvidence, lyricscontract.EvidenceRef{
 		Provider:      model.LyricsSourceProviderSekaipedia,
 		AcquisitionID: strings.Repeat("9", 64), EvidenceID: "revision:sekaipedia:999:999:" + strings.Repeat("8", 64),
 		SHA256: strings.Repeat("8", 64), EnvelopeSHA256: strings.Repeat("7", 64),
@@ -160,14 +159,14 @@ func TestSongResultV2PreservesGameOnlyWithoutProvisionalFull(t *testing.T) {
 	replay.Composition.ReasonCode = model.LyricsSourceVersionReasonTaggedGameOnlyFullFromVocaloid
 	replay.Composition.Components.FullText = ""
 	replay.Composition.Components.GameText = "selected-source"
-	replay.Components.FullText = []lyricsevidencepack.EvidenceRef{}
+	replay.Components.FullText = []lyricscontract.EvidenceRef{}
 	replay.Components.GameText = cloneEvidenceRefs(replay.Selected)
 
 	result, err := NewSongResult(replay)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.SchemaVersion != SongResultSchemaVersionV2 || result.State != lyricsrootmanifest.CoverageGameOnly ||
+	if result.SchemaVersion != SongResultSchemaVersionV2 || result.State != lyricscontract.CoverageGameOnly ||
 		result.Full != nil || result.Game == nil || len(result.Game.Lines) != len(game.Lines) ||
 		result.GameProjection != nil || result.NoLyricsReason != "" || len(result.Components.FullText) != 0 ||
 		len(result.Components.GameText) != 1 || result.ReasonCode != model.LyricsSourceVersionReasonTaggedGameOnlyFullFromVocaloid {
@@ -230,7 +229,7 @@ func TestSongResultAcceptsEvidenceBoundAuthoritativeVocaloidSegmentation(t *test
 	gameComposition.Components.FullText = ""
 	gameComposition.Components.GameText = "selected-source"
 	gameReplay.Composition = &gameComposition
-	gameReplay.Components.FullText = []lyricsevidencepack.EvidenceRef{}
+	gameReplay.Components.FullText = []lyricscontract.EvidenceRef{}
 	gameReplay.Components.GameText = cloneEvidenceRefs(gameReplay.Selected)
 	gameResult, err := NewSongResult(gameReplay)
 	if err != nil || gameResult.Game == nil || len(gameResult.Game.Lines[0].Segments) != 2 ||
@@ -239,7 +238,7 @@ func TestSongResultAcceptsEvidenceBoundAuthoritativeVocaloidSegmentation(t *test
 	}
 
 	withoutEvidence := replay
-	withoutEvidence.Components.PerformerSegmentation = []lyricsevidencepack.EvidenceRef{}
+	withoutEvidence.Components.PerformerSegmentation = []lyricscontract.EvidenceRef{}
 	if _, err := NewSongResult(withoutEvidence); err == nil ||
 		!strings.Contains(err.Error(), "vocaloid-only Full must not contain performer metadata") {
 		t.Fatalf("VIRTUAL SINGER segmentation without component evidence error=%v", err)
@@ -255,7 +254,7 @@ func TestSongResultV2CatalogInstrumentalIsSatisfiedWithoutLyrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != lyricsrootmanifest.CoverageSatisfiedNoLyrics ||
+	if result.State != lyricscontract.CoverageSatisfiedNoLyrics ||
 		result.NoLyricsReason != NoLyricsReasonCatalogInstrumental || result.ReasonCode != "" ||
 		result.Full != nil || result.Game != nil || result.GameProjection != nil || result.Translations != nil ||
 		len(result.SelectedEvidence) != 0 || !componentEvidenceEmpty(result.Components) || len(result.ProviderOutcomes) != 1 {

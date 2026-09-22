@@ -4,11 +4,12 @@ import (
 	"errors"
 	"fmt"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 )
 
 type resolvedEvidence struct {
-	ref  EvidenceRef
+	ref  lyricscontract.EvidenceRef
 	item lyricssource.IndexEvidence
 }
 
@@ -137,11 +138,11 @@ func (resolver *Resolver) HydrateID(evidenceID string) (lyricssource.IndexEviden
 }
 
 // HydrateExact resolves one compact reference and checks its provider and digest.
-func (resolver *Resolver) HydrateExact(ref EvidenceRef) (lyricssource.IndexEvidence, error) {
+func (resolver *Resolver) HydrateExact(ref lyricscontract.EvidenceRef) (lyricssource.IndexEvidence, error) {
 	if resolver == nil || resolver.byID == nil {
 		return lyricssource.IndexEvidence{}, errors.New("evidence resolver is required")
 	}
-	if err := validateEvidenceRef(ref); err != nil {
+	if err := lyricscontract.ValidateEvidenceRef(ref); err != nil {
 		return lyricssource.IndexEvidence{}, err
 	}
 	resolved, found := resolver.byID[ref.EvidenceID]
@@ -154,11 +155,11 @@ func (resolver *Resolver) HydrateExact(ref EvidenceRef) (lyricssource.IndexEvide
 
 // ValidateSelected proves an independently supplied ordered union exactly
 // equals the pack selection in one pass without copying the reference slice.
-func (resolver *Resolver) ValidateSelected(refs []EvidenceRef) error {
+func (resolver *Resolver) ValidateSelected(refs []lyricscontract.EvidenceRef) error {
 	if resolver == nil || resolver.byID == nil {
 		return errors.New("evidence resolver is required")
 	}
-	if err := validateOrderedSelection(refs); err != nil {
+	if err := lyricscontract.ValidateOrderedSelection(refs); err != nil {
 		return err
 	}
 	if len(refs) != len(resolver.manifest.Selected) {
@@ -173,10 +174,10 @@ func (resolver *Resolver) ValidateSelected(refs []EvidenceRef) error {
 }
 
 func cloneManifest(manifest Manifest) Manifest {
-	manifest.Selected = append([]EvidenceRef{}, manifest.Selected...)
+	manifest.Selected = append([]lyricscontract.EvidenceRef{}, manifest.Selected...)
 	manifest.Shards = append([]ShardManifest{}, manifest.Shards...)
 	for index := range manifest.Shards {
-		manifest.Shards[index].Items = append([]EvidenceRef(nil), manifest.Shards[index].Items...)
+		manifest.Shards[index].Items = append([]lyricscontract.EvidenceRef(nil), manifest.Shards[index].Items...)
 	}
 	return manifest
 }

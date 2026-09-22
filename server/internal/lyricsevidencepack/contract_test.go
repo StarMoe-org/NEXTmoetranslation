@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"moesekai/server/internal/lyricsacquisition"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 )
@@ -119,7 +120,7 @@ func testEvidence(t *testing.T, index, extraRawBytes int) lyricssource.IndexEvid
 	return item
 }
 
-func evidenceRef(item lyricssource.IndexEvidence) EvidenceRef {
+func evidenceRef(item lyricssource.IndexEvidence) lyricscontract.EvidenceRef {
 	ref, err := EvidenceRefFromAcquisition(testAcquisition(item))
 	if err != nil {
 		panic(err)
@@ -127,8 +128,8 @@ func evidenceRef(item lyricssource.IndexEvidence) EvidenceRef {
 	return ref
 }
 
-func refsFor(items []lyricssource.IndexEvidence) []EvidenceRef {
-	refs := make([]EvidenceRef, len(items))
+func refsFor(items []lyricssource.IndexEvidence) []lyricscontract.EvidenceRef {
+	refs := make([]lyricscontract.EvidenceRef, len(items))
 	for index, item := range items {
 		refs[index] = evidenceRef(item)
 	}
@@ -137,7 +138,7 @@ func refsFor(items []lyricssource.IndexEvidence) []EvidenceRef {
 }
 
 func TestDecodeSelectionRejectsStrictJSONBoundaries(t *testing.T) {
-	selection := Selection{SchemaVersion: SchemaVersionV1, Evidence: []EvidenceRef{}}
+	selection := Selection{SchemaVersion: SchemaVersionV1, Evidence: []lyricscontract.EvidenceRef{}}
 	body, err := json.Marshal(selection)
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +240,7 @@ func TestBuildProvesExactUnionBeforePublication(t *testing.T) {
 	conflicting := firstRef
 	conflicting.SHA256 = strings.Repeat("f", 64)
 	for name, test := range map[string]struct {
-		selected []EvidenceRef
+		selected []lyricscontract.EvidenceRef
 		source   ExactAcquisitionSource
 		want     string
 	}{
@@ -247,10 +248,10 @@ func TestBuildProvesExactUnionBeforePublication(t *testing.T) {
 			selected: refsFor([]lyricssource.IndexEvidence{first, second}),
 			source:   sliceExactSource{items: []lyricssource.IndexEvidence{first}}, want: "not found",
 		},
-		"duplicate": {selected: []EvidenceRef{firstRef, firstRef}, source: sliceExactSource{items: []lyricssource.IndexEvidence{first}}, want: "duplicate"},
-		"conflict":  {selected: []EvidenceRef{firstRef, conflicting}, source: sliceExactSource{items: []lyricssource.IndexEvidence{first}}, want: "conflicting"},
+		"duplicate": {selected: []lyricscontract.EvidenceRef{firstRef, firstRef}, source: sliceExactSource{items: []lyricssource.IndexEvidence{first}}, want: "duplicate"},
+		"conflict":  {selected: []lyricscontract.EvidenceRef{firstRef, conflicting}, source: sliceExactSource{items: []lyricssource.IndexEvidence{first}}, want: "conflicting"},
 		"wrong exact acquisition": {
-			selected: []EvidenceRef{firstRef}, source: fixedExactSource{acquired: testAcquisition(second)}, want: "does not match",
+			selected: []lyricscontract.EvidenceRef{firstRef}, source: fixedExactSource{acquired: testAcquisition(second)}, want: "does not match",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -266,7 +267,7 @@ func TestBuildProvesExactUnionBeforePublication(t *testing.T) {
 	}
 
 	output := filepath.Join(canonicalTestRoot(t), "pack")
-	manifest, err := Build(context.Background(), output, []EvidenceRef{firstRef}, sliceExactSource{
+	manifest, err := Build(context.Background(), output, []lyricscontract.EvidenceRef{firstRef}, sliceExactSource{
 		items: []lyricssource.IndexEvidence{second, first},
 	})
 	if err != nil {
@@ -288,7 +289,7 @@ func TestCanonicalEnvelopeAndShardRejectRomajiFields(t *testing.T) {
 		t.Fatal("evidence envelope accepted a romaji field")
 	}
 	output := filepath.Join(canonicalTestRoot(t), "pack")
-	manifest, err := Build(context.Background(), output, []EvidenceRef{evidenceRef(item)}, sliceExactSource{items: []lyricssource.IndexEvidence{item}})
+	manifest, err := Build(context.Background(), output, []lyricscontract.EvidenceRef{evidenceRef(item)}, sliceExactSource{items: []lyricssource.IndexEvidence{item}})
 	if err != nil {
 		t.Fatal(err)
 	}

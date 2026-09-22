@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 )
@@ -297,7 +298,7 @@ func TestComposeRejectsConflictingAuditedPerformerIdentityWithoutEcho(t *testing
 	source.Segmentation = &segmentation
 
 	_, err := Compose(source)
-	if !errors.Is(err, ErrUnsafePerformerMetadata) {
+	if !errors.Is(err, lyricscontract.ErrUnsafePerformerMetadata) {
 		t.Fatalf("conflicting performer error=%v", err)
 	}
 	lower := strings.ToLower(err.Error())
@@ -735,7 +736,7 @@ func TestComposeFixedArtifactsUsesAlignedSekaipediaComponentsByAuthority(t *test
 		composition.Components.VersionEvidence != authority.SourceKey ||
 		composition.Components.PerformerSegmentation != authority.SourceKey ||
 		composition.Components.Ruby != authority.SourceKey || composition.Full.Version.Label != "SEKAI Version" ||
-		len(composition.Full.Performers) != 1 || ValidatePersistedPerformerMetadata(composition.Full) != nil ||
+		len(composition.Full.Performers) != 1 || lyricscontract.ValidatePersistedPerformerMetadata(composition.Full) != nil ||
 		len(composition.Full.Lines) == 0 || len(composition.Full.Lines[0].Segments) == 0 ||
 		len(composition.Full.Lines[0].Segments[0].Ruby) == 0 ||
 		composition.Full.Lines[0].Segments[0].Ruby[0].Reading != "うた" {
@@ -778,7 +779,7 @@ func TestComposeFixedArtifactsFallsBackWhenSekaipediaIsStaleMissingOrHasNoRendit
 				composition.Components.VersionEvidence != fallback.SourceKey ||
 				composition.Components.PerformerSegmentation != fallback.SourceKey ||
 				composition.Components.Ruby != fallback.SourceKey || composition.Full.Version.Label != "Fresh fallback" ||
-				len(composition.Full.Performers) != 1 || ValidatePersistedPerformerMetadata(composition.Full) != nil {
+				len(composition.Full.Performers) != 1 || lyricscontract.ValidatePersistedPerformerMetadata(composition.Full) != nil {
 				t.Fatalf("fallback composition=%+v Full=%+v", composition, composition.Full)
 			}
 		})
@@ -835,7 +836,7 @@ func TestComposeFixedArtifactsRejectsMismatchedSekaipediaEnrichmentAndUsesAligne
 	}
 	if composition.Components.FullText != text.SourceKey || composition.Components.VersionEvidence != text.SourceKey ||
 		composition.Components.PerformerSegmentation != components.SourceKey || composition.Components.Ruby != components.SourceKey ||
-		len(composition.Full.Performers) != 1 || ValidatePersistedPerformerMetadata(composition.Full) != nil ||
+		len(composition.Full.Performers) != 1 || lyricscontract.ValidatePersistedPerformerMetadata(composition.Full) != nil ||
 		composition.Full.Version.Label != "Fallback SEKAI" ||
 		reflect.DeepEqual(composition.SelectedSourceKeys, []string{mismatched.SourceKey}) {
 		t.Fatalf("mismatched enrichment was grafted: composition=%+v Full=%+v", composition, composition.Full)
@@ -1071,7 +1072,7 @@ func TestComposeFixedArtifactsPersistsAuditedPerformerValuesWithoutChangingLyric
 		input.Fixed.Document.Full.Performers[0].Name != "Hoshino Ichika" {
 		t.Fatal("composition mutated the fixed source authority")
 	}
-	if err := ValidatePersistedPerformerMetadata(composition.Full); err != nil {
+	if err := lyricscontract.ValidatePersistedPerformerMetadata(composition.Full); err != nil {
 		t.Fatalf("persisted performer metadata rejected: %v", err)
 	}
 	bound, err := BindFixedArtifactComposition(input, composition)
@@ -1121,74 +1122,6 @@ func TestComposeFixedArtifactsUsesStableNonLatinIDsAndKeepsAuditedOfficialBrandN
 	}
 }
 
-func TestNormalizePersistedPerformerMetadataOmitsUnknownLatinLabelEvenWithAuditedLookingID(t *testing.T) {
-	makeFull := func(sourceID string) model.LyricsSourceFull {
-		return model.LyricsSourceFull{
-			Version: model.LyricsSourceVersion{Kind: "sekai", Label: "SEKAI Version"},
-			Performers: []model.LyricsSourcePerformer{{
-				PerformerID: sourceID, Name: "Mikito-P", Color: "#33CCBB",
-			}},
-			Lines: []model.LyricsSourceFullLine{{
-				ID: "full-000001", Text: "ROCK 'N' ROLL",
-				Segments: []model.LyricsSourceSegment{{
-					Text: "ROCK ", PerformerIDs: []string{sourceID},
-					Ruby: []model.LyricsSourceRubySpan{{Text: "ROCK "}},
-				}, {
-					Text: "'N' ROLL", PerformerIDs: []string{sourceID},
-					Ruby: []model.LyricsSourceRubySpan{{Text: "'N' ROLL"}},
-				}},
-				TrailingPerformerIDs: []string{sourceID},
-			}},
-		}
-	}
-
-	for _, sourceID := range []string{"mikito-p", "provider_mikito_p", "miku", "歌唱者-21"} {
-		canonical, err := NormalizePersistedPerformerMetadata(makeFull(sourceID))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(canonical.Performers) != 0 || len(canonical.Lines) != 1 || len(canonical.Lines[0].Segments) != 1 ||
-			canonical.Lines[0].Text != "ROCK 'N' ROLL" || canonical.Lines[0].Segments[0].Text != "ROCK 'N' ROLL" ||
-			len(canonical.Lines[0].Segments[0].PerformerIDs) != 0 || len(canonical.Lines[0].TrailingPerformerIDs) != 0 ||
-			len(canonical.Lines[0].Segments[0].Ruby) != 2 {
-			t.Fatalf("unknown performer segmentation was not safely omitted: %+v", canonical)
-		}
-		body, err := json.Marshal(canonical)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(strings.ToLower(string(body)), "mikito") || !strings.Contains(string(body), "ROCK 'N' ROLL") {
-			t.Fatal("unknown performer escaped or legitimate English lyric text was removed")
-		}
-		if err := ValidatePersistedPerformerMetadata(canonical); err != nil {
-			t.Fatalf("performer-free canonical Full was rejected: %v", err)
-		}
-	}
-
-	unmapped := makeFull("miku")
-	unmapped.Performers[0].Name = "Hatsune Miku"
-	unmapped.Lines[0].Segments[0].PerformerIDs = []string{"external-singer"}
-	unmapped.Lines[0].TrailingPerformerIDs = []string{"external-singer"}
-	omitted, err := NormalizePersistedPerformerMetadata(unmapped)
-	if err != nil || len(omitted.Performers) != 0 || len(omitted.Lines[0].Segments) != 1 ||
-		omitted.Lines[0].Segments[0].Text != "ROCK 'N' ROLL" {
-		t.Fatalf("contractually safe unmapped references were not omitted: Full=%+v err=%v", omitted, err)
-	}
-
-	unsafe := makeFull("miku")
-	unsafe.Lines[0].Segments[0].Text = "BROKEN"
-	_, err = NormalizePersistedPerformerMetadata(unsafe)
-	if !errors.Is(err, ErrUnsafePerformerMetadata) {
-		t.Fatalf("unsafe omission error=%v", err)
-	}
-	lower := strings.ToLower(err.Error())
-	for _, prohibited := range []string{"miku", "mikito"} {
-		if strings.Contains(lower, prohibited) {
-			t.Fatal("unsafe omission sentinel echoed source performer metadata")
-		}
-	}
-}
-
 func TestComposeFixedArtifactsOmitsUnknownLatinLabelBeforeCompositionWithoutEcho(t *testing.T) {
 	input := newFixedDocumentInput(fixedDocumentFixture{
 		provider: model.LyricsSourceProviderSekaipedia, sourceKey: "sekaipedia-unknown-performer", logicalRendition: "full-sekai",
@@ -1223,7 +1156,7 @@ func TestComposeFixedArtifactsRejectsConflictingRomanizedPerformerValuesWithoutE
 		performerID: "miku", performerName: "Hoshino Ichika",
 	})
 	_, err := ComposeFixedArtifacts([]FixedArtifactInput{input})
-	if !errors.Is(err, ErrUnsafePerformerMetadata) {
+	if !errors.Is(err, lyricscontract.ErrUnsafePerformerMetadata) {
 		t.Fatalf("conflicting performer error=%v", err)
 	}
 	lower := strings.ToLower(err.Error())

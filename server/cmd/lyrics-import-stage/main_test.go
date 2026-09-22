@@ -18,6 +18,7 @@ import (
 
 	"moesekai/server/internal/db"
 	"moesekai/server/internal/lyricsacquisition"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsevidencepack"
 	"moesekai/server/internal/lyricsimportreceipt"
 	"moesekai/server/internal/lyricsrootmanifest"
@@ -162,7 +163,7 @@ func writeCommandFixture(t *testing.T) commandFixture {
 		t.Fatal(err)
 	}
 	report.EvidenceReceipt = &evidenceReceipt
-	draft, err := lyricsstaging.BuildDraft(item, lyricsstaging.CatalogIdentity{
+	draft, err := lyricsstaging.BuildDraft(item, lyricscontract.CatalogIdentity{
 		MusicID: identity.MusicID, JapaneseTitle: identity.JapaneseTitle, ProducerMetadata: identity.ProducerMetadata,
 		Lyricist: identity.Lyricist, Composer: identity.Composer, Arranger: identity.Arranger,
 		Vocals: append([]model.CatalogVocalSignal{}, identity.Vocals...), CatalogFingerprint: identity.CatalogFingerprint,
@@ -244,7 +245,7 @@ func writeCommandBindingArtifacts(
 		t.Fatal(err)
 	}
 	evidencePackPath := filepath.Join(directory, "evidence-pack")
-	pack, err := lyricsevidencepack.Build(t.Context(), evidencePackPath, []lyricsevidencepack.EvidenceRef{evidenceRef},
+	pack, err := lyricsevidencepack.Build(t.Context(), evidencePackPath, []lyricscontract.EvidenceRef{evidenceRef},
 		commandAcquisitionSource{acquisition: acquisition})
 	if err != nil {
 		t.Fatal(err)
@@ -253,7 +254,7 @@ func writeCommandBindingArtifacts(
 	if err != nil {
 		t.Fatal(err)
 	}
-	musicIDsSHA256, err := lyricsrootmanifest.OrderedMusicIDsSHA256([]int{10})
+	musicIDsSHA256, err := lyricscontract.OrderedMusicIDsSHA256([]int{10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,11 +268,11 @@ func writeCommandBindingArtifacts(
 		},
 		Plan: lyricsrootmanifest.PlanBinding{PlanID: "plan-command-fixture", SHA256: strings.Repeat("7", 64)},
 		Songs: []lyricsrootmanifest.SongResultRef{{
-			MusicID: 10, State: lyricsrootmanifest.CoverageComplete, ResultSHA256: strings.Repeat("6", 64),
+			MusicID: 10, State: lyricscontract.CoverageComplete, ResultSHA256: strings.Repeat("6", 64),
 			ProviderOutcomes: []lyricsrootmanifest.ProviderOutcomeRef{{
 				Provider: evidence.Provider, OutcomeID: "outcome:command-fixture", SHA256: strings.Repeat("5", 64),
 			}},
-			SelectedEvidence: []lyricsevidencepack.EvidenceRef{evidenceRef},
+			SelectedEvidence: []lyricscontract.EvidenceRef{evidenceRef},
 		}},
 	}, resolver)
 	if err != nil {

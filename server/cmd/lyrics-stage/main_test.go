@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
@@ -821,7 +822,7 @@ func TestExecuteKeepsProviderFetchAndDraftBuilderInjectable(t *testing.T) {
 			return fixed, nil
 		}},
 		loadCatalogSnapshot,
-		func(item lyricsstaging.PreflightItem, identity lyricsstaging.CatalogIdentity, bundle lyricsstaging.FixedArtifactBundle) (lyricsstaging.Draft, error) {
+		func(item lyricsstaging.PreflightItem, identity lyricscontract.CatalogIdentity, bundle lyricsstaging.FixedArtifactBundle) (lyricsstaging.Draft, error) {
 			buildCalls.Add(1)
 			if bundle.EvidenceResolver == nil || bundle.EvidenceReceipt.SchemaVersion != 0 ||
 				bundle.EvidenceReceipt.IndexEvidence != nil || bundle.EvidenceReceipt.ReceiptSHA256 != "" {

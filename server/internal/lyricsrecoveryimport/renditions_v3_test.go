@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"moesekai/server/internal/lyricsevidencepack"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsoutcomeartifact"
 	"moesekai/server/internal/lyricsrecovery"
 	"moesekai/server/internal/lyricssource"
@@ -68,7 +68,7 @@ func TestRenditionTranslationsFromResultPreservesIndependentGamePeer(t *testing.
 }
 
 func TestMatchesV3SelectedAcquisitionBindsAcquisitionID(t *testing.T) {
-	selected := lyricsevidencepack.EvidenceRef{
+	selected := lyricscontract.EvidenceRef{
 		Provider: model.LyricsSourceProviderSekaipedia, AcquisitionID: strings.Repeat("a", 64),
 		EvidenceID: "revision:sekaipedia:1:2:" + strings.Repeat("b", 64),
 		SHA256:     strings.Repeat("c", 64), EnvelopeSHA256: strings.Repeat("d", 64),

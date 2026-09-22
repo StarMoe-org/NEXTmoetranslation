@@ -14,9 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"moesekai/server/internal/lyricsevidencepack"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsrecoveryimport"
-	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
 )
@@ -293,7 +292,7 @@ func TestLyricsRenditionEditorRejectsPrimaryAndPeerTranslationsOverDocumentBound
 	if err := model.ValidateLyricsSourceDocument(document); err != nil {
 		t.Fatalf("expanded rendition document: %v", err)
 	}
-	translations := []lyricsstaging.RenditionTranslation{
+	translations := []lyricscontract.RenditionTranslation{
 		{RenditionKey: document.Renditions[0].RenditionKey, Translations: make([]string, 129)},
 		{RenditionKey: document.Renditions[1].RenditionKey, Translations: []string{""}},
 	}
@@ -729,10 +728,10 @@ func TestRecoveryImportedV3EditorReadsRecoveryGraphSavesAndSurvivesBackup(t *tes
 
 func TestRecoveryImportedV3PeerOnlyCreditsReachEditorBackupAndPublicCandidate(t *testing.T) {
 	fixture := setupRecoveryRenditionV3EditorFixture(t)
-	translations := []lyricsstaging.RenditionTranslation{
+	translations := []lyricscontract.RenditionTranslation{
 		{
 			RenditionKey: fixture.document.Renditions[0].RenditionKey,
-			PeerTranslations: []lyricsstaging.RenditionPeerTranslation{{
+			PeerTranslations: []lyricscontract.RenditionPeerTranslation{{
 				Side: "game", Locale: "zh-CN", Translations: []string{"仅游戏一", "仅游戏二"},
 			}},
 			TranslationCredit: "游戏译者", ProofreadingCredit: "游戏校对",
@@ -943,11 +942,11 @@ func setupRecoveryRenditionV3EditorFixture(t *testing.T) recoveryRenditionV3Edit
 		_ = tx.Rollback()
 		return err
 	}
-	musicIDsSHA, err := lyricsrootmanifest.OrderedMusicIDsSHA256([]int{10, 20})
+	musicIDsSHA, err := lyricscontract.OrderedMusicIDsSHA256([]int{10, 20})
 	if err != nil {
 		t.Fatal(rollback(err))
 	}
-	refs := make([]lyricsevidencepack.EvidenceRef, 0, len(evidenceByIdentity))
+	refs := make([]lyricscontract.EvidenceRef, 0, len(evidenceByIdentity))
 	seenEvidence := make(map[string]struct{})
 	var rawByteCount int64
 	evidenceOrdinal := 0
@@ -957,7 +956,7 @@ func setupRecoveryRenditionV3EditorFixture(t *testing.T) recoveryRenditionV3Edit
 				continue
 			}
 			seenEvidence[parent.EvidenceID] = struct{}{}
-			ref := lyricsevidencepack.EvidenceRef{
+			ref := lyricscontract.EvidenceRef{
 				Provider: parent.Provider, AcquisitionID: recoveryEditorTestSHA(fmt.Sprintf("acquisition-%d", evidenceOrdinal)),
 				EvidenceID: parent.EvidenceID, SHA256: parent.RawSHA256,
 				EnvelopeSHA256: recoveryEditorTestSHA(fmt.Sprintf("envelope-%d", evidenceOrdinal)),
@@ -968,11 +967,11 @@ func setupRecoveryRenditionV3EditorFixture(t *testing.T) recoveryRenditionV3Edit
 		}
 	}
 	sort.Slice(refs, func(left, right int) bool { return refs[left].EvidenceID < refs[right].EvidenceID })
-	selectionSHA, err := lyricsevidencepack.OrderedSelectionSHA256(refs)
+	selectionSHA, err := lyricscontract.OrderedSelectionSHA256(refs)
 	if err != nil {
 		t.Fatal(rollback(err))
 	}
-	coverage := lyricsrootmanifest.Coverage{
+	coverage := lyricscontract.Coverage{
 		Total: 2, Complete: 1, Missing: 1, SelectionRefCount: len(refs),
 		UniqueAcquisitionCount: len(refs), UniqueEvidenceCount: len(refs),
 	}
@@ -984,7 +983,7 @@ func setupRecoveryRenditionV3EditorFixture(t *testing.T) recoveryRenditionV3Edit
 		(batch_sha256,schema_version,root_schema_version,root_id,root_sha256,catalog_count,music_ids_sha256,
 		 coverage_json,evidence_receipt_sha256,pack_sha256,selection_sha256,evidence_count,shard_count,
 		 raw_byte_count,encoded_byte_count,actor,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		batchSHA, 1, lyricsrootmanifest.SchemaVersionV2, "recovery-editor-root", recoveryEditorTestSHA("root"), 2,
+		batchSHA, 1, lyricscontract.SchemaVersionV2, "recovery-editor-root", recoveryEditorTestSHA("root"), 2,
 		musicIDsSHA, string(coverageJSON), recoveryEditorTestSHA("receipt"), recoveryEditorTestSHA("pack"), selectionSHA,
 		len(refs), 1, rawByteCount, 1, "recovery-editor-test", createdAt); err != nil {
 		t.Fatal(rollback(err))
@@ -1005,7 +1004,7 @@ func setupRecoveryRenditionV3EditorFixture(t *testing.T) recoveryRenditionV3Edit
 	}
 	item := lyricsrecoveryimport.Item{
 		MusicID: 10, JapaneseTitle: "新曲", CatalogFingerprint: fingerprint, TargetMusicID: 10,
-		AssociationMusicIDs: []int{}, State: lyricsrootmanifest.CoverageComplete,
+		AssociationMusicIDs: []int{}, State: lyricscontract.CoverageComplete,
 		ResultSHA256: recoveryEditorTestSHA("result-10"), Draft: &draft,
 	}
 	if err := seedRecoveryImportItemTx(ctx, tx, batchSHA, item, createdAt); err != nil {
@@ -1034,7 +1033,7 @@ func setupRecoveryRenditionV3EditorFixture(t *testing.T) recoveryRenditionV3Edit
 	}
 	missingItem := lyricsrecoveryimport.Item{
 		MusicID: 20, JapaneseTitle: "旧曲", CatalogFingerprint: recoveryRenditionTestCatalogFingerprint(t, s, 20), TargetMusicID: 20,
-		AssociationMusicIDs: []int{}, State: lyricsrootmanifest.CoverageMissing,
+		AssociationMusicIDs: []int{}, State: lyricscontract.CoverageMissing,
 		ResultSHA256: recoveryEditorTestSHA("result-20"), Availability: &missingAvailability,
 		AvailabilityDocumentSHA256: missingSHA,
 	}

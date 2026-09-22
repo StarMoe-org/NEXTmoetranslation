@@ -21,8 +21,8 @@ import (
 	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsextractionplan"
-	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 )
@@ -562,7 +562,7 @@ func verifyCatalogRows(
 	if err := rows.Err(); err != nil || len(musicIDs) == 0 {
 		return CatalogVerification{}, nil, errors.New("recovery catalog has no valid ordered music records")
 	}
-	musicIDsSHA, err := lyricsrootmanifest.OrderedMusicIDsSHA256(musicIDs)
+	musicIDsSHA, err := lyricscontract.OrderedMusicIDsSHA256(musicIDs)
 	if err != nil {
 		return CatalogVerification{}, nil, err
 	}

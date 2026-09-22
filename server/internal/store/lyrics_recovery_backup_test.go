@@ -13,8 +13,7 @@ import (
 	"testing"
 
 	"moesekai/server/internal/db"
-	"moesekai/server/internal/lyricsevidencepack"
-	"moesekai/server/internal/lyricsrootmanifest"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/model"
 )
 
@@ -291,7 +290,7 @@ func recoveryContentBackupFixture(t *testing.T) LyricsContentExport {
 		musicIDs[index] = music.MusicID
 	}
 	sort.Ints(musicIDs)
-	musicIDsSHA, err := lyricsrootmanifest.OrderedMusicIDsSHA256(musicIDs)
+	musicIDsSHA, err := lyricscontract.OrderedMusicIDsSHA256(musicIDs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +308,7 @@ func recoveryContentBackupFixture(t *testing.T) LyricsContentExport {
 			CreatedAt: createdAt,
 		}
 		if music.MusicID == completeMusicID {
-			item.State = string(lyricsrootmanifest.CoverageComplete)
+			item.State = string(lyricscontract.CoverageComplete)
 			item.DraftSHA256 = recoveryBackupTestSHA("draft")
 			item.DocumentSHA256 = content.SourceDocuments[0].DocumentSHA256
 		} else {
@@ -324,7 +323,7 @@ func recoveryContentBackupFixture(t *testing.T) LyricsContentExport {
 				t.Fatal(err)
 			}
 			digest := sha256.Sum256(body)
-			item.State = string(lyricsrootmanifest.CoverageMissing)
+			item.State = string(lyricscontract.CoverageMissing)
 			item.AvailabilityDocumentSHA256 = hex.EncodeToString(digest[:])
 			availability = append(availability, LyricsAvailabilityDocumentBackupRecord{
 				AvailabilityDocumentID: int64(len(availability) + 1), BatchSHA256: batchSHA,
@@ -339,7 +338,7 @@ func recoveryContentBackupFixture(t *testing.T) LyricsContentExport {
 	sort.Slice(items, func(left, right int) bool { return items[left].MusicID < items[right].MusicID })
 
 	recoveryEvidence := make([]LyricsRecoverySourceEvidenceBackupRecord, len(content.SourceIndexEvidence))
-	selection := make([]lyricsevidencepack.EvidenceRef, len(content.SourceIndexEvidence))
+	selection := make([]lyricscontract.EvidenceRef, len(content.SourceIndexEvidence))
 	var rawByteCount int64
 	for index, record := range content.SourceIndexEvidence {
 		acquisitionID := recoveryBackupTestSHA("acquisition:" + record.Provider + ":" + record.EvidenceID)
@@ -354,7 +353,7 @@ func recoveryContentBackupFixture(t *testing.T) LyricsContentExport {
 			RawBytes: append([]byte(nil), record.RawBytes...), RawByteCount: record.RawByteCount,
 			RawSHA256: record.RawSHA256, CreatedAt: createdAt,
 		}
-		selection[index] = lyricsevidencepack.EvidenceRef{
+		selection[index] = lyricscontract.EvidenceRef{
 			Provider: model.LyricsSourceProvider(record.Provider), AcquisitionID: acquisitionID,
 			EvidenceID: record.EvidenceID, SHA256: record.SHA256, EnvelopeSHA256: envelopeSHA,
 		}
@@ -367,7 +366,7 @@ func recoveryContentBackupFixture(t *testing.T) LyricsContentExport {
 		return recoveryEvidence[left].EvidenceID < recoveryEvidence[right].EvidenceID
 	})
 	sort.Slice(selection, func(left, right int) bool { return selection[left].EvidenceID < selection[right].EvidenceID })
-	selectionSHA, err := lyricsevidencepack.OrderedSelectionSHA256(selection)
+	selectionSHA, err := lyricscontract.OrderedSelectionSHA256(selection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +402,7 @@ func recoveryContentBackupFixture(t *testing.T) LyricsContentExport {
 		}
 	}
 
-	coverage := lyricsrootmanifest.Coverage{
+	coverage := lyricscontract.Coverage{
 		Total: len(content.Music), Complete: 1, Missing: len(content.Music) - 1,
 		ProviderOutcomeRefCount: len(content.Music), SelectionRefCount: len(selection),
 		UniqueAcquisitionCount: len(selection), UniqueEvidenceCount: len(selection),
@@ -413,7 +412,7 @@ func recoveryContentBackupFixture(t *testing.T) LyricsContentExport {
 		t.Fatal(err)
 	}
 	content.RecoveryBatches = []LyricsRecoveryBatchBackupRecord{{
-		BatchSHA256: batchSHA, SchemaVersion: 1, RootSchemaVersion: lyricsrootmanifest.SchemaVersionV2,
+		BatchSHA256: batchSHA, SchemaVersion: 1, RootSchemaVersion: lyricscontract.SchemaVersionV2,
 		RootID: "recovery-backup-roundtrip", RootSHA256: rootSHA, CatalogCount: len(content.Music),
 		MusicIDsSHA256: musicIDsSHA, CoverageJSON: string(coverageJSON),
 		EvidenceReceiptSHA256: recoveryBackupTestSHA("receipt"), PackSHA256: recoveryBackupTestSHA("pack"),

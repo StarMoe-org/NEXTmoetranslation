@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsextractionplan"
-	"moesekai/server/internal/lyricsrootmanifest"
 )
 
 const fixtureCatalogPathEnv = "MOESEKAI_RECOVERY_TEST_CATALOG"
@@ -170,7 +170,7 @@ func writeSyntheticLyricsRecoveryFixtureCatalog(root string) (string, lyricsextr
 		}
 	}
 	sourceDigest := sha256.Sum256(body)
-	musicIDsSHA256, err := lyricsrootmanifest.OrderedMusicIDsSHA256(musicIDs)
+	musicIDsSHA256, err := lyricscontract.OrderedMusicIDsSHA256(musicIDs)
 	if err != nil {
 		return "", lyricsextractionplan.RecoveryCatalogBinding{}, err
 	}

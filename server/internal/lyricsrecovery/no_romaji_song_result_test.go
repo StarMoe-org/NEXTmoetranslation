@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"moesekai/server/internal/lyricscompose"
-	"moesekai/server/internal/lyricsevidencepack"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsoutcomeartifact"
 	"moesekai/server/internal/model"
 )
@@ -126,7 +126,7 @@ func TestNoRomajiSongResultOmissionDropsExclusivePerformerEvidence(t *testing.T)
 	performerEvidence.SHA256 = strings.Repeat("8", 64)
 	performerEvidence.EnvelopeSHA256 = strings.Repeat("9", 64)
 	replay.Selected = append(replay.Selected, performerEvidence)
-	replay.Components.PerformerSegmentation = []lyricsevidencepack.EvidenceRef{performerEvidence}
+	replay.Components.PerformerSegmentation = []lyricscontract.EvidenceRef{performerEvidence}
 
 	result, err := NewSongResult(replay)
 	if err != nil {
@@ -143,7 +143,7 @@ func TestNoRomajiSongResultUnsafePerformerOmissionFailsWithValueFreeSentinel(t *
 	replay.Composition.Full.Lines[0].Segments[0].Text = "BROKEN"
 
 	_, err := NewSongResult(replay)
-	if !errors.Is(err, lyricscompose.ErrUnsafePerformerMetadata) {
+	if !errors.Is(err, lyricscontract.ErrUnsafePerformerMetadata) {
 		t.Fatalf("unsafe performer omission error=%v", err)
 	}
 	lower := strings.ToLower(err.Error())
@@ -208,7 +208,7 @@ func TestNoRomajiSongResultRejectsRomanizedPerformerValuesWithoutEcho(t *testing
 				}(),
 			}
 			for boundary, boundaryErr := range boundaryErrors {
-				if !errors.Is(boundaryErr, lyricscompose.ErrUnsafePerformerMetadata) {
+				if !errors.Is(boundaryErr, lyricscontract.ErrUnsafePerformerMetadata) {
 					t.Fatalf("%s unsafe performer error=%v", boundary, boundaryErr)
 				}
 				lowerError := strings.ToLower(boundaryErr.Error())
@@ -224,7 +224,7 @@ func TestNoRomajiSongResultRejectsRomanizedPerformerValuesWithoutEcho(t *testing
 
 func TestNoRomajiSongResultNewBoundaryDoesNotEchoConflictingRomanizedValues(t *testing.T) {
 	_, err := NewSongResult(noRomajiReplayFixture("miku", "Hoshino Ichika"))
-	if !errors.Is(err, lyricscompose.ErrUnsafePerformerMetadata) {
+	if !errors.Is(err, lyricscontract.ErrUnsafePerformerMetadata) {
 		t.Fatalf("conflicting romanized performer error=%v", err)
 	}
 	lowerError := strings.ToLower(err.Error())
@@ -236,7 +236,7 @@ func TestNoRomajiSongResultNewBoundaryDoesNotEchoConflictingRomanizedValues(t *t
 }
 
 func noRomajiReplayFixture(performerID, performerName string) ReplayResult {
-	ref := lyricsevidencepack.EvidenceRef{
+	ref := lyricscontract.EvidenceRef{
 		Provider:      model.LyricsSourceProviderSekaipedia,
 		AcquisitionID: strings.Repeat("1", 64),
 		EvidenceID:    "revision:sekaipedia:100:1000:" + strings.Repeat("2", 64),
@@ -291,13 +291,13 @@ func noRomajiReplayFixture(performerID, performerName string) ReplayResult {
 			ArtifactSHA256: strings.Repeat("5", 64),
 		}}},
 		Composition: composition,
-		Selected:    []lyricsevidencepack.EvidenceRef{ref},
+		Selected:    []lyricscontract.EvidenceRef{ref},
 		Components: ComponentEvidence{
-			FullText:              []lyricsevidencepack.EvidenceRef{ref},
-			PerformerSegmentation: []lyricsevidencepack.EvidenceRef{ref},
-			GameProjection:        []lyricsevidencepack.EvidenceRef{},
-			Ruby:                  []lyricsevidencepack.EvidenceRef{ref},
-			VersionEvidence:       []lyricsevidencepack.EvidenceRef{ref},
+			FullText:              []lyricscontract.EvidenceRef{ref},
+			PerformerSegmentation: []lyricscontract.EvidenceRef{ref},
+			GameProjection:        []lyricscontract.EvidenceRef{},
+			Ruby:                  []lyricscontract.EvidenceRef{ref},
+			VersionEvidence:       []lyricscontract.EvidenceRef{ref},
 		},
 	}
 }

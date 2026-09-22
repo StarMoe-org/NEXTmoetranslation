@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"moesekai/server/internal/lyricscompose"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
@@ -58,7 +59,7 @@ type catalogSnapshotLoader func(context.Context, string) ([]catalogSnapshotItem,
 
 type sourceClientFactory func() (sourceClient, error)
 
-type draftBuilder func(lyricsstaging.PreflightItem, lyricsstaging.CatalogIdentity, lyricsstaging.FixedArtifactBundle) (lyricsstaging.Draft, error)
+type draftBuilder func(lyricsstaging.PreflightItem, lyricscontract.CatalogIdentity, lyricsstaging.FixedArtifactBundle) (lyricsstaging.Draft, error)
 
 type commandDependencies struct {
 	NewSourceClient sourceClientFactory
@@ -481,7 +482,7 @@ func requireCanonicalPreflightBytes(body []byte, report lyricsstaging.PreflightR
 }
 
 func fetchDrafts(ctx context.Context, opts options, source sourceClient, report lyricsstaging.PreflightReport,
-	identities map[int]lyricsstaging.CatalogIdentity, evidenceResolver *lyricsstaging.PrivateEvidenceResolver,
+	identities map[int]lyricscontract.CatalogIdentity, evidenceResolver *lyricsstaging.PrivateEvidenceResolver,
 	buildDraft draftBuilder,
 ) ([]lyricsstaging.Draft, error) {
 	if err := ctx.Err(); err != nil {
@@ -611,7 +612,7 @@ func fetchAndBuildDraft(
 	opts options,
 	source sourceClient,
 	item lyricsstaging.PreflightItem,
-	identity lyricsstaging.CatalogIdentity,
+	identity lyricscontract.CatalogIdentity,
 	hydratedCandidates []lyricssource.Candidate,
 	evidenceResolver *lyricsstaging.PrivateEvidenceResolver,
 	buildDraft draftBuilder,
@@ -823,13 +824,13 @@ type classifiedPreflightItem struct {
 	item  lyricsstaging.PreflightItem
 }
 
-func validateCatalogSnapshot(ctx context.Context, databasePath string, report lyricsstaging.PreflightReport) (map[int]lyricsstaging.CatalogIdentity, error) {
+func validateCatalogSnapshot(ctx context.Context, databasePath string, report lyricsstaging.PreflightReport) (map[int]lyricscontract.CatalogIdentity, error) {
 	return validateCatalogSnapshotWithLoader(ctx, databasePath, report, loadCatalogSnapshot)
 }
 
 func validateCatalogSnapshotWithLoader(ctx context.Context, databasePath string, report lyricsstaging.PreflightReport,
 	loader catalogSnapshotLoader,
-) (map[int]lyricsstaging.CatalogIdentity, error) {
+) (map[int]lyricscontract.CatalogIdentity, error) {
 	if loader == nil {
 		return nil, errors.New("catalog snapshot loader is required")
 	}
@@ -887,10 +888,10 @@ func validateCatalogSnapshotWithLoader(ctx context.Context, databasePath string,
 		}
 	}
 
-	identities := make(map[int]lyricsstaging.CatalogIdentity, len(report.UniqueComplete))
+	identities := make(map[int]lyricscontract.CatalogIdentity, len(report.UniqueComplete))
 	for _, item := range report.UniqueComplete {
 		catalogItem := catalogByMusicID[item.MusicID]
-		identities[item.MusicID] = lyricsstaging.CatalogIdentity{
+		identities[item.MusicID] = lyricscontract.CatalogIdentity{
 			MusicID: catalogItem.MusicID, JapaneseTitle: catalogItem.JapaneseTitle,
 			ProducerMetadata: catalogItem.ProducerMetadata, Lyricist: catalogItem.Lyricist,
 			Composer: catalogItem.Composer, Arranger: catalogItem.Arranger,

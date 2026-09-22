@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"moesekai/server/internal/lyricsevidencepack"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsextractionplan"
 	"moesekai/server/internal/lyricsimportreceipt"
 	"moesekai/server/internal/lyricsrecovery"
@@ -278,12 +278,12 @@ func TestImportInputsRequireExact698FullGameAndEvidenceUnion(t *testing.T) {
 			TrailingPerformerIDs: []string{},
 		}},
 	}
-	evidenceRef := lyricsevidencepack.EvidenceRef{
+	evidenceRef := lyricscontract.EvidenceRef{
 		Provider: model.LyricsSourceProviderSekaipedia, AcquisitionID: strings.Repeat("a", 64),
 		EvidenceID: "revision:sekaipedia:1:2:" + strings.Repeat("b", 64), SHA256: strings.Repeat("b", 64),
 		EnvelopeSHA256: strings.Repeat("c", 64),
 	}
-	evidenceRef2 := lyricsevidencepack.EvidenceRef{
+	evidenceRef2 := lyricscontract.EvidenceRef{
 		Provider: model.LyricsSourceProviderMoegirl, AcquisitionID: strings.Repeat("d", 64),
 		EvidenceID: "revision:moegirl:3:4:" + strings.Repeat("e", 64), SHA256: strings.Repeat("e", 64),
 		EnvelopeSHA256: strings.Repeat("f", 64),
@@ -295,7 +295,7 @@ func TestImportInputsRequireExact698FullGameAndEvidenceUnion(t *testing.T) {
 	}
 	root := lyricsrootmanifest.Manifest{
 		Songs: make([]lyricsrootmanifest.SongResultRef, releaseCatalogTargetCount),
-		Coverage: lyricsrootmanifest.Coverage{
+		Coverage: lyricscontract.Coverage{
 			UniqueEvidenceCount: 2, UniqueAcquisitionCount: 2,
 		},
 	}
@@ -311,7 +311,7 @@ func TestImportInputsRequireExact698FullGameAndEvidenceUnion(t *testing.T) {
 			Full: full,
 		}
 		manifest.Items[index] = lyricsstaging.Draft{MusicID: musicID, Document: document}
-		root.Songs[index] = lyricsrootmanifest.SongResultRef{MusicID: musicID, SelectedEvidence: []lyricsevidencepack.EvidenceRef{evidenceRef}}
+		root.Songs[index] = lyricsrootmanifest.SongResultRef{MusicID: musicID, SelectedEvidence: []lyricscontract.EvidenceRef{evidenceRef}}
 		copyFull := full
 		results[musicID] = lyricsrecovery.SongResult{MusicID: musicID, ReasonCode: document.ReasonCode, Full: &copyFull}
 	}
@@ -363,7 +363,7 @@ func TestImportInputsRequireExact698FullGameAndEvidenceUnion(t *testing.T) {
 	conflictingRoot.Songs = append([]lyricsrootmanifest.SongResultRef{}, root.Songs...)
 	conflicting := evidenceRef
 	conflicting.AcquisitionID = strings.Repeat("e", 64)
-	conflictingRoot.Songs[1].SelectedEvidence = []lyricsevidencepack.EvidenceRef{conflicting}
+	conflictingRoot.Songs[1].SelectedEvidence = []lyricscontract.EvidenceRef{conflicting}
 	if _, err := orderedEvidenceUnion(conflictingRoot); err == nil {
 		t.Fatal("conflicting root evidence identity was accepted")
 	}

@@ -20,8 +20,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsextractionplan"
-	"moesekai/server/internal/lyricsrootmanifest"
 )
 
 const (
@@ -352,7 +352,7 @@ func verifyCatalog(ctx context.Context, path string) (catalogVerification, []int
 	if err := rows.Err(); err != nil || len(musicIDs) == 0 {
 		return catalogVerification{}, nil, nil, errors.New("filtered catalog has no valid ordered records")
 	}
-	musicIDsSHA, err := lyricsrootmanifest.OrderedMusicIDsSHA256(musicIDs)
+	musicIDsSHA, err := lyricscontract.OrderedMusicIDsSHA256(musicIDs)
 	if err != nil {
 		return catalogVerification{}, nil, nil, err
 	}

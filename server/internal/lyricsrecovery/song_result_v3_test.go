@@ -11,10 +11,9 @@ import (
 	"testing"
 
 	"moesekai/server/internal/lyricscompose"
-	"moesekai/server/internal/lyricsevidencepack"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsoutcomeartifact"
 	"moesekai/server/internal/lyricsprovideroutcome"
-	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 )
@@ -83,17 +82,17 @@ func recoveryV3ReplayFixture(t *testing.T) ReplayResult {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sekaiEvidence := lyricsevidencepack.EvidenceRef{
+	sekaiEvidence := lyricscontract.EvidenceRef{
 		Provider: model.LyricsSourceProviderSekaipedia, AcquisitionID: strings.Repeat("1", 64),
 		EvidenceID: "revision:sekaipedia:42:420:" + strings.Repeat("2", 64),
 		SHA256:     strings.Repeat("3", 64), EnvelopeSHA256: strings.Repeat("4", 64),
 	}
-	vocaloidEvidence := lyricsevidencepack.EvidenceRef{
+	vocaloidEvidence := lyricscontract.EvidenceRef{
 		Provider: model.LyricsSourceProviderMoegirl, AcquisitionID: strings.Repeat("5", 64),
 		EvidenceID: "revision:moegirl:42:421:" + strings.Repeat("6", 64),
 		SHA256:     strings.Repeat("7", 64), EnvelopeSHA256: strings.Repeat("8", 64),
 	}
-	evidenceByOutcome := map[string][]lyricsevidencepack.EvidenceRef{
+	evidenceByOutcome := map[string][]lyricscontract.EvidenceRef{
 		sekaiOutcome:    {sekaiEvidence},
 		vocaloidOutcome: {vocaloidEvidence},
 	}
@@ -111,7 +110,7 @@ func recoveryV3ReplayFixture(t *testing.T) ReplayResult {
 			Evidence: cloneEvidenceRefs(evidenceByOutcome[binding.FixedIdentityKey]),
 		})
 	}
-	selected := []lyricsevidencepack.EvidenceRef{sekaiEvidence, vocaloidEvidence}
+	selected := []lyricscontract.EvidenceRef{sekaiEvidence, vocaloidEvidence}
 	sort.Slice(selected, func(left, right int) bool { return selected[left].EvidenceID < selected[right].EvidenceID })
 	selectedSources := []string{sekaiOutcome, vocaloidOutcome}
 	sort.Strings(selectedSources)
@@ -121,11 +120,11 @@ func recoveryV3ReplayFixture(t *testing.T) ReplayResult {
 			{Artifact: lyricsoutcomeartifact.Artifact{
 				Provider: model.LyricsSourceProviderSekaipedia, OutcomeID: sekaiOutcome,
 				ArtifactSHA256: strings.Repeat("9", 64),
-			}, EvidenceRefs: []lyricsevidencepack.EvidenceRef{sekaiEvidence}},
+			}, EvidenceRefs: []lyricscontract.EvidenceRef{sekaiEvidence}},
 			{Artifact: lyricsoutcomeartifact.Artifact{
 				Provider: model.LyricsSourceProviderMoegirl, OutcomeID: vocaloidOutcome,
 				ArtifactSHA256: strings.Repeat("a", 64),
-			}, EvidenceRefs: []lyricsevidencepack.EvidenceRef{vocaloidEvidence}},
+			}, EvidenceRefs: []lyricscontract.EvidenceRef{vocaloidEvidence}},
 		},
 		Composition: &lyricscompose.FixedArtifactComposition{
 			Renditions: model.CloneLyricsSourceRenditions(renditions), SelectedSourceKeys: selectedSources,
@@ -212,7 +211,7 @@ func TestSongResultV3RoundTripCanonicalHashAndV2Compatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.SchemaVersion != SongResultSchemaVersionV3 || result.State != lyricsrootmanifest.CoverageComplete ||
+	if result.SchemaVersion != SongResultSchemaVersionV3 || result.State != lyricscontract.CoverageComplete ||
 		len(result.Renditions) != 2 || result.Renditions[0].RenditionKey != "sekai" ||
 		result.Renditions[1].RenditionKey != "vocaloid" || result.Full != nil || result.Renditions[1].Full != nil {
 		t.Fatalf("peer rendition song result=%+v", result)
@@ -426,7 +425,7 @@ func TestSongResultV2UpconversionPreservesFullGameAndGameOnlyShapes(t *testing.T
 	gameOnlyReplay.Composition.ReasonCode = model.LyricsSourceVersionReasonTaggedGameOnlyFullFromVocaloid
 	gameOnlyReplay.Composition.Components.FullText = ""
 	gameOnlyReplay.Composition.Components.GameText = "selected-source"
-	gameOnlyReplay.Components.FullText = []lyricsevidencepack.EvidenceRef{}
+	gameOnlyReplay.Components.FullText = []lyricscontract.EvidenceRef{}
 	gameOnlyReplay.Components.GameText = cloneEvidenceRefs(gameOnlyReplay.Selected)
 	gameOnlyV2, err := NewSongResult(gameOnlyReplay)
 	if err != nil {
@@ -460,7 +459,7 @@ func TestSongResultV3CapturesIndependentGamePeerTranslations(t *testing.T) {
 		Translations: []string{"完整一", "完整二", "完整三"},
 	}
 	const gameOutcome = "outcome-sekaipedia-42-peer-sekai-game"
-	gameEvidence := lyricsevidencepack.EvidenceRef{
+	gameEvidence := lyricscontract.EvidenceRef{
 		Provider: model.LyricsSourceProviderVocaloidFandom, AcquisitionID: strings.Repeat("b", 64),
 		EvidenceID: "revision:sekaipedia:42:422:" + strings.Repeat("c", 64),
 		SHA256:     strings.Repeat("d", 64), EnvelopeSHA256: strings.Repeat("e", 64),
@@ -478,7 +477,7 @@ func TestSongResultV3CapturesIndependentGamePeerTranslations(t *testing.T) {
 			}},
 			Translations: []string{"游戏一", "游戏二"},
 		},
-		EvidenceRefs: []lyricsevidencepack.EvidenceRef{gameEvidence},
+		EvidenceRefs: []lyricscontract.EvidenceRef{gameEvidence},
 	})
 	fixture.Composition.Renditions[0].Provenance.GameText = &model.LyricsSourceComponentRef{RenditionKey: gameOutcome}
 	fixture.Selected = append(fixture.Selected, gameEvidence)
@@ -494,7 +493,7 @@ func TestSongResultV3CapturesIndependentGamePeerTranslations(t *testing.T) {
 			if component.Component == model.LyricsSourceRenditionComponentGameText ||
 				component.Component == model.LyricsSourceRenditionComponentRelation {
 				component.OutcomeID = gameOutcome
-				component.Evidence = []lyricsevidencepack.EvidenceRef{gameEvidence}
+				component.Evidence = []lyricscontract.EvidenceRef{gameEvidence}
 			}
 		}
 	}
@@ -596,7 +595,7 @@ func TestSongResultV3RejectsInvalidPeerRenditionAndEvidenceShapes(t *testing.T) 
 			result.Renditions[0].Components[0].Evidence[0].SHA256 = strings.Repeat("b", 64)
 		},
 		"unreferenced selected evidence": func(result *SongResult) {
-			result.SelectedEvidence = append(result.SelectedEvidence, lyricsevidencepack.EvidenceRef{
+			result.SelectedEvidence = append(result.SelectedEvidence, lyricscontract.EvidenceRef{
 				Provider: model.LyricsSourceProviderSekaipedia, AcquisitionID: strings.Repeat("b", 64),
 				EvidenceID: "revision:sekaipedia:42:422:" + strings.Repeat("c", 64),
 				SHA256:     strings.Repeat("d", 64), EnvelopeSHA256: strings.Repeat("e", 64),
@@ -609,10 +608,10 @@ func TestSongResultV3RejectsInvalidPeerRenditionAndEvidenceShapes(t *testing.T) 
 			result.ReasonCode = model.LyricsSourceVersionReasonTaggedFullAndGame
 		},
 		"legacy empty component field": func(result *SongResult) {
-			result.Components.FullText = []lyricsevidencepack.EvidenceRef{}
+			result.Components.FullText = []lyricscontract.EvidenceRef{}
 		},
 		"coverage state disagrees with renditions": func(result *SongResult) {
-			result.State = lyricsrootmanifest.CoverageGameOnly
+			result.State = lyricscontract.CoverageGameOnly
 		},
 		"exact projection peer translation": func(result *SongResult) {
 			result.Renditions[0].PeerTranslations = []SongResultPeerTranslation{{

@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"testing"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsextractionplan"
-	"moesekai/server/internal/lyricsrootmanifest"
 )
 
 type catalogTestRecord struct {
@@ -544,7 +544,7 @@ func writeCatalogTestDatabase(t *testing.T, records []catalogTestRecord) (string
 		}
 		_, _ = identityDigest.Write(fingerprint)
 	}
-	musicIDsSHA, err := lyricsrootmanifest.OrderedMusicIDsSHA256(musicIDs)
+	musicIDsSHA, err := lyricscontract.OrderedMusicIDsSHA256(musicIDs)
 	if err != nil {
 		t.Fatal(err)
 	}

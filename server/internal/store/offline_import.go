@@ -6,8 +6,8 @@ import (
 	"sort"
 	"time"
 
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
-	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
 )
 
@@ -129,18 +129,18 @@ func CloneLyricsSourceDocument(document model.LyricsSourceDocument) *model.Lyric
 }
 
 func InsertLyricsRenditionLocalizationsTx(ctx context.Context, tx *sql.Tx, documentID int64,
-	document model.LyricsSourceDocument, translations []lyricsstaging.RenditionTranslation, actor string, now int64,
+	document model.LyricsSourceDocument, translations []lyricscontract.RenditionTranslation, actor string, now int64,
 ) error {
 	return insertLyricsRenditionLocalizationsTx(ctx, tx, documentID, document, translations, actor, now)
 }
 
 func ExportLyricsRenditionLocalizationsTx(ctx context.Context, tx *sql.Tx, documentID int64,
 	document model.LyricsSourceDocument,
-) ([]lyricsstaging.RenditionTranslation, error) {
+) ([]lyricscontract.RenditionTranslation, error) {
 	return exportLyricsRenditionLocalizationsTx(ctx, tx, documentID, document)
 }
 
-func LyricsRenditionTranslationsDigest(translations []lyricsstaging.RenditionTranslation) (string, error) {
+func LyricsRenditionTranslationsDigest(translations []lyricscontract.RenditionTranslation) (string, error) {
 	return v3TranslationsDigest(translations)
 }
 

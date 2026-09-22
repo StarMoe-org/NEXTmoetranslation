@@ -10,7 +10,7 @@ import (
 
 	"reflect"
 
-	"moesekai/server/internal/lyricscompose"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 )
@@ -37,7 +37,7 @@ func (s *Store) loadPublicLyricsSourceBundle(q queryRower, musicID int) (*public
 	}
 	validatePublicFull := func(full model.LyricsSourceFull) bool {
 		canonicalRubyVersion, rubyVersionErr := lyricssource.RecoveryPersistedRubyGeneratorVersion(full.RubyGeneratorVersion)
-		return lyricscompose.ValidatePersistedPerformerMetadata(full) == nil && rubyVersionErr == nil &&
+		return lyricscontract.ValidatePersistedPerformerMetadata(full) == nil && rubyVersionErr == nil &&
 			canonicalRubyVersion == full.RubyGeneratorVersion
 	}
 	if !validatePublicFull(document.Full) {

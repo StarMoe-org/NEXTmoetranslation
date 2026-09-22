@@ -10,8 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"moesekai/server/internal/lyricsevidencepack"
-	"moesekai/server/internal/lyricsrootmanifest"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/model"
 )
 
@@ -45,9 +44,9 @@ func validateRestoredLyricsRecoveryProvenance(
 	}
 
 	batches := make(map[string]LyricsRecoveryBatchBackupRecord, len(lyrics.RecoveryBatches))
-	coverageByBatch := make(map[string]lyricsrootmanifest.Coverage, len(lyrics.RecoveryBatches))
+	coverageByBatch := make(map[string]lyricscontract.Coverage, len(lyrics.RecoveryBatches))
 	for _, record := range lyrics.RecoveryBatches {
-		if record.SchemaVersion != 1 || record.RootSchemaVersion != lyricsrootmanifest.SchemaVersionV2 ||
+		if record.SchemaVersion != 1 || record.RootSchemaVersion != lyricscontract.SchemaVersionV2 ||
 			!isCanonicalContentBackupSHA256(record.BatchSHA256) || !isCanonicalContentBackupSHA256(record.RootSHA256) ||
 			!isCanonicalContentBackupSHA256(record.MusicIDsSHA256) ||
 			!isCanonicalContentBackupSHA256(record.EvidenceReceiptSHA256) ||
@@ -60,7 +59,7 @@ func validateRestoredLyricsRecoveryProvenance(
 		if _, duplicate := batches[record.BatchSHA256]; duplicate {
 			return fmt.Errorf("lyrics recovery batch %s is duplicated", record.BatchSHA256)
 		}
-		var coverage lyricsrootmanifest.Coverage
+		var coverage lyricscontract.Coverage
 		// The batch is historical: coverage is checked against the catalog size
 		// the batch itself recorded, never against the catalog as it stands
 		// today. Item validation below still requires every batch music ID to
@@ -82,7 +81,7 @@ func validateRestoredLyricsRecoveryProvenance(
 		catalog[record.MusicID] = record
 	}
 	items := make(map[recoveryBackupItemIdentity]LyricsRecoveryItemBackupRecord, len(lyrics.RecoveryItems))
-	stateCounts := make(map[string]map[lyricsrootmanifest.CoverageState]int, len(batches))
+	stateCounts := make(map[string]map[lyricscontract.CoverageState]int, len(batches))
 	for _, record := range lyrics.RecoveryItems {
 		_, exists := batches[record.BatchSHA256]
 		music := catalog[record.MusicID]
@@ -107,14 +106,14 @@ func validateRestoredLyricsRecoveryProvenance(
 					record.BatchSHA256, record.MusicID, associationMusicID)
 			}
 		}
-		state := lyricsrootmanifest.CoverageState(record.State)
+		state := lyricscontract.CoverageState(record.State)
 		switch state {
-		case lyricsrootmanifest.CoverageComplete:
+		case lyricscontract.CoverageComplete:
 			if !isCanonicalContentBackupSHA256(record.DraftSHA256) ||
 				!isCanonicalContentBackupSHA256(record.DocumentSHA256) || record.AvailabilityDocumentSHA256 != "" {
 				return fmt.Errorf("lyrics recovery complete item %s/%d is invalid", record.BatchSHA256, record.MusicID)
 			}
-		case lyricsrootmanifest.CoverageGameOnly:
+		case lyricscontract.CoverageGameOnly:
 			sourceOwned := isCanonicalContentBackupSHA256(record.DraftSHA256) &&
 				isCanonicalContentBackupSHA256(record.DocumentSHA256) && record.AvailabilityDocumentSHA256 == ""
 			availabilityOwned := record.DraftSHA256 == "" && record.DocumentSHA256 == "" &&
@@ -122,8 +121,8 @@ func validateRestoredLyricsRecoveryProvenance(
 			if !sourceOwned && !availabilityOwned {
 				return fmt.Errorf("lyrics recovery Game-only item %s/%d is invalid", record.BatchSHA256, record.MusicID)
 			}
-		case lyricsrootmanifest.CoverageSatisfiedNoLyrics, lyricsrootmanifest.CoverageAmbiguous,
-			lyricsrootmanifest.CoverageMissing, lyricsrootmanifest.CoverageIncomplete, lyricsrootmanifest.CoverageFailed:
+		case lyricscontract.CoverageSatisfiedNoLyrics, lyricscontract.CoverageAmbiguous,
+			lyricscontract.CoverageMissing, lyricscontract.CoverageIncomplete, lyricscontract.CoverageFailed:
 			if record.DraftSHA256 != "" || record.DocumentSHA256 != "" ||
 				!isCanonicalContentBackupSHA256(record.AvailabilityDocumentSHA256) {
 				return fmt.Errorf("lyrics recovery availability item %s/%d is invalid", record.BatchSHA256, record.MusicID)
@@ -132,7 +131,7 @@ func validateRestoredLyricsRecoveryProvenance(
 			return fmt.Errorf("lyrics recovery item %s/%d state is invalid", record.BatchSHA256, record.MusicID)
 		}
 		if stateCounts[record.BatchSHA256] == nil {
-			stateCounts[record.BatchSHA256] = map[lyricsrootmanifest.CoverageState]int{}
+			stateCounts[record.BatchSHA256] = map[lyricscontract.CoverageState]int{}
 		}
 		stateCounts[record.BatchSHA256][state]++
 		items[identity] = record
@@ -145,7 +144,7 @@ func validateRestoredLyricsRecoveryProvenance(
 			musicIDs[index] = item.MusicID
 		}
 		sort.Ints(musicIDs)
-		musicIDsSHA256, digestErr := lyricsrootmanifest.OrderedMusicIDsSHA256(musicIDs)
+		musicIDsSHA256, digestErr := lyricscontract.OrderedMusicIDsSHA256(musicIDs)
 		if len(batchItems) != batch.CatalogCount || digestErr != nil || musicIDsSHA256 != batch.MusicIDsSHA256 ||
 			!recoveryCoverageCountsMatch(coverageByBatch[batchSHA], counts, batch.CatalogCount) {
 			return fmt.Errorf("lyrics recovery batch %s item coverage is incomplete", batchSHA)
@@ -160,9 +159,9 @@ func validateRestoredLyricsRecoveryProvenance(
 		identity := recoveryBackupItemIdentity{batchSHA256: record.ManifestBatchSHA256, musicID: record.MusicID}
 		item, exists := items[identity]
 		document, err := model.DecodeLyricsSourceDocument([]byte(record.DocumentJSON))
-		if !exists || (item.State != string(lyricsrootmanifest.CoverageComplete) && item.State != string(lyricsrootmanifest.CoverageGameOnly)) ||
+		if !exists || (item.State != string(lyricscontract.CoverageComplete) && item.State != string(lyricscontract.CoverageGameOnly)) ||
 			err != nil || item.DocumentSHA256 != record.DocumentSHA256 || document.SchemaVersion != record.SchemaVersion ||
-			item.DocumentSHA256 == "" || item.State == string(lyricsrootmanifest.CoverageGameOnly) && document.SchemaVersion != model.LyricsSourceDocumentSchemaVersionV3 ||
+			item.DocumentSHA256 == "" || item.State == string(lyricscontract.CoverageGameOnly) && document.SchemaVersion != model.LyricsSourceDocumentSchemaVersionV3 ||
 			string(document.ReasonCode) != record.ReasonCode {
 			return fmt.Errorf("lyrics recovery source document %s/%d is invalid", record.ManifestBatchSHA256, record.MusicID)
 		}
@@ -188,7 +187,7 @@ func validateRestoredLyricsRecoveryProvenance(
 		canonicalDocumentJSON, canonicalErr := json.Marshal(document)
 		digest := sha256.Sum256([]byte(record.DocumentJSON))
 		if record.AvailabilityDocumentID <= 0 || availabilityIDs[record.AvailabilityDocumentID] || !exists ||
-			item.State == string(lyricsrootmanifest.CoverageComplete) || sourceDocuments[identity].SchemaVersion == model.LyricsSourceDocumentSchemaVersionV3 || err != nil || canonicalErr != nil ||
+			item.State == string(lyricscontract.CoverageComplete) || sourceDocuments[identity].SchemaVersion == model.LyricsSourceDocumentSchemaVersionV3 || err != nil || canonicalErr != nil ||
 			string(canonicalDocumentJSON) != record.DocumentJSON ||
 			record.SchemaVersion != document.SchemaVersion || record.State != string(document.State) ||
 			record.ReasonCode != string(document.ReasonCode) || record.NoLyricsReason != document.NoLyricsReason ||
@@ -206,15 +205,15 @@ func validateRestoredLyricsRecoveryProvenance(
 		_, hasSource := sourceDocuments[identity]
 		_, hasAvailability := availability[identity]
 		switch {
-		case (item.State == string(lyricsrootmanifest.CoverageComplete) || item.State == string(lyricsrootmanifest.CoverageGameOnly)) && hasSource && !hasAvailability:
-			if item.State == string(lyricsrootmanifest.CoverageGameOnly) && sourceDocuments[identity].SchemaVersion != model.LyricsSourceDocumentSchemaVersionV3 {
+		case (item.State == string(lyricscontract.CoverageComplete) || item.State == string(lyricscontract.CoverageGameOnly)) && hasSource && !hasAvailability:
+			if item.State == string(lyricscontract.CoverageGameOnly) && sourceDocuments[identity].SchemaVersion != model.LyricsSourceDocumentSchemaVersionV3 {
 				return fmt.Errorf("lyrics recovery Game-only item %s/%d has a non-v3 source document", identity.batchSHA256, identity.musicID)
 			}
-		case item.State == string(lyricsrootmanifest.CoverageComplete) && !hasSource:
+		case item.State == string(lyricscontract.CoverageComplete) && !hasSource:
 			return fmt.Errorf("lyrics recovery complete item %s/%d has no source document", identity.batchSHA256, identity.musicID)
-		case item.State == string(lyricsrootmanifest.CoverageGameOnly) && !hasSource && hasAvailability:
+		case item.State == string(lyricscontract.CoverageGameOnly) && !hasSource && hasAvailability:
 			// Legacy Game-only availability remains a valid v2 recovery shape.
-		case item.State != string(lyricsrootmanifest.CoverageComplete) && item.State != string(lyricsrootmanifest.CoverageGameOnly) && hasAvailability && !hasSource:
+		case item.State != string(lyricscontract.CoverageComplete) && item.State != string(lyricscontract.CoverageGameOnly) && hasAvailability && !hasSource:
 		default:
 			return fmt.Errorf("lyrics recovery item %s/%d has an invalid source/availability ownership shape", identity.batchSHA256, identity.musicID)
 		}
@@ -274,7 +273,7 @@ func validateRestoredLyricsRecoveryProvenance(
 		}
 		expectedIdentityJSON, expectedIdentity := expectedFixedIdentities[artifactIdentity]
 		if !exists || !expectedIdentity || expectedIdentityJSON != record.FixedIdentityJSON ||
-			item.State != string(lyricsrootmanifest.CoverageComplete) && item.State != string(lyricsrootmanifest.CoverageGameOnly) ||
+			item.State != string(lyricscontract.CoverageComplete) && item.State != string(lyricscontract.CoverageGameOnly) ||
 			err != nil || string(identity.Provider) != record.Provider || identity.RenditionKey != record.RenditionKey ||
 			identity.Origin != record.Origin || identity.PageID != record.PageID || identity.RevisionID != record.RevisionID ||
 			identity.RevisionTimestamp != record.RevisionTimestamp || identity.SHA1 != record.MediaWikiSHA1 ||
@@ -343,18 +342,18 @@ func validateRestoredLyricsRecoveryProvenance(
 		return errors.New("lyrics recovery backup contains orphan parent evidence")
 	}
 	for batchSHA, batch := range batches {
-		refs := make([]lyricsevidencepack.EvidenceRef, 0, len(batchEvidence[batchSHA]))
+		refs := make([]lyricscontract.EvidenceRef, 0, len(batchEvidence[batchSHA]))
 		var rawBytes int64
 		for identity := range batchEvidence[batchSHA] {
 			parent := evidence[identity]
-			refs = append(refs, lyricsevidencepack.EvidenceRef{
+			refs = append(refs, lyricscontract.EvidenceRef{
 				Provider: model.LyricsSourceProvider(parent.Provider), AcquisitionID: parent.AcquisitionID,
 				EvidenceID: parent.EvidenceID, SHA256: parent.SHA256, EnvelopeSHA256: parent.EnvelopeSHA256,
 			})
 			rawBytes += int64(parent.RawByteCount)
 		}
 		sort.Slice(refs, func(left, right int) bool { return refs[left].EvidenceID < refs[right].EvidenceID })
-		selectionSHA, err := lyricsevidencepack.OrderedSelectionSHA256(refs)
+		selectionSHA, err := lyricscontract.OrderedSelectionSHA256(refs)
 		if err != nil || len(refs) != batch.EvidenceCount || rawBytes != batch.RawByteCount || selectionSHA != batch.SelectionSHA256 {
 			return fmt.Errorf("lyrics recovery batch %s evidence selection is invalid", batchSHA)
 		}
@@ -368,7 +367,7 @@ func validateRestoredLyricsRecoveryProvenance(
 			expectedComponents[identity] = LyricsSourceComponentRefs(source)
 			continue
 		}
-		if item.State == string(lyricsrootmanifest.CoverageGameOnly) {
+		if item.State == string(lyricscontract.CoverageGameOnly) {
 			expectedComponents[identity] = recoveryAvailabilityComponentRefs(availability[identity])
 			continue
 		}
@@ -408,7 +407,7 @@ func validateRestoredLyricsRecoveryProvenance(
 		expectedArtifacts := 0
 		if source, exists := sourceDocuments[identity]; exists {
 			expectedArtifacts = len(source.FixedIdentities)
-		} else if item.State == string(lyricsrootmanifest.CoverageGameOnly) {
+		} else if item.State == string(lyricscontract.CoverageGameOnly) {
 			expectedArtifacts = len(availability[identity].FixedIdentities)
 		}
 		if len(artifactsByItem[identity]) != expectedArtifacts ||
@@ -475,16 +474,16 @@ func itemsForRecoveryBatch(items map[recoveryBackupItemIdentity]LyricsRecoveryIt
 	return result
 }
 
-func recoveryCoverageCountsMatch(coverage lyricsrootmanifest.Coverage, counts map[lyricsrootmanifest.CoverageState]int, total int) bool {
-	return coverage.Total == total && coverage.Complete == counts[lyricsrootmanifest.CoverageComplete] &&
-		coverage.GameOnly == counts[lyricsrootmanifest.CoverageGameOnly] &&
-		coverage.SatisfiedNoLyrics == counts[lyricsrootmanifest.CoverageSatisfiedNoLyrics] &&
-		coverage.CatalogReview == counts[lyricsrootmanifest.CoverageCatalogReview] &&
-		coverage.GameSizeEvidence == counts[lyricsrootmanifest.CoverageGameSizeEvidence] &&
-		coverage.Ambiguous == counts[lyricsrootmanifest.CoverageAmbiguous] &&
-		coverage.Missing == counts[lyricsrootmanifest.CoverageMissing] &&
-		coverage.Incomplete == counts[lyricsrootmanifest.CoverageIncomplete] &&
-		coverage.Failed == counts[lyricsrootmanifest.CoverageFailed]
+func recoveryCoverageCountsMatch(coverage lyricscontract.Coverage, counts map[lyricscontract.CoverageState]int, total int) bool {
+	return coverage.Total == total && coverage.Complete == counts[lyricscontract.CoverageComplete] &&
+		coverage.GameOnly == counts[lyricscontract.CoverageGameOnly] &&
+		coverage.SatisfiedNoLyrics == counts[lyricscontract.CoverageSatisfiedNoLyrics] &&
+		coverage.CatalogReview == counts[lyricscontract.CoverageCatalogReview] &&
+		coverage.GameSizeEvidence == counts[lyricscontract.CoverageGameSizeEvidence] &&
+		coverage.Ambiguous == counts[lyricscontract.CoverageAmbiguous] &&
+		coverage.Missing == counts[lyricscontract.CoverageMissing] &&
+		coverage.Incomplete == counts[lyricscontract.CoverageIncomplete] &&
+		coverage.Failed == counts[lyricscontract.CoverageFailed]
 }
 
 func validRecoveryBackupEvidenceShape(record LyricsRecoverySourceEvidenceBackupRecord) bool {

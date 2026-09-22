@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"moesekai/server/internal/lyricsrootmanifest"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsstaging"
 	"moesekai/server/internal/model"
 )
@@ -105,14 +105,14 @@ func TestRecoveryImportReceiptRejectsStateCountAndDigestDrift(t *testing.T) {
 }
 
 func TestImportReceiptRevisionOwnershipDistinguishesEditableAndSourceOnlyItems(t *testing.T) {
-	if !importReceiptItemOwnsEditableLyrics(Item{State: lyricsrootmanifest.CoverageComplete}) {
+	if !importReceiptItemOwnsEditableLyrics(Item{State: lyricscontract.CoverageComplete}) {
 		t.Fatal("legacy complete item did not require an editable revision")
 	}
-	if importReceiptItemOwnsEditableLyrics(Item{State: lyricsrootmanifest.CoverageGameOnly}) {
+	if importReceiptItemOwnsEditableLyrics(Item{State: lyricscontract.CoverageGameOnly}) {
 		t.Fatal("availability-owned Game-only item unexpectedly required an editable revision")
 	}
 	sourceOnlyV3 := Item{
-		State: lyricsrootmanifest.CoverageComplete,
+		State: lyricscontract.CoverageComplete,
 		Draft: &lyricsstaging.Draft{Document: model.LyricsSourceDocument{
 			SchemaVersion: model.LyricsSourceDocumentSchemaVersionV3,
 		}},

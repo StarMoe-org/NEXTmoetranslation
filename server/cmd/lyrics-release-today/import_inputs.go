@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"moesekai/server/internal/lyricscompose"
-	"moesekai/server/internal/lyricsevidencepack"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricsrecovery"
 	"moesekai/server/internal/lyricsrootmanifest"
 	"moesekai/server/internal/lyricsstaging"
@@ -38,7 +37,7 @@ func validateImportInputsAgainstFreshRoot(
 	if err != nil {
 		return err
 	}
-	rootEvidence := make(map[string]lyricsevidencepack.EvidenceRef, len(rootUnion))
+	rootEvidence := make(map[string]lyricscontract.EvidenceRef, len(rootUnion))
 	for _, reference := range rootUnion {
 		rootEvidence[reference.EvidenceID] = reference
 	}
@@ -70,7 +69,7 @@ func validateImportInputsAgainstFreshRoot(
 			!reflect.DeepEqual(draft.Translations, result.Translations) {
 			return fmt.Errorf("staged music %d drifted from authoritative Full/Game recovery output", draft.MusicID)
 		}
-		if err := lyricscompose.ValidatePersistedPerformerMetadata(draft.Document.Full); err != nil {
+		if err := lyricscontract.ValidatePersistedPerformerMetadata(draft.Document.Full); err != nil {
 			return fmt.Errorf("staged music %d contains unsafe persisted performer metadata", draft.MusicID)
 		}
 		for _, identity := range draft.Document.FixedIdentities {

@@ -16,7 +16,7 @@ import (
 	"unicode/utf8"
 
 	"moesekai/server/internal/legacy"
-	"moesekai/server/internal/lyricscompose"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 )
@@ -254,38 +254,24 @@ type Artifact struct {
 // remain closed and checksum-bound for the editable import bridge, while
 // Document is the authoritative provider/component contract and Artifacts may
 // contain more than one immutable rendition.
-type RenditionPeerTranslation struct {
-	Side         string   `json:"side"`
-	Locale       string   `json:"locale"`
-	Translations []string `json:"translations"`
-}
-
-type RenditionTranslation struct {
-	RenditionKey       string                     `json:"renditionKey"`
-	Translations       []string                   `json:"translations,omitempty"`
-	PeerTranslations   []RenditionPeerTranslation `json:"peerTranslations,omitempty"`
-	TranslationCredit  string                     `json:"translationCredit,omitempty"`
-	ProofreadingCredit string                     `json:"proofreadingCredit,omitempty"`
-}
-
 type Draft struct {
-	MusicID               int                               `json:"musicId"`
-	JapaneseTitle         string                            `json:"japaneseTitle"`
-	CatalogFingerprint    string                            `json:"catalogFingerprint"`
-	TargetMusicID         int                               `json:"targetMusicId"`
-	AssociationMusicIDs   []int                             `json:"associationMusicIds"`
-	Source                FixedSource                       `json:"source"`
-	SelectedVersion       model.LyricsSourceVersion         `json:"selectedVersion"`
-	Performers            []model.LyricsSourcePerformer     `json:"performers"`
-	RubyGeneratorVersion  string                            `json:"rubyGeneratorVersion"`
-	Lines                 []model.LyricsSourceExtractedLine `json:"lines"`
-	Translations          []string                          `json:"translations,omitempty"`
-	RenditionTranslations []RenditionTranslation            `json:"renditionTranslations,omitempty"`
-	ExtractedLinesSHA256  string                            `json:"extractedLinesSha256"`
-	Artifacts             []Artifact                        `json:"artifacts"`
-	Document              model.LyricsSourceDocument        `json:"document"`
-	DocumentSHA256        string                            `json:"documentSha256"`
-	DraftSHA256           string                            `json:"draftSha256"`
+	MusicID               int                                   `json:"musicId"`
+	JapaneseTitle         string                                `json:"japaneseTitle"`
+	CatalogFingerprint    string                                `json:"catalogFingerprint"`
+	TargetMusicID         int                                   `json:"targetMusicId"`
+	AssociationMusicIDs   []int                                 `json:"associationMusicIds"`
+	Source                FixedSource                           `json:"source"`
+	SelectedVersion       model.LyricsSourceVersion             `json:"selectedVersion"`
+	Performers            []model.LyricsSourcePerformer         `json:"performers"`
+	RubyGeneratorVersion  string                                `json:"rubyGeneratorVersion"`
+	Lines                 []model.LyricsSourceExtractedLine     `json:"lines"`
+	Translations          []string                              `json:"translations,omitempty"`
+	RenditionTranslations []lyricscontract.RenditionTranslation `json:"renditionTranslations,omitempty"`
+	ExtractedLinesSHA256  string                                `json:"extractedLinesSha256"`
+	Artifacts             []Artifact                            `json:"artifacts"`
+	Document              model.LyricsSourceDocument            `json:"document"`
+	DocumentSHA256        string                                `json:"documentSha256"`
+	DraftSHA256           string                                `json:"draftSha256"`
 }
 
 type Manifest struct {
@@ -1058,7 +1044,7 @@ func validateDraftProvenance(draft Draft) error {
 		}
 		return validateV3DraftProvenance(draft)
 	}
-	if err := lyricscompose.ValidatePersistedPerformerMetadata(draft.Document.Full); err != nil {
+	if err := lyricscontract.ValidatePersistedPerformerMetadata(draft.Document.Full); err != nil {
 		return fmt.Errorf("staged music %d source document has unsafe persisted performer metadata", draft.MusicID)
 	}
 	if err := validateVNextLyricsSourceDocument(draft.Document); err != nil {
@@ -1154,12 +1140,12 @@ func validateVNextLyricsSourceDocument(document model.LyricsSourceDocument) erro
 		return nil
 	case "original", "vocaloid":
 		if document.Provenance.PerformerSegmentation != nil {
-			if acceptsAuthoritativePerformerSegmentation(document) {
+			if lyricscontract.AcceptsAuthoritativePerformerSegmentation(document) {
 				return nil
 			}
 			return errors.New("non-SEKAI performer segmentation requires authoritative structured source evidence")
 		}
-		if !fullIsCompleteAndPerformerFree(document.Full) {
+		if !lyricscontract.FullIsCompleteAndPerformerFree(document.Full) {
 			return errors.New("unsegmented Full must retain one complete performer-free segment per line")
 		}
 		return nil

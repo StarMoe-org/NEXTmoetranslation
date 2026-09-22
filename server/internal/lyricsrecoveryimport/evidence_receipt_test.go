@@ -5,12 +5,12 @@ import (
 	"strings"
 	"testing"
 
-	"moesekai/server/internal/lyricsevidencepack"
+	"moesekai/server/internal/lyricscontract"
 )
 
 func emptyEvidenceReceiptFixture(t *testing.T) EvidenceReceipt {
 	t.Helper()
-	selectionSHA, err := lyricsevidencepack.OrderedSelectionSHA256([]lyricsevidencepack.EvidenceRef{})
+	selectionSHA, err := lyricscontract.OrderedSelectionSHA256([]lyricscontract.EvidenceRef{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -18,7 +18,7 @@ func emptyEvidenceReceiptFixture(t *testing.T) EvidenceReceipt {
 		SchemaVersion: EvidenceReceiptSchemaVersion,
 		RootID:        "recovery-root:test", RootSHA256: strings.Repeat("a", 64),
 		PackSHA256: strings.Repeat("b", 64), SelectionSHA256: selectionSHA,
-		Evidence: []lyricsevidencepack.EvidenceRef{},
+		Evidence: []lyricscontract.EvidenceRef{},
 	}
 	digest, err := evidenceReceiptDigest(receipt)
 	if err != nil {

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"moesekai/server/internal/lyricscompose"
+	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/lyricssource"
 	"moesekai/server/internal/model"
 )
@@ -68,7 +68,7 @@ func ValidatePersistedLyricsSourceDocument(document model.LyricsSourceDocument) 
 		return err
 	}
 	validateFull := func(full model.LyricsSourceFull) error {
-		if err := lyricscompose.ValidatePersistedPerformerMetadata(full); err != nil {
+		if err := lyricscontract.ValidatePersistedPerformerMetadata(full); err != nil {
 			return errors.New("unsafe persisted lyrics performer metadata")
 		}
 		canonicalRubyVersion, err := lyricssource.RecoveryPersistedRubyGeneratorVersion(full.RubyGeneratorVersion)
