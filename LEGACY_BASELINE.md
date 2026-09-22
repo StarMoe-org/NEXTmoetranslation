@@ -26,8 +26,8 @@ This baseline characterizes the pre-locale, pre-lyrics behavior without changing
 
 The tests describe current behavior, including behavior that a later migration may deliberately fix:
 
-- Official non-empty CN text overwrites `human`, `llm`, `unknown`, and existing `cn` rows. Only `pinned` is protected; an empty official value preserves existing non-empty text.
-- Mysekai `tag` propagation overwrites a matching human `flavorText` value and source.
+- Official non-empty CN text overwrites `human`, `llm`, `unknown`, and existing `cn` rows. Only `pinned` is protected; an empty official value preserves existing non-empty text. This is kept behavior, not a pending fix: editors pin (控制台「锁定」) a manual translation to protect it from the next official CN sync.
+- Mysekai `tag` propagation overwrites a matching `flavorText` value and source without checking the flavorText source, so pinning the `flavorText` entry does not protect it; only the `tag` entry's own source decides what is propagated.
 - V1 entry updates accept arbitrary field and source strings and insert a missing row inside a supported category.
 - Event public JSON omits title source, talk sources, talk order, and speaker names. A legacy backup/restore therefore preserves public bytes but restores line sources from story metadata and loses title provenance and speakers.
 - API event updates always return `{"status":"ok"}` on an existing target, blank source becomes `human`, and entry noops do not emit SSE.

@@ -2013,6 +2013,11 @@ export function Console({ onLogout }: { onLogout: () => void }) {
                       readOnly={isReadOnly || saving || writesLocked || selectedEventStoryIdentityMissing}
                       aria-label="翻译校对内容"
                     />
+                    {!isEventStory && selectedEntry.source === "cn" && (
+                      <p className="proof-hints">
+                        保存后来源变为{SOURCE_LABELS.human}，下次{SOURCE_LABELS.cn}同步仍会覆盖这条译文；需要长期保留请用“{SOURCE_LABELS.pinned}保存”。
+                      </p>
+                    )}
                     <div className="proof-actions">
                       <button
                         className="btn btn-primary"
