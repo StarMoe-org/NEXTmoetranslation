@@ -857,6 +857,7 @@ func (s *Store) ImportTranslationContentContext(ctx context.Context, entries []E
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	s.invalidateLocalizationProjectionCache()
 	s.NotifyChange()
 	return nil
 }
@@ -993,6 +994,9 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 	if err := suspendLyricsSourceDocumentDeleteGuardsTx(ctx, tx); err != nil {
 		return err
 	}
+	if err := suspendEmbeddedLyricsEditorSeedDeleteGuardsTx(ctx, tx); err != nil {
+		return err
+	}
 	for _, statement := range []string{
 		`DELETE FROM entry_localizations`,
 		`DELETE FROM event_story_locale_meta`,
@@ -1011,6 +1015,10 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 		`DELETE FROM song_lyrics_rendition_localizations`,
 		`DELETE FROM song_lyrics`,
 		`DELETE FROM catalog_performers`,
+		// The seed ledger references catalog_music with ON DELETE RESTRICT; it is
+		// replayed from the embedded bundle at the next startup.
+		`DELETE FROM embedded_lyrics_editor_seed_items`,
+		`DELETE FROM embedded_lyrics_editor_seed_batches`,
 		`DELETE FROM catalog_music`,
 		`DELETE FROM lyrics_recovery_import_batches`,
 		`DELETE FROM lyrics_recovery_source_evidence`,
@@ -1018,6 +1026,9 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return err
 		}
+	}
+	if err := restoreEmbeddedLyricsEditorSeedDeleteGuardsTx(ctx, tx); err != nil {
+		return err
 	}
 	for _, record := range entries {
 		if err := ctx.Err(); err != nil {
@@ -1281,6 +1292,41 @@ func suspendLyricsSourceDocumentDeleteGuardsTx(ctx context.Context, tx *sql.Tx) 
 	for _, name := range []string{"song_lyrics_source_v3_reject_delete", "song_lyrics_source_documents_immutable_delete"} {
 		if _, err := tx.ExecContext(ctx, `DROP TRIGGER IF EXISTS `+name); err != nil {
 			return fmt.Errorf("suspend lyrics source document delete guard %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// suspendEmbeddedLyricsEditorSeedDeleteGuardsTx lifts the ledger immutability
+// guards for the restore transaction. The two guards reference each other
+// (items refuse to go while their batch exists and vice versa), so a catalog
+// replacement cannot clear the ledger any other way.
+func suspendEmbeddedLyricsEditorSeedDeleteGuardsTx(ctx context.Context, tx *sql.Tx) error {
+	for _, name := range []string{
+		"embedded_lyrics_editor_seed_items_immutable_delete",
+		"embedded_lyrics_editor_seed_batches_immutable_delete",
+	} {
+		if _, err := tx.ExecContext(ctx, `DROP TRIGGER IF EXISTS `+name); err != nil {
+			return fmt.Errorf("suspend embedded lyrics editor seed delete guard %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func restoreEmbeddedLyricsEditorSeedDeleteGuardsTx(ctx context.Context, tx *sql.Tx) error {
+	for _, statement := range []string{
+		// Keep these the migration v28 definitions.
+		`CREATE TRIGGER embedded_lyrics_editor_seed_items_immutable_delete
+		 BEFORE DELETE ON embedded_lyrics_editor_seed_items
+		 WHEN EXISTS (SELECT 1 FROM embedded_lyrics_editor_seed_batches WHERE seed_sha256=OLD.seed_sha256)
+		 BEGIN SELECT RAISE(ABORT, 'embedded lyrics editor seed items are immutable'); END`,
+		`CREATE TRIGGER embedded_lyrics_editor_seed_batches_immutable_delete
+		 BEFORE DELETE ON embedded_lyrics_editor_seed_batches
+		 WHEN EXISTS (SELECT 1 FROM embedded_lyrics_editor_seed_items WHERE seed_sha256=OLD.seed_sha256)
+		 BEGIN SELECT RAISE(ABORT, 'embedded lyrics editor seed batches are immutable while items exist'); END`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("restore embedded lyrics editor seed delete guard: %w", err)
 		}
 	}
 	return nil
@@ -2717,6 +2763,12 @@ func (s *Store) RestoreBackupContext(ctx context.Context, categories map[string]
 			return err
 		}
 	} else {
+		if err := suspendLyricsSourceDocumentDeleteGuardsTx(ctx, tx); err != nil {
+			return err
+		}
+		if err := suspendEmbeddedLyricsEditorSeedDeleteGuardsTx(ctx, tx); err != nil {
+			return err
+		}
 		for _, statement := range []string{
 			`DELETE FROM entry_localizations`,
 			`DELETE FROM event_story_segment_localizations WHERE locale<>'zh-CN'`,
@@ -2725,11 +2777,23 @@ func (s *Store) RestoreBackupContext(ctx context.Context, categories map[string]
 			`DELETE FROM song_lyric_lines`,
 			`DELETE FROM song_lyrics`,
 			`DELETE FROM catalog_performers`,
+			`DELETE FROM embedded_lyrics_editor_seed_items`,
+			`DELETE FROM embedded_lyrics_editor_seed_batches`,
 			`DELETE FROM catalog_music`,
+			// An old-format payload carries no recovery graph, so leaving one behind
+			// would describe a catalog that no longer exists.
+			`DELETE FROM lyrics_recovery_import_batches`,
+			`DELETE FROM lyrics_recovery_source_evidence`,
 		} {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return err
 			}
+		}
+		if err := restoreEmbeddedLyricsEditorSeedDeleteGuardsTx(ctx, tx); err != nil {
+			return err
+		}
+		if err := restoreLyricsSourceDocumentDeleteGuardsTx(ctx, tx); err != nil {
+			return err
 		}
 		if err := supersedeStalePendingLyricsSourceReviewsTx(ctx, tx, time.Now().UTC()); err != nil {
 			return err
@@ -2742,6 +2806,7 @@ func (s *Store) RestoreBackupContext(ctx context.Context, categories map[string]
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	s.invalidateLocalizationProjectionCache()
 	s.NotifyChange()
 	return nil
 }

@@ -207,6 +207,15 @@ func (s *Store) projectionRenditionDocument(musicID, revision int) (LyricsRendit
 	return document, nil
 }
 
+// invalidateLocalizationProjectionCache drops every cached rendition document.
+// A restore can replace the text of a song while keeping its localization
+// revision, which the revision-keyed cache alone cannot detect.
+func (s *Store) invalidateLocalizationProjectionCache() {
+	s.localizationProjectionMu.Lock()
+	s.localizationProjectionCache = nil
+	s.localizationProjectionMu.Unlock()
+}
+
 // lyricsRenditionHasLocalizationCredit reports whether any rendition of an
 // edited source-v3 document declares a translation or proofreading credit.
 func lyricsRenditionHasLocalizationCredit(document LyricsRenditionDocument) bool {
