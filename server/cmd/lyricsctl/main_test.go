@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -83,34 +84,36 @@ func TestDispatchSubcommandHelp(t *testing.T) {
 
 	for _, sub := range subcommands {
 		t.Run(sub, func(t *testing.T) {
-			// via 'lyricsctl help <subcommand>'
-			var stdout1, stderr1 bytes.Buffer
-			err := cli.Dispatch(context.Background(), []string{"help", sub}, &stdout1, &stderr1)
-			if err != nil {
+			var forwarded [][]string
+			if err := cli.SetHandler(sub, func(_ context.Context, args []string, _, _ io.Writer) error {
+				forwarded = append(forwarded, append([]string(nil), args...))
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			// 'lyricsctl help <subcommand>' is answered by lyricsctl itself.
+			var stdout, stderr bytes.Buffer
+			if err := cli.Dispatch(context.Background(), []string{"help", sub}, &stdout, &stderr); err != nil {
 				t.Fatalf("help %s error: %v", sub, err)
 			}
-			if !strings.Contains(stdout1.String(), "Usage: lyricsctl "+sub) {
-				t.Fatalf("help %s expected usage header, got: %s", sub, stdout1.String())
+			binary := cli.FindCommand(sub).BinaryName
+			if !strings.Contains(stdout.String(), "Usage: lyricsctl "+sub) || !strings.Contains(stdout.String(), binary) {
+				t.Fatalf("help %s expected usage header naming %s, got: %s", sub, binary, stdout.String())
+			}
+			if len(forwarded) != 0 {
+				t.Fatalf("help %s must not invoke the delegate, got %v", sub, forwarded)
 			}
 
-			// via 'lyricsctl <subcommand> --help'
-			var stdout2, stderr2 bytes.Buffer
-			err = cli.Dispatch(context.Background(), []string{sub, "--help"}, &stdout2, &stderr2)
-			if err != nil {
-				t.Fatalf("%s --help error: %v", sub, err)
+			// Help flags on the subcommand belong to the delegate and are forwarded untouched.
+			for _, flag := range []string{"--help", "-h", "-help"} {
+				if err := cli.Dispatch(context.Background(), []string{sub, flag}, &stdout, &stderr); err != nil {
+					t.Fatalf("%s %s error: %v", sub, flag, err)
+				}
 			}
-			if !strings.Contains(stdout2.String(), "Usage: lyricsctl "+sub) {
-				t.Fatalf("%s --help expected usage header, got: %s", sub, stdout2.String())
-			}
-
-			// via 'lyricsctl <subcommand> -h'
-			var stdout3, stderr3 bytes.Buffer
-			err = cli.Dispatch(context.Background(), []string{sub, "-h"}, &stdout3, &stderr3)
-			if err != nil {
-				t.Fatalf("%s -h error: %v", sub, err)
-			}
-			if !strings.Contains(stdout3.String(), "Usage: lyricsctl "+sub) {
-				t.Fatalf("%s -h expected usage header, got: %s", sub, stdout3.String())
+			want := [][]string{{"--help"}, {"-h"}, {"-help"}}
+			if !reflect.DeepEqual(forwarded, want) {
+				t.Fatalf("%s help flags forwarded=%v want %v", sub, forwarded, want)
 			}
 		})
 	}
@@ -151,22 +154,32 @@ func TestDispatchUnknownSubcommand(t *testing.T) {
 	}
 }
 
-func TestFlagValidationErrors(t *testing.T) {
+// lyricsctl used to pre-validate arguments against a hand-copied flag table,
+// so spellings that only the delegate knows (for example lyrics-recovery's
+// -expected-plan-sha256 or lyrics-catalog-filter's -output) were rejected
+// before the delegate ever ran. Arguments now reach the delegate verbatim.
+func TestDispatchForwardsDelegateOnlyFlagsVerbatim(t *testing.T) {
 	cli := NewDefaultCLI()
-	subcommands := []string{"preflight", "stage", "import-stage", "validate", "catalog-filter", "candidate", "recovery"}
-
-	for _, sub := range subcommands {
+	cases := map[string][]string{
+		"recovery":       {"-mode", "check", "-expected-plan-sha256", strings.Repeat("a", 64), "-live-canary-authorization", "token"},
+		"catalog-filter": {"-source-catalog", "/tmp/catalog.db", "-expected-source-catalog-sha256", strings.Repeat("b", 64), "-output", "/tmp/out"},
+		"validate":       {"-unrecognized-flag-xyz=123"},
+	}
+	for sub, args := range cases {
 		t.Run(sub, func(t *testing.T) {
+			var got []string
+			if err := cli.SetHandler(sub, func(_ context.Context, forwarded []string, _, _ io.Writer) error {
+				got = append([]string(nil), forwarded...)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
 			var stdout, stderr bytes.Buffer
-			err := cli.Dispatch(context.Background(), []string{sub, "-unrecognized-flag-xyz=123"}, &stdout, &stderr)
-			if err == nil {
-				t.Fatalf("expected flag error for %s with invalid flag", sub)
+			if err := cli.Dispatch(context.Background(), append([]string{sub}, args...), &stdout, &stderr); err != nil {
+				t.Fatalf("dispatch %s: %v (stderr=%s)", sub, err, stderr.String())
 			}
-			if !strings.Contains(err.Error(), "invalid flags for "+sub) {
-				t.Fatalf("unexpected error message for %s: %v", sub, err)
-			}
-			if !strings.Contains(stderr.String(), "flag error") {
-				t.Fatalf("expected stderr to mention flag error for %s, got: %s", sub, stderr.String())
+			if !reflect.DeepEqual(got, args) {
+				t.Fatalf("%s forwarded=%v want %v", sub, got, args)
 			}
 		})
 	}
@@ -329,12 +342,13 @@ func TestExecutableIntegration(t *testing.T) {
 	tempDir := t.TempDir()
 	binaryPath := filepath.Join(tempDir, "lyricsctl")
 
-	buildCmd := exec.Command("go", "build", "-o", binaryPath, ".")
-	buildCmd.Env = os.Environ()
-	buildCmd.Dir = "."
-	output, err := buildCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("failed to build lyricsctl binary: %v\nOutput: %s", err, string(output))
+	for target, out := range map[string]string{".": binaryPath, "../lyrics-validate": filepath.Join(tempDir, "lyrics-validate")} {
+		buildCmd := exec.Command("go", "build", "-o", out, target)
+		buildCmd.Env = os.Environ()
+		buildCmd.Dir = "."
+		if output, err := buildCmd.CombinedOutput(); err != nil {
+			t.Fatalf("failed to build %s: %v\nOutput: %s", target, err, string(output))
+		}
 	}
 
 	// Test 1: Run version
@@ -358,10 +372,10 @@ func TestExecutableIntegration(t *testing.T) {
 	}
 
 	// Test 3: Run subcommand help
-	cmd = exec.Command(binaryPath, "preflight", "--help")
+	cmd = exec.Command(binaryPath, "help", "preflight")
 	out, err = cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("lyricsctl preflight --help failed: %v, output: %s", err, string(out))
+		t.Fatalf("lyricsctl help preflight failed: %v, output: %s", err, string(out))
 	}
 	if !strings.Contains(string(out), "Usage: lyricsctl preflight") {
 		t.Fatalf("unexpected preflight help output: %s", string(out))
@@ -377,13 +391,13 @@ func TestExecutableIntegration(t *testing.T) {
 		t.Fatalf("unexpected unknown subcommand output: %s", string(out))
 	}
 
-	// Test 5: Invalid flag exits with non-zero code
+	// Test 5: The delegate, not lyricsctl, rejects an invalid flag.
 	cmd = exec.Command(binaryPath, "validate", "-nonexistent-flag")
 	out, err = cmd.CombinedOutput()
 	if err == nil {
 		t.Fatal("expected failure for invalid flag")
 	}
-	if !strings.Contains(string(out), "flag error") {
-		t.Fatalf("unexpected flag error output: %s", string(out))
+	if !strings.Contains(string(out), "lyrics validate:") || strings.Contains(string(out), "delegate binary") {
+		t.Fatalf("expected lyrics-validate to reject the flag, got: %s", string(out))
 	}
 }
