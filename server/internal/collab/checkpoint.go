@@ -90,6 +90,7 @@ func (s *Service) Checkpoint(ctx context.Context, musicID int, user string) (any
 	var saved any
 	var changed bool
 	var newRevision int
+	var authorityUpdate []byte
 	commitCheckpoint := func(tx *sql.Tx, final any, didChange bool) error {
 		_, newSHA, revision, kind, canonicalErr := canonicalDocument(final)
 		if canonicalErr != nil {
@@ -103,10 +104,11 @@ func (s *Service) Checkpoint(ctx context.Context, musicID int, user string) (any
 			_, _, reseedErr := s.persistence.reseedCheckpointTx(ctx, tx, baseline, final, user, true)
 			return reseedErr
 		}
-		checkpointUpdate, updateErr := checkpointDocumentUpdate(doc, final)
+		checkpointUpdate, authority, updateErr := checkpointDocumentUpdate(doc, final)
 		if updateErr != nil {
 			return updateErr
 		}
+		authorityUpdate = authority
 		return s.persistence.commitCheckpointTx(ctx, tx, baseline, checkpointUpdate, revision, newSHA, user, didChange)
 	}
 	switch draft := draft.(type) {
@@ -136,12 +138,12 @@ func (s *Service) Checkpoint(ctx context.Context, musicID int, user string) (any
 		return nil, false, ErrDocumentMismatch
 	}
 	if changed && baseline.baseRevision != 0 && s.server.GetDoc(room) != nil {
-		// Only the authority-owned envelope scalars are updated in the live doc.
-		// Editable fields changed concurrently during the DB save stay intact and
-		// will be checkpointed by the next call. The durable checkpoint already
-		// contains the new envelope; if this resident copy disappeared meanwhile,
-		// closing it simply forces the next peer to reload that durable state.
-		if err := s.applyAuthorityScalars(ctx, room, saved); err != nil {
+		// The live doc adopts the very update the durable checkpoint stores, so the
+		// envelope keys keep a single writer identity. Editable fields changed
+		// concurrently during the DB save stay intact and will be checkpointed by
+		// the next call; if this resident copy disappeared meanwhile, closing it
+		// simply forces the next peer to reload that durable state.
+		if err := s.applyAuthorityUpdate(ctx, room, authorityUpdate); err != nil {
 			log.Printf("[collab] advance live checkpoint envelope musicId=%d room=%s: %v", musicID, room, err)
 			if closeErr := s.closeRetiredRoom(room); closeErr != nil {
 				log.Printf("[collab] close stale live checkpoint room musicId=%d room=%s: %v", musicID, room, closeErr)
@@ -159,18 +161,24 @@ func (s *Service) Checkpoint(ctx context.Context, musicID int, user string) (any
 // fields come from the room snapshot captured before the store transaction.
 // This keeps the SQLite checkpoint internally consistent without mutating the
 // live room until the authoritative and collaboration writes have committed.
-func checkpointDocumentUpdate(doc *crdt.Doc, final any) ([]byte, error) {
+// The second return value is the envelope write on its own: the live room must
+// integrate that exact update rather than set the keys again, because a second
+// writer would be concurrent with this one and the map winner would then be
+// decided by client id.
+func checkpointDocumentUpdate(doc *crdt.Doc, final any) ([]byte, []byte, error) {
 	if doc == nil {
-		return nil, ErrRoomUnavailable
+		return nil, nil, ErrRoomUnavailable
 	}
 	update := crdt.EncodeStateAsUpdateV1(doc, nil)
 	if len(update) == 0 || len(update) > maxDocumentUpdateBytes {
-		return nil, ErrUpdateTooLarge
+		return nil, nil, ErrUpdateTooLarge
 	}
 	checkpoint := crdt.New()
 	if err := crdt.ApplyUpdateV1(checkpoint, update, nil); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	var authority []byte
+	unsubscribe := checkpoint.OnUpdate(func(delta []byte, _ any) { authority = delta })
 	checkpoint.Transact(func(txn *crdt.Transaction) {
 		root := txn.GetMap("lyrics")
 		switch document := final.(type) {
@@ -186,11 +194,12 @@ func checkpointDocumentUpdate(doc *crdt.Doc, final any) ([]byte, error) {
 			setAuthorityScalar(txn, root, "updatedAt", document.UpdatedAt, true)
 		}
 	})
+	unsubscribe()
 	update = crdt.EncodeStateAsUpdateV1(checkpoint, nil)
 	if len(update) == 0 || len(update) > maxDocumentUpdateBytes {
-		return nil, ErrUpdateTooLarge
+		return nil, nil, ErrUpdateTooLarge
 	}
-	return update, nil
+	return update, authority, nil
 }
 
 func validateImmutableDraft(authority, draft any) error {
@@ -251,28 +260,25 @@ func validateImmutableDraft(authority, draft any) error {
 	}
 }
 
-func (s *Service) applyAuthorityScalars(ctx context.Context, room string, document any) error {
-	err := s.server.Apply(ctx, room, func(_ *crdt.Doc, transact func(func(*crdt.Transaction))) {
-		transact(func(txn *crdt.Transaction) {
-			root := txn.GetMap("lyrics")
-			switch document := document.(type) {
-			case model.SongLyrics:
-				setAuthorityScalar(txn, root, "status", document.Status, true)
-				setAuthorityScalar(txn, root, "publishedRevision", document.PublishedRevision, document.PublishedRevision != 0)
-				setAuthorityScalar(txn, root, "revision", document.Revision, true)
-				setAuthorityScalar(txn, root, "updatedAt", document.UpdatedAt, true)
-			case store.LyricsRenditionDocument:
-				setAuthorityScalar(txn, root, "status", document.Status, true)
-				setAuthorityScalar(txn, root, "publishedRevision", document.PublishedRevision, document.PublishedRevision != 0)
-				setAuthorityScalar(txn, root, "revision", document.Revision, true)
-				setAuthorityScalar(txn, root, "updatedAt", document.UpdatedAt, true)
-			}
-		})
-	})
-	if errors.Is(err, ygws.ErrNoChanges) {
+// applyAuthorityUpdate integrates the checkpointed envelope write into the live
+// room and fans it out. Apply reports ErrNoChanges because the update is
+// integrated directly instead of through its transaction, which is what keeps
+// the live item identical to the durable one.
+func (s *Service) applyAuthorityUpdate(ctx context.Context, room string, update []byte) error {
+	if len(update) == 0 {
 		return nil
 	}
-	return err
+	var integrateErr error
+	err := s.server.Apply(ctx, room, func(doc *crdt.Doc, _ func(func(*crdt.Transaction))) {
+		integrateErr = crdt.ApplyUpdateV1(doc, update, nil)
+	})
+	if err != nil && !errors.Is(err, ygws.ErrNoChanges) {
+		return err
+	}
+	if integrateErr != nil {
+		return integrateErr
+	}
+	return s.server.BroadcastUpdate(ctx, room, update)
 }
 
 func setAuthorityScalar(txn *crdt.Transaction, root *crdt.YMap, key string, value any, present bool) {
