@@ -112,6 +112,24 @@ func (t *Translator) syncEventStoriesCNOnly(progressCurrent, progressTotal int) 
 	} else if latestOfficialCN > 0 {
 		startCN = latestOfficialCN + 1
 	}
+	// A scenario fetch failure leaves an event unimported below the cursor while
+	// later events advance it. Rewind to the lowest CN-side event that is neither
+	// imported as official CN nor locally preserved so this run retries it.
+	frontier := startCN
+	for _, jpStory := range jpStories {
+		eventID := getInt(jpStory, "eventId")
+		if eventID >= startCN {
+			break
+		}
+		if !cnEventSet[eventID] || cnStoryByEvent[eventID] == nil {
+			continue
+		}
+		if st, ok := states[eventID]; ok && (st.IsOfficialCN || st.PreserveLocal) {
+			continue
+		}
+		startCN = eventID
+		break
+	}
 
 	emptyStreak := 0
 	stoppedByEmpty := false
@@ -142,7 +160,7 @@ func (t *Translator) syncEventStoriesCNOnly(progressCurrent, progressTotal int) 
 
 		t.setNote(fmt.Sprintf("cn-sync event story %d", eventID))
 		t.emit("sync.progress", fmt.Sprintf("正在更新活动剧情 Event #%d", eventID), progressCurrent, progressTotal)
-		episodes, hasTalk, _, episodeErrors := t.buildOfficialCNEpisodes(jpStory, cnStoryByEvent[eventID])
+		episodes, hasTalk, hasTitleOnly, episodeErrors := t.buildOfficialCNEpisodes(jpStory, cnStoryByEvent[eventID])
 		if len(episodeErrors) > 0 {
 			for _, episodeErr := range episodeErrors {
 				wrapped := fmt.Errorf("event %d: %w", eventID, episodeErr)
@@ -152,10 +170,16 @@ func (t *Translator) syncEventStoriesCNOnly(progressCurrent, progressTotal int) 
 			continue // scenario fetch failed; retry next round
 		}
 		if !hasTalk {
-			emptyStreak++
-			if emptyStreak >= 3 {
-				stoppedByEmpty = true
-				break
+			// Official CN titles without talk text mean CN has started publishing
+			// this event, so it must not count toward the empty streak. Events
+			// below the pre-rewind frontier are retries of old gaps; only the
+			// frontier itself signals where CN publication currently ends.
+			if !hasTitleOnly && eventID >= frontier {
+				emptyStreak++
+				if emptyStreak >= 3 {
+					stoppedByEmpty = true
+					break
+				}
 			}
 			continue
 		}
@@ -297,6 +321,7 @@ func (t *Translator) buildOfficialCNEpisodes(jpStory, cnStory map[string]any) (m
 		var talkOrder []string
 		var episodeLines []store.OrderedLine
 		seen := map[string]bool{}
+		translated := false
 		for i := 0; i < len(jpTalk); i++ {
 			var cnLine map[string]any
 			if i < len(cnTalk) {
@@ -315,12 +340,17 @@ func (t *Translator) buildOfficialCNEpisodes(jpStory, cnStory map[string]any) (m
 					ScenarioPosition: i * 2, Field: "body",
 				}
 				episodeLines = append(episodeLines, line)
+				// Untranslated JP lines keep their place in the key order with
+				// empty text, so the legacy rows cover the whole episode and stay
+				// visible as AI gap-fill targets.
+				if !seen[jpBody] {
+					talkOrder = append(talkOrder, jpBody)
+					seen[jpBody] = true
+					talkData[jpBody] = ""
+				}
 				if text != "" {
 					talkData[jpBody] = text
-					if !seen[jpBody] {
-						talkOrder = append(talkOrder, jpBody)
-						seen[jpBody] = true
-					}
+					translated = true
 					if cnSpeaker != "" {
 						speakerNames[jpBody] = cnSpeaker
 					}
@@ -336,12 +366,14 @@ func (t *Translator) buildOfficialCNEpisodes(jpStory, cnStory map[string]any) (m
 				episodeLines = append(episodeLines, store.OrderedLine{
 					JPKey: jpName, Text: text, Source: "cn", ScenarioPosition: i*2 + 1, Field: "speaker",
 				})
+				if !seen[jpName] {
+					talkOrder = append(talkOrder, jpName)
+					seen[jpName] = true
+					talkData[jpName] = ""
+				}
 				if text != "" {
 					talkData[jpName] = text
-					if !seen[jpName] {
-						talkOrder = append(talkOrder, jpName)
-						seen[jpName] = true
-					}
+					translated = true
 				}
 			}
 		}
@@ -350,7 +382,7 @@ func (t *Translator) buildOfficialCNEpisodes(jpStory, cnStory map[string]any) (m
 		if cnTitle == strings.TrimSpace(getString(ep, "title")) {
 			cnTitle = ""
 		}
-		if len(talkData) > 0 {
+		if translated {
 			hasTalk = true
 		} else if cnTitle != "" {
 			hasTitleOnly = true
