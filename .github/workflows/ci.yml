@@ -38,7 +38,9 @@ jobs:
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v6
         with:
           go-version: 1.25.1
-          cache-dependency-path: server/go.sum
+          cache-dependency-path: |
+            server/go.sum
+            server/offline/go.sum
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -67,6 +69,12 @@ jobs:
 
       - name: Verify Go without race
         working-directory: server
+        run: |
+          go test -count=1 -timeout=30m ./...
+          go vet ./...
+
+      - name: Verify offline Go module without race
+        working-directory: server/offline
         run: |
           go test -count=1 -timeout=30m ./...
           go vet ./...
@@ -196,7 +204,9 @@ jobs:
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v6
         with:
           go-version: 1.25.1
-          cache-dependency-path: server/go.sum
+          cache-dependency-path: |
+            server/go.sum
+            server/offline/go.sum
       - name: Prepare hermetic Go test roots
         shell: bash
         run: |
@@ -219,6 +229,10 @@ jobs:
           test "${#packages[@]}" -gt 0
           ! printf '%s\n' "${packages[@]}" | grep -Eq '/internal/(api|store)$'
           go test -race -count=1 -timeout=60m "${packages[@]}"
+
+      - name: Race the offline Go module
+        working-directory: server/offline
+        run: go test -race -count=1 -timeout=60m ./...
 
   verify:
     needs: [fast, race-api, race-store, race-rest]

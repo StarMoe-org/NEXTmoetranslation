@@ -12,8 +12,9 @@ import (
 )
 
 // recoveryCanonicalEndpoint maps a live MediaWiki provider to the API endpoint
-// this package already owns. Values are pinned to the reviewed provider policy
-// table by TestRecoveryCanonicalEndpointMatchesProviderPolicy.
+// this package already owns. The offline module's
+// TestRecoveryProviderConfigEndpointsMatchProviderPolicy pins these values to
+// the reviewed provider policy table.
 func recoveryCanonicalEndpoint(provider model.LyricsSourceProvider) (string, bool) {
 	switch provider {
 	case ProviderVocaloidFandom:

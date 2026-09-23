@@ -76,27 +76,6 @@ func ByAlias(value string) (External, bool) {
 	}
 	return External{}, false
 }
-
-// BySourceID resolves only an exact canonical persisted source identity.
-func BySourceID(sourceID string) (External, bool) {
-	for _, performer := range auditedExternal {
-		if performer.SourceID == sourceID {
-			return performer, true
-		}
-	}
-	return External{}, false
-}
-
-// ByNumericID resolves a reserved lyrics-only public performer ID.
-func ByNumericID(numericID int) (External, bool) {
-	for _, performer := range auditedExternal {
-		if performer.NumericID == numericID {
-			return performer, true
-		}
-	}
-	return External{}, false
-}
-
 func aliasKey(value string) string {
 	return strings.ToLower(strings.Join(strings.Fields(norm.NFKC.String(value)), " "))
 }

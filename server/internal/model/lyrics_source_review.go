@@ -79,18 +79,3 @@ type LyricsSourceReviewItem struct {
 	UpdatedAt           time.Time
 	CompletedAt         time.Time
 }
-
-type LyricsSourceReviewDecision struct {
-	DecisionID        int64
-	ReviewID          int64
-	Gate              string
-	Decision          string
-	SelectedCandidate *LyricsSourceCandidateIdentity
-	Actor             string
-	Note              string
-	IdempotencyKey    string
-	RequestSHA256     string
-	ExpectedVersion   int64
-	ResultVersion     int64
-	DecidedAt         time.Time
-}

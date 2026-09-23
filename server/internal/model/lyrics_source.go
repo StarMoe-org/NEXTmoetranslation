@@ -163,30 +163,6 @@ func CatalogLyricsEvidenceFingerprint(input CatalogLyricsEvidence) (string, erro
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func CatalogLyricsWorkKey(input CatalogLyricsEvidence) string {
-	canonical := NormalizeCatalogLyricsEvidence(input)
-	parts := []string{canonical.Title}
-	if canonical.Presence.Lyricist {
-		parts = append(parts, "lyricist="+canonical.Lyricist)
-	} else {
-		parts = append(parts, "lyricist=?")
-	}
-	if canonical.Presence.Composer {
-		parts = append(parts, "composer="+canonical.Composer)
-	} else {
-		parts = append(parts, "composer=?")
-	}
-	if canonical.Presence.Arranger {
-		parts = append(parts, "arranger="+canonical.Arranger)
-	} else {
-		parts = append(parts, "arranger=?")
-	}
-	for index := range parts {
-		parts[index] = normalizeLyricsWorkText(parts[index])
-	}
-	return strings.Join(parts, "\x1f")
-}
-
 // ClassifyCatalogLyricsTargets applies mandatory, lexicographic gates. A group
 // is automatic only when every record has complete, consistent role-bound
 // credits and every version is explicit and supported. One explicit full

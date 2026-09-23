@@ -34,14 +34,6 @@ func TestAuditedExternalRegistryIsStableAndClosed(t *testing.T) {
 		}
 		seenNumeric[performer.NumericID] = true
 		seenSource[performer.SourceID] = true
-		bySource, found := BySourceID(performer.SourceID)
-		if !found || bySource.NumericID != performer.NumericID || bySource.SourceID != performer.SourceID {
-			t.Fatalf("source lookup for %q=%+v found=%t", performer.SourceID, bySource, found)
-		}
-		byNumeric, found := ByNumericID(performer.NumericID)
-		if !found || byNumeric.SourceID != performer.SourceID || byNumeric.NumericID != performer.NumericID {
-			t.Fatalf("numeric lookup for %d=%+v found=%t", performer.NumericID, byNumeric, found)
-		}
 		for _, alias := range append([]string{performer.SourceID, performer.Name}, performer.Aliases...) {
 			if alias == "" {
 				t.Fatalf("performer %q has empty alias", performer.SourceID)

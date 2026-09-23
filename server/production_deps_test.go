@@ -9,27 +9,30 @@ import (
 	"testing"
 )
 
-// Offline-only packages (recovery, staging, evidence packs, provider policy and
-// coordination) must never be linked into the production server binary. This
-// test pins the boundary that the P2 split established.
+// Offline-only code (recovery, staging, evidence packs, provider policy and
+// coordination) lives in the nested module server/offline and must never be
+// linked into the production server binary. This test pins that boundary: no
+// dependency may come from the offline module, and none of the packages that
+// moved there may reappear under the production internal tree.
 func TestProductionBinaryDoesNotLinkOfflinePackages(t *testing.T) {
-	forbidden := []string{
-		"moesekai/server/internal/lyricsacquisition",
-		"moesekai/server/internal/lyricscompose",
-		"moesekai/server/internal/lyricsevidencepack",
-		"moesekai/server/internal/lyricsextractionplan",
-		"moesekai/server/internal/lyricsimportreceipt",
-		"moesekai/server/internal/lyricsoutcomeartifact",
-		"moesekai/server/internal/lyricsprovidercoord",
-		"moesekai/server/internal/lyricsproviderpolicy",
-		"moesekai/server/internal/lyricsrecovery",
-		"moesekai/server/internal/lyricsrecoveryimport",
-		"moesekai/server/internal/lyricsrecoverypublic",
-		"moesekai/server/internal/lyricsreview",
-		"moesekai/server/internal/lyricsrootmanifest",
-		"moesekai/server/internal/lyricssourceoffline",
-		"moesekai/server/internal/lyricsstaging",
-		"moesekai/server/internal/offlineimport",
+	const offlineModulePrefix = "moesekai/server/offline/"
+	movedPackages := []string{
+		"lyricsacquisition",
+		"lyricscompose",
+		"lyricsevidencepack",
+		"lyricsextractionplan",
+		"lyricsimportreceipt",
+		"lyricsoutcomeartifact",
+		"lyricsprovidercoord",
+		"lyricsproviderpolicy",
+		"lyricsrecovery",
+		"lyricsrecoveryimport",
+		"lyricsrecoverypublic",
+		"lyricsreview",
+		"lyricsrootmanifest",
+		"lyricssourceoffline",
+		"lyricsstaging",
+		"offlineimport",
 	}
 
 	goBinary := filepath.Join(runtime.GOROOT(), "bin", "go")
@@ -50,9 +53,14 @@ func TestProductionBinaryDoesNotLinkOfflinePackages(t *testing.T) {
 	if !linked["moesekai/server/internal/lyricssource"] {
 		t.Fatalf("go list -deps output does not look like the production binary: %d packages", len(linked))
 	}
-	for _, pkg := range forbidden {
-		if linked[pkg] {
-			t.Errorf("offline package %s is linked into the production server binary", pkg)
+	for pkg := range linked {
+		if strings.HasPrefix(pkg, offlineModulePrefix) {
+			t.Errorf("offline module package %s is linked into the production server binary", pkg)
+		}
+	}
+	for _, name := range movedPackages {
+		if pkg := "moesekai/server/internal/" + name; linked[pkg] {
+			t.Errorf("offline package %s reappeared in the production server binary", pkg)
 		}
 	}
 }

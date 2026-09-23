@@ -9,6 +9,7 @@ v2/
 ├── server/                 Go 后端 (module moesekai/server, Go 1.25)
 │   ├── main.go             组装依赖、启动 HTTP + 后台任务
 │   ├── cmd/migrate/        旧 translations/ → SQLite 迁移工具（含无损校验）
+│   ├── offline/            离线 operator 工具的嵌套 Go module（moesekai/server/offline，见下）
 │   └── internal/
 │       ├── db/             SQLite 连接 + schema（modernc.org/sqlite，纯 Go）
 │       ├── model/          共享类型 + 分类定义
@@ -64,10 +65,10 @@ Phase 2 的规范 admin API 固定为 `GET /api/admin/lyrics-source-reviews`、`
 
 已注册的 `POST /api/admin/lyrics-source-reviews/import` 是审核通过后的显式导入入口，请求闭集为 `{reviewId}`。它在 first-save 事务内重新核对 approved/gate 状态、policy、完整当前 catalog target 分组/fingerprint、不可变来源 identity、结构化提取 digest、ruby/segment 与 performer 投影，只创建 revision 1 的私有可编辑草稿，`zh-CN`/`en-US` 为空且不会发布。来源已声明但不在封闭游戏角色目录中的人声/外部歌手保留在来源证据中；存在 catalog fallback 时使用合法目录 ID，只有 `outside_character` 时则保存具体 `[]`，不伪造 ID，并由发布校验继续阻断直到编辑者处理。相同文档重放返回 `changed:false`；已有非相同歌词文档返回 `lyrics_already_saved`。单纯审核/候选决定仍不保存草稿，只有显式 import 成功提交后才发送普通私有内容变更通知。
 
-本地 staging 链与生产 API 分离。`lyrics-stage` 的 report/manifest 仍固定 catalog contract v18，但只在完整必需列、`catalog-identity-v2` policy 与逐行 fingerprint 重算都一致时接受独立不可变的 runtime schema v18、v19 或 v20 SQLite snapshot；未来 schema 默认拒绝。新增 `lyrics-import-stage` 仅供离线本地 operator 使用，不会复制进生产镜像，也不会由服务端调用。命令要求 manifest/DB/backup/receipt 的绝对路径、已验证 backup SHA-256、审计 operator 和 `-confirm-local-offline`，会拒绝 `MOESEKAI_PRODUCTION`、取得同一 single-instance DB lock、固定 inode、拒绝 SQLite sidecar，并用 `O_EXCL` 创建私有 receipt。导入时再次验证 closed manifest/digest、完整当前目录 generation、fingerprint/target/association、page/revision/SHA1 URL、performer、空中英文翻译和 ruby/segment。不可变 manifest 会原样保留来源 performer legend；运行时数值投影只接受封闭的游戏角色目录 ID。已在 legend 声明但无法映射的人声/外部歌手会在存在时使用所选 catalog vocal fallback；若 catalog 只有 `outside_character`，私有草稿保存具体的空 `performerIds` 数组而不伪造会碰撞的游戏角色 ID，并继续由发布校验阻断，等待编辑者显式处理。整批一个事务，完全相同的已有草稿可幂等重放，非相同已有文档冲突，任一项失败则整批回滚。schema-v2 manifest 在每个 `source` 中保存该项实际固定修订抓取的 `fetchedAt`，导入时逐项写入 `sourceFetchedAt`；preflight `generatedAt` 只保留报告生成时间，不再代替来源抓取时间。示例：
+本地 staging 链与生产 API 分离。`lyrics-stage` 的 report/manifest 仍固定 catalog contract v18，但只在完整必需列、`catalog-identity-v2` policy 与逐行 fingerprint 重算都一致时接受独立不可变的 runtime schema v18、v19 或 v20 SQLite snapshot；未来 schema 默认拒绝。新增 `lyrics-import-stage` 仅供离线本地 operator 使用，不会复制进生产镜像，也不会由服务端调用。命令要求 manifest/DB/backup/receipt 的绝对路径、已验证 backup SHA-256、审计 operator 和 `-confirm-local-offline`，会拒绝 `MOESEKAI_PRODUCTION`、取得同一 single-instance DB lock、固定 inode、拒绝 SQLite sidecar，并用 `O_EXCL` 创建私有 receipt。导入时再次验证 closed manifest/digest、完整当前目录 generation、fingerprint/target/association、page/revision/SHA1 URL、performer、空中英文翻译和 ruby/segment。不可变 manifest 会原样保留来源 performer legend；运行时数值投影只接受封闭的游戏角色目录 ID。已在 legend 声明但无法映射的人声/外部歌手会在存在时使用所选 catalog vocal fallback；若 catalog 只有 `outside_character`，私有草稿保存具体的空 `performerIds` 数组而不伪造会碰撞的游戏角色 ID，并继续由发布校验阻断，等待编辑者显式处理。整批一个事务，完全相同的已有草稿可幂等重放，非相同已有文档冲突，任一项失败则整批回滚。schema-v2 manifest 在每个 `source` 中保存该项实际固定修订抓取的 `fetchedAt`，导入时逐项写入 `sourceFetchedAt`；preflight `generatedAt` 只保留报告生成时间，不再代替来源抓取时间。全部离线命令（`lyricsctl`、`lyrics-stage`、`lyrics-import-stage`、`lyrics-recovery*`、`lyrics-preflight`、`lyrics-validate`、`lyrics-evidence-pack` 等）与其专用包位于嵌套模块 `server/offline/`（`module moesekai/server/offline`，通过 `replace moesekai/server => ../` 复用生产模块的 `internal/*`）。生产模块不 require 该子模块，`server/production_deps_test.go` 断言 `go list -deps .` 不含任何 `moesekai/server/offline/` 包；CI 分别在 `server/` 与 `server/offline/` 运行 `go test` / `go vet`。示例：
 
 ```bash
-cd server
+cd server/offline
 go run ./cmd/lyrics-import-stage \
   -manifest /absolute/private/staging.json \
   -db /absolute/offline/moesekai.db \
