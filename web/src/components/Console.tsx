@@ -163,8 +163,13 @@ export function Console({ onLogout }: { onLogout: () => void }) {
         return;
       }
       setWriteFence(true);
-      clearLoadedProducerState();
-      void Promise.resolve().then(action).finally(() => reconcileContentRef.current("gap"));
+      // Strict producer routes (promote-human) send the loaded producer-state
+      // proof, so it is cleared only once the action has settled; the write
+      // fence keeps every other mutation out in the meantime.
+      void Promise.resolve().then(action).finally(() => {
+        clearLoadedProducerState();
+        reconcileContentRef.current("gap");
+      });
     });
   };
 

@@ -300,6 +300,11 @@ test("realtime fence blocks writes without blocking local logout discard or canc
   assert.match(consoleSource, /onClick=\{closePendingAction\} disabled=\{pendingActionBusy \|\| saving\}>取消/);
   assert.equal((consoleSource.slice(consoleSource.indexOf("const guardProducerMutation"), consoleSource.indexOf("const { save, handleSourceChange")).match(/if \(writeFenceRef\.current\)/g) || []).length, 2);
   assert.match(consoleSource, /保存等待期间实时校对已锁定，上游操作未执行/);
+  // promote-human is a strict v1 route: the producer-state proof must survive
+  // until the action has run, then be dropped before the gap reconcile.
+  const producerGuard = consoleSource.slice(consoleSource.indexOf("const guardProducerMutation"), consoleSource.indexOf("const { save, handleSourceChange"));
+  assert.doesNotMatch(producerGuard, /clearLoadedProducerState\(\);\s*void Promise\.resolve\(\)\.then\(action\)/);
+  assert.match(producerGuard, /Promise\.resolve\(\)\.then\(action\)\.finally\(\(\) => \{\s*clearLoadedProducerState\(\);\s*reconcileContentRef\.current\("gap"\);/);
   assert.match(editor, /\(saveFirst \|\| pending\.kind === "publish" \|\| editionTransition\) && writeLockedRef\.current/);
   assert.match(editor, /onClick=\{\(\) => void continuePendingTransition\(false\)\}[\s\S]{0,220}>放弃并继续/);
   assert.match(editor, /onClick=\{\(\) => setPendingTransition\(null\)\} disabled=\{busy\}>取消/);
@@ -546,7 +551,7 @@ test("settings and admin upstream producers enter the shared write and dirty fen
   assert.match(settings, /<BadgeFilterCard locale={locale} \/>/);
   assert.match(settings, /getCategories\(locale\)/);
   assert.match(settings, /getEventStories\(locale\)/);
-  assert.match(consoleSource, /runOrGuard\(label, \(\) => \{[\s\S]*if \(writeFenceRef\.current\)[\s\S]*setWriteFence\(true\)[\s\S]*Promise\.resolve\(\)\.then\(action\)\.finally\(\(\) => reconcileContentRef\.current\("gap"\)\)/);
+  assert.match(consoleSource, /runOrGuard\(label, \(\) => \{[\s\S]*if \(writeFenceRef\.current\)[\s\S]*setWriteFence\(true\)[\s\S]*Promise\.resolve\(\)\.then\(action\)\.finally\(\(\) => \{[\s\S]*reconcileContentRef\.current\("gap"\);/);
   assert.match(consoleSource, /guardProducerMutation\("运行 AI 剧情翻译", doAIStory\)/);
   assert.match(consoleSource, /guardProducerMutation\("重新获取剧情", retryStory\)/);
   assert.match(consoleSource, /guardProducerMutation\("重排序对话", reorderStory\)/);
