@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+
+import { readLyricsEditor } from "./source-surfaces.mjs";
+
 import ts from "typescript";
 import * as Y from "yjs";
 
@@ -480,7 +483,7 @@ test("a materialized shared document compares clean against the server response 
 });
 
 test("LyricsEditor dirty tracking never compares raw JSON.stringify output against the baseline", async () => {
-  const editor = await readFile(new URL("../src/components/LyricsEditor.tsx", import.meta.url), "utf8");
+  const editor = await readLyricsEditor();
   assert.match(editor, /const dirty = lyrics != null && canonicalLyricsJSON\(lyrics\) !== baseline;/);
   assert.match(editor, /setBaseline\(canonicalLyricsJSON\(persisted\)\)/);
   assert.match(editor, /canonicalLyricsJSON\(editableLyricsDocument\(currentSharedDocument\)\) !== canonicalLyricsJSON\(document\)/);

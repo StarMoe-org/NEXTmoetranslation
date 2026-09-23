@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { readLyricsEditor } from "./source-surfaces.mjs";
+
+
 import {
   canMergeAdjacentLyricSegments,
   editableLyricSegments,
@@ -258,7 +261,7 @@ test("merge refuses different performer assignments instead of fabricating a com
 
 test("LyricsEditor centralizes confirmation-aware annotation mutations", async () => {
   const [editor, lineEditor] = await Promise.all([
-    readFile(new URL("../src/components/LyricsEditor.tsx", import.meta.url), "utf8"),
+    readLyricsEditor(),
     readFile(new URL("../src/components/lyrics/LyricsLineEditor.tsx", import.meta.url), "utf8"),
   ]);
 

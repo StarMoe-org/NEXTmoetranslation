@@ -20,7 +20,10 @@ func TestLifecycleProbesRejectWriteMethods(t *testing.T) {
 	}
 	defer database.Close()
 	mux := http.NewServeMux()
-	registerOperationalRoutes(mux, database, auth.New(database, "operations-secret-at-least-32-bytes", time.Hour))
+	registerOperationalRoutes(mux, operationalDeps{
+		database: database,
+		auth:     auth.New(database, "operations-secret-at-least-32-bytes", time.Hour),
+	})
 
 	for _, path := range []string{"/healthz", "/readyz", "/healthz/details"} {
 		for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {

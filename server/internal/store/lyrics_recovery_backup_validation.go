@@ -30,6 +30,21 @@ type recoveryBackupEvidenceIdentity struct {
 	evidenceID string
 }
 
+// recoveryBackupGraph accumulates the recovery rows each section validates, so
+// later sections can resolve their parents.
+type recoveryBackupGraph struct {
+	batches                 map[string]LyricsRecoveryBatchBackupRecord
+	coverageByBatch         map[string]lyricscontract.Coverage
+	items                   map[recoveryBackupItemIdentity]LyricsRecoveryItemBackupRecord
+	sourceDocuments         map[recoveryBackupItemIdentity]model.LyricsSourceDocument
+	availability            map[recoveryBackupItemIdentity]model.LyricsAvailabilityDocument
+	expectedFixedIdentities map[recoveryBackupArtifactIdentity]string
+	evidence                map[recoveryBackupEvidenceIdentity]LyricsRecoverySourceEvidenceBackupRecord
+	artifacts               map[recoveryBackupArtifactIdentity]model.LyricsSourceFixedIdentity
+	artifactRefs            map[recoveryBackupArtifactIdentity][]model.LyricsSourceIndexEvidenceRef
+	artifactsByItem         map[recoveryBackupItemIdentity]map[string]bool
+}
+
 func validateRestoredLyricsRecoveryProvenance(
 	lyrics LyricsContentExport,
 	documentIDs map[int]bool,
@@ -43,6 +58,38 @@ func validateRestoredLyricsRecoveryProvenance(
 		return nil
 	}
 
+	graph := &recoveryBackupGraph{}
+	if err := graph.validateBatches(lyrics); err != nil {
+		return err
+	}
+	if err := graph.validateItems(lyrics, musicIDs); err != nil {
+		return err
+	}
+	if err := graph.validateSourceDocuments(lyrics, documentIDs); err != nil {
+		return err
+	}
+	if err := graph.validateAvailabilityDocuments(lyrics); err != nil {
+		return err
+	}
+	if err := graph.validateItemOwnership(); err != nil {
+		return err
+	}
+	if err := graph.collectFixedIdentities(lyrics); err != nil {
+		return err
+	}
+	if err := graph.validateSourceEvidence(lyrics); err != nil {
+		return err
+	}
+	if err := graph.validateArtifacts(lyrics); err != nil {
+		return err
+	}
+	if err := graph.validateArtifactEvidence(lyrics); err != nil {
+		return err
+	}
+	return graph.validateContributions(lyrics)
+}
+
+func (graph *recoveryBackupGraph) validateBatches(lyrics LyricsContentExport) error {
 	batches := make(map[string]LyricsRecoveryBatchBackupRecord, len(lyrics.RecoveryBatches))
 	coverageByBatch := make(map[string]lyricscontract.Coverage, len(lyrics.RecoveryBatches))
 	for _, record := range lyrics.RecoveryBatches {
@@ -75,7 +122,13 @@ func validateRestoredLyricsRecoveryProvenance(
 		batches[record.BatchSHA256] = record
 		coverageByBatch[record.BatchSHA256] = coverage
 	}
+	graph.batches = batches
+	graph.coverageByBatch = coverageByBatch
+	return nil
+}
 
+func (graph *recoveryBackupGraph) validateItems(lyrics LyricsContentExport, musicIDs map[int]bool) error {
+	batches, coverageByBatch := graph.batches, graph.coverageByBatch
 	catalog := make(map[int]CatalogMusicBackupRecord, len(lyrics.Music))
 	for _, record := range lyrics.Music {
 		catalog[record.MusicID] = record
@@ -150,7 +203,12 @@ func validateRestoredLyricsRecoveryProvenance(
 			return fmt.Errorf("lyrics recovery batch %s item coverage is incomplete", batchSHA)
 		}
 	}
+	graph.items = items
+	return nil
+}
 
+func (graph *recoveryBackupGraph) validateSourceDocuments(lyrics LyricsContentExport, documentIDs map[int]bool) error {
+	batches, items := graph.batches, graph.items
 	sourceDocuments := make(map[recoveryBackupItemIdentity]model.LyricsSourceDocument)
 	for _, record := range lyrics.SourceDocuments {
 		if _, recovery := batches[record.ManifestBatchSHA256]; !recovery {
@@ -177,7 +235,12 @@ func validateRestoredLyricsRecoveryProvenance(
 		}
 		sourceDocuments[identity] = document
 	}
+	graph.sourceDocuments = sourceDocuments
+	return nil
+}
 
+func (graph *recoveryBackupGraph) validateAvailabilityDocuments(lyrics LyricsContentExport) error {
+	items, sourceDocuments := graph.items, graph.sourceDocuments
 	availability := make(map[recoveryBackupItemIdentity]model.LyricsAvailabilityDocument, len(lyrics.AvailabilityDocuments))
 	availabilityIDs := make(map[int64]bool, len(lyrics.AvailabilityDocuments))
 	for _, record := range lyrics.AvailabilityDocuments {
@@ -201,6 +264,12 @@ func validateRestoredLyricsRecoveryProvenance(
 		availabilityIDs[record.AvailabilityDocumentID] = true
 		availability[identity] = document
 	}
+	graph.availability = availability
+	return nil
+}
+
+func (graph *recoveryBackupGraph) validateItemOwnership() error {
+	items, sourceDocuments, availability := graph.items, graph.sourceDocuments, graph.availability
 	for identity, item := range items {
 		_, hasSource := sourceDocuments[identity]
 		_, hasAvailability := availability[identity]
@@ -218,7 +287,11 @@ func validateRestoredLyricsRecoveryProvenance(
 			return fmt.Errorf("lyrics recovery item %s/%d has an invalid source/availability ownership shape", identity.batchSHA256, identity.musicID)
 		}
 	}
+	return nil
+}
 
+func (graph *recoveryBackupGraph) collectFixedIdentities(lyrics LyricsContentExport) error {
+	sourceDocuments, availability := graph.sourceDocuments, graph.availability
 	expectedFixedIdentities := make(map[recoveryBackupArtifactIdentity]string, len(lyrics.RecoveryArtifacts))
 	for itemIdentity, document := range sourceDocuments {
 		if err := addRecoveryBackupFixedIdentities(expectedFixedIdentities, itemIdentity, document.FixedIdentities); err != nil {
@@ -230,7 +303,11 @@ func validateRestoredLyricsRecoveryProvenance(
 			return err
 		}
 	}
+	graph.expectedFixedIdentities = expectedFixedIdentities
+	return nil
+}
 
+func (graph *recoveryBackupGraph) validateSourceEvidence(lyrics LyricsContentExport) error {
 	evidence := make(map[recoveryBackupEvidenceIdentity]LyricsRecoverySourceEvidenceBackupRecord, len(lyrics.RecoverySourceEvidence))
 	for _, record := range lyrics.RecoverySourceEvidence {
 		identity := recoveryBackupEvidenceIdentity{provider: record.Provider, evidenceID: record.EvidenceID}
@@ -249,7 +326,12 @@ func validateRestoredLyricsRecoveryProvenance(
 		}
 		evidence[identity] = record
 	}
+	graph.evidence = evidence
+	return nil
+}
 
+func (graph *recoveryBackupGraph) validateArtifacts(lyrics LyricsContentExport) error {
+	items, sourceDocuments, expectedFixedIdentities := graph.items, graph.sourceDocuments, graph.expectedFixedIdentities
 	artifacts := make(map[recoveryBackupArtifactIdentity]model.LyricsSourceFixedIdentity, len(lyrics.RecoveryArtifacts))
 	artifactRefs := make(map[recoveryBackupArtifactIdentity][]model.LyricsSourceIndexEvidenceRef, len(lyrics.RecoveryArtifacts))
 	artifactsByItem := make(map[recoveryBackupItemIdentity]map[string]bool)
@@ -296,7 +378,15 @@ func validateRestoredLyricsRecoveryProvenance(
 		}
 		artifactsByItem[itemIdentity][record.RenditionKey] = true
 	}
+	graph.artifacts = artifacts
+	graph.artifactRefs = artifactRefs
+	graph.artifactsByItem = artifactsByItem
+	return nil
+}
 
+func (graph *recoveryBackupGraph) validateArtifactEvidence(lyrics LyricsContentExport) error {
+	batches, evidence := graph.batches, graph.evidence
+	artifacts, artifactRefs := graph.artifacts, graph.artifactRefs
 	positions := make(map[recoveryBackupArtifactIdentity]map[int]bool)
 	referencedEvidence := make(map[recoveryBackupEvidenceIdentity]bool)
 	batchEvidence := make(map[string]map[recoveryBackupEvidenceIdentity]bool)
@@ -358,7 +448,12 @@ func validateRestoredLyricsRecoveryProvenance(
 			return fmt.Errorf("lyrics recovery batch %s evidence selection is invalid", batchSHA)
 		}
 	}
+	return nil
+}
 
+func (graph *recoveryBackupGraph) validateContributions(lyrics LyricsContentExport) error {
+	items, sourceDocuments, availability := graph.items, graph.sourceDocuments, graph.availability
+	artifactsByItem := graph.artifactsByItem
 	contributions := make(map[recoveryBackupItemIdentity]map[string]bool)
 	expectedComponents := make(map[recoveryBackupItemIdentity]map[string]string, len(items))
 	lastContributionByItem := make(map[recoveryBackupItemIdentity]string)

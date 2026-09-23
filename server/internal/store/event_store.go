@@ -125,6 +125,24 @@ func eventHasProtectedTranslationsTx(ctx context.Context, tx *sql.Tx, eventID in
 	return protected != 0, err
 }
 
+// Older binaries replace the legacy story rows wholesale. Preserve manual
+// non-Chinese localizations that are still attached to the same source
+// identity before the legacy delete cascades.
+type eventStoryLocalization struct {
+	locale, text, source, updatedBy string
+	updatedAt                       int64
+	revision                        int
+}
+
+type preservedEventStoryLocalizations struct {
+	segmentID, episodeNo, kind, sourceHash string
+	localizations                          []eventStoryLocalization
+}
+
+type eventStorySourceIdentity struct {
+	episodeNo, kind, sourceHash string
+}
+
 func importOrderedTx(ctx context.Context, tx *sql.Tx, eventID int, meta model.EventStoryMeta, episodes []OrderedEpisode, preserveLocales bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -137,25 +155,44 @@ func importOrderedTx(ctx context.Context, tx *sql.Tx, eventID int, meta model.Ev
 	if err != nil {
 		return err
 	}
-	// Older binaries replace the legacy story rows wholesale. Preserve manual
-	// non-Chinese localizations that are still attached to the same source
-	// identity before the legacy delete cascades.
-	type localization struct {
-		locale, text, source, updatedBy string
-		updatedAt                       int64
-		revision                        int
-	}
-	type preservedLocalization struct {
-		segmentID, episodeNo, kind, sourceHash string
-		localizations                          []localization
-	}
-	type sourceIdentity struct {
-		episodeNo, kind, sourceHash string
-	}
-	var preserved []*preservedLocalization
-	oldSourceCounts := map[sourceIdentity]int{}
+	var preserved []*preservedEventStoryLocalizations
+	oldSourceCounts := map[eventStorySourceIdentity]int{}
 	if preserveLocales {
-		rows, err := tx.QueryContext(ctx, `SELECT loc.segment_id, seg.episode_no, seg.kind, seg.source_hash, loc.locale, loc.text, loc.source,
+		preserved, oldSourceCounts, err = preservedEventStoryLocalizationsTx(ctx, tx, eventID, activeSegments)
+		if err != nil {
+			return err
+		}
+	}
+	if err := deleteReplacedEventStoryRowsTx(ctx, tx, eventID, episodes, activeSegments, scenarioComplete); err != nil {
+		return err
+	}
+	meta, err = insertEventStoryMetaTx(ctx, tx, eventID, meta)
+	if err != nil {
+		return err
+	}
+	newSegmentIDs, err := insertEventStoryEpisodesTx(ctx, tx, eventID, meta, episodes)
+	if err != nil {
+		return err
+	}
+	if err := restorePreservedEventStoryLocalizationsTx(ctx, tx, eventID, preserved, oldSourceCounts, newSegmentIDs); err != nil {
+		return err
+	}
+	if scenarioComplete {
+		if err := reconcileImportedEventScenariosTx(ctx, tx, eventID, episodes); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
+
+// preservedEventStoryLocalizationsTx reads the manual non-Chinese localizations
+// of the still-active segments before the legacy replacement deletes them.
+func preservedEventStoryLocalizationsTx(ctx context.Context, tx *sql.Tx, eventID int,
+	activeSegments map[string]EventSegmentRecord,
+) ([]*preservedEventStoryLocalizations, map[eventStorySourceIdentity]int, error) {
+	var preserved []*preservedEventStoryLocalizations
+	oldSourceCounts := map[eventStorySourceIdentity]int{}
+	rows, err := tx.QueryContext(ctx, `SELECT loc.segment_id, seg.episode_no, seg.kind, seg.source_hash, loc.locale, loc.text, loc.source,
 			loc.updated_at, loc.updated_by, loc.revision
 			FROM event_story_segment_localizations loc
 			JOIN event_story_segments seg ON seg.segment_id=loc.segment_id
@@ -164,44 +201,49 @@ func importOrderedTx(ctx context.Context, tx *sql.Tx, eventID int, meta model.Ev
 			AND episode.scenario_id=seg.scenario_id
 			WHERE seg.event_id=? AND loc.locale<>?
 			ORDER BY loc.segment_id, loc.locale`, eventID, model.LocaleChinese)
-		if err != nil {
-			return err
-		}
-		preservedByID := map[string]*preservedLocalization{}
-		for rows.Next() {
-			if err := ctx.Err(); err != nil {
-				rows.Close()
-				return err
-			}
-			var segmentID, episodeNo, kind, sourceHash string
-			var item localization
-			if err := rows.Scan(&segmentID, &episodeNo, &kind, &sourceHash, &item.locale, &item.text, &item.source,
-				&item.updatedAt, &item.updatedBy, &item.revision); err != nil {
-				rows.Close()
-				return err
-			}
-			if _, active := activeSegments[segmentID]; !active {
-				continue
-			}
-			segment := preservedByID[segmentID]
-			if segment == nil {
-				segment = &preservedLocalization{segmentID: segmentID, episodeNo: episodeNo, kind: kind, sourceHash: sourceHash}
-				preservedByID[segmentID] = segment
-				preserved = append(preserved, segment)
-			}
-			segment.localizations = append(segment.localizations, item)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return err
-		}
-		if err := rows.Close(); err != nil {
-			return err
-		}
-		for _, segment := range activeSegments {
-			oldSourceCounts[sourceIdentity{episodeNo: segment.EpisodeNo, kind: segment.Kind, sourceHash: segment.SourceHash}]++
-		}
+	if err != nil {
+		return nil, nil, err
 	}
+	preservedByID := map[string]*preservedEventStoryLocalizations{}
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		var segmentID, episodeNo, kind, sourceHash string
+		var item eventStoryLocalization
+		if err := rows.Scan(&segmentID, &episodeNo, &kind, &sourceHash, &item.locale, &item.text, &item.source,
+			&item.updatedAt, &item.updatedBy, &item.revision); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		if _, active := activeSegments[segmentID]; !active {
+			continue
+		}
+		segment := preservedByID[segmentID]
+		if segment == nil {
+			segment = &preservedEventStoryLocalizations{segmentID: segmentID, episodeNo: episodeNo, kind: kind, sourceHash: sourceHash}
+			preservedByID[segmentID] = segment
+			preserved = append(preserved, segment)
+		}
+		segment.localizations = append(segment.localizations, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, nil, err
+	}
+	for _, segment := range activeSegments {
+		oldSourceCounts[eventStorySourceIdentity{episodeNo: segment.EpisodeNo, kind: segment.Kind, sourceHash: segment.SourceHash}]++
+	}
+	return preserved, oldSourceCounts, nil
+}
+
+func deleteReplacedEventStoryRowsTx(ctx context.Context, tx *sql.Tx, eventID int, episodes []OrderedEpisode,
+	activeSegments map[string]EventSegmentRecord, scenarioComplete bool,
+) error {
 	for segmentID := range activeSegments {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -237,6 +279,12 @@ func importOrderedTx(ctx context.Context, tx *sql.Tx, eventID int, meta model.Ev
 			}
 		}
 	}
+	return nil
+}
+
+func insertEventStoryMetaTx(ctx context.Context, tx *sql.Tx, eventID int,
+	meta model.EventStoryMeta,
+) (model.EventStoryMeta, error) {
 	if meta.Version == "" {
 		meta.Version = "1.0"
 	}
@@ -246,47 +294,54 @@ func importOrderedTx(ctx context.Context, tx *sql.Tx, eventID int, meta model.Ev
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO event_stories (event_id, source, version, last_updated) VALUES (?, ?, ?, ?)`,
 		eventID, meta.Source, meta.Version, meta.LastUpdated); err != nil {
-		return err
+		return meta, err
 	}
+	return meta, nil
+}
 
+// insertEventStoryEpisodesTx writes the episodes, the legacy talk lines and the
+// zh-CN segment projection, and reports the segment IDs it created.
+func insertEventStoryEpisodesTx(ctx context.Context, tx *sql.Tx, eventID int, meta model.EventStoryMeta,
+	episodes []OrderedEpisode,
+) (map[string]bool, error) {
 	epStmt, err := tx.PrepareContext(ctx, `INSERT INTO event_story_episodes
 		(event_id, episode_no, scenario_id, title, title_source, talk_order_json, position)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer epStmt.Close()
 	lineStmt, err := tx.PrepareContext(ctx, `INSERT INTO event_story_lines
 		(event_id, episode_no, jp_key, cn_text, source, speaker_name, position)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer lineStmt.Close()
 	segmentStmt, err := tx.PrepareContext(ctx, `INSERT INTO event_story_segments
 		(segment_id, event_id, episode_no, scenario_id, kind, position, jp_key, source_text, source_hash)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer segmentStmt.Close()
 	localizedStmt, err := tx.PrepareContext(ctx, `INSERT INTO event_story_segment_localizations
 		(segment_id, locale, text, source, updated_at, updated_by, revision)
 		VALUES (?, ?, ?, ?, ?, ?, 1)`)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer localizedStmt.Close()
 	newSegmentIDs := map[string]bool{}
 
 	for epPos, ep := range episodes {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
 		// talk_order_json is stored only when it adds information beyond the
 		// natural line position order (kept empty here; positions drive order).
 		if _, err := epStmt.ExecContext(ctx, eventID, ep.EpisodeNo, ep.ScenarioID, ep.Title, ep.TitleSource, "", epPos); err != nil {
-			return err
+			return nil, err
 		}
 		titleID := eventSegmentID(eventID, ep.ScenarioID, ep.EpisodeNo, "title", -1)
 		titleSource := ep.SourceTitle
@@ -294,12 +349,12 @@ func importOrderedTx(ctx context.Context, tx *sql.Tx, eventID int, meta model.Ev
 			titleSource = ep.Title
 		}
 		if _, err := segmentStmt.ExecContext(ctx, titleID, eventID, ep.EpisodeNo, ep.ScenarioID, "title", -1, "", titleSource, hashText(titleSource)); err != nil {
-			return err
+			return nil, err
 		}
 		newSegmentIDs[titleID] = true
 		if titleSource == "" {
 			if _, err := localizedStmt.ExecContext(ctx, titleID, model.LocaleChinese, ep.Title, ep.TitleSource, meta.LastUpdated, "import"); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		lines := ep.Lines
@@ -324,7 +379,7 @@ func importOrderedTx(ctx context.Context, tx *sql.Tx, eventID int, meta model.Ev
 		legacySeen := map[string]bool{}
 		for _, line := range lines {
 			if err := ctx.Err(); err != nil {
-				return err
+				return nil, err
 			}
 			legacyByKey[line.JPKey] = line // legacy maps kept the final repeated value
 			if len(ep.TalkKeys) == 0 && line.JPKey != "" && !legacySeen[line.JPKey] {
@@ -334,7 +389,7 @@ func importOrderedTx(ctx context.Context, tx *sql.Tx, eventID int, meta model.Ev
 		}
 		for legacyPosition, jpKey := range legacyOrder {
 			if err := ctx.Err(); err != nil {
-				return err
+				return nil, err
 			}
 			line, ok := legacyByKey[jpKey]
 			if !ok {
@@ -355,12 +410,12 @@ func importOrderedTx(ctx context.Context, tx *sql.Tx, eventID int, meta model.Ev
 				line.Source = meta.Source
 			}
 			if _, err := lineStmt.ExecContext(ctx, eventID, ep.EpisodeNo, jpKey, line.Text, line.Source, line.SpeakerName, legacyPosition); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		for linePos, line := range lines {
 			if err := ctx.Err(); err != nil {
-				return err
+				return nil, err
 			}
 			if line.JPKey == "" {
 				continue
@@ -375,14 +430,23 @@ func importOrderedTx(ctx context.Context, tx *sql.Tx, eventID int, meta model.Ev
 			}
 			segmentID := eventSegmentID(eventID, ep.ScenarioID, ep.EpisodeNo, "talk", position, line.Field)
 			if _, err := segmentStmt.ExecContext(ctx, segmentID, eventID, ep.EpisodeNo, ep.ScenarioID, "talk", position, line.JPKey, line.JPKey, hashText(line.JPKey)); err != nil {
-				return err
+				return nil, err
 			}
 			newSegmentIDs[segmentID] = true
 			if _, err := localizedStmt.ExecContext(ctx, segmentID, model.LocaleChinese, line.Text, src, meta.LastUpdated, "import"); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
+	return newSegmentIDs, nil
+}
+
+// restorePreservedEventStoryLocalizationsTx reattaches the preserved
+// localizations to the rewritten segments that still carry their source text.
+func restorePreservedEventStoryLocalizationsTx(ctx context.Context, tx *sql.Tx, eventID int,
+	preserved []*preservedEventStoryLocalizations, oldSourceCounts map[eventStorySourceIdentity]int,
+	newSegmentIDs map[string]bool,
+) error {
 	assignments := map[string]string{}
 	claimedDestinations := map[string]bool{}
 	// Reserve stable exact matches before considering any positional migration
@@ -410,7 +474,7 @@ func importOrderedTx(ctx context.Context, tx *sql.Tx, eventID int, meta model.Ev
 		if assignments[item.segmentID] != "" {
 			continue
 		}
-		identity := sourceIdentity{episodeNo: item.episodeNo, kind: item.kind, sourceHash: item.sourceHash}
+		identity := eventStorySourceIdentity{episodeNo: item.episodeNo, kind: item.kind, sourceHash: item.sourceHash}
 		if oldSourceCounts[identity] != 1 {
 			continue
 		}
@@ -468,20 +532,22 @@ func importOrderedTx(ctx context.Context, tx *sql.Tx, eventID int, meta model.Ev
 			}
 		}
 	}
-	if scenarioComplete {
-		for _, episode := range episodes {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if err := reconcileEventScenarioSegmentsTx(tx, eventID, episode); err != nil {
-				return err
-			}
+	return nil
+}
+
+func reconcileImportedEventScenariosTx(ctx context.Context, tx *sql.Tx, eventID int, episodes []OrderedEpisode) error {
+	for _, episode := range episodes {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		if err := replaceEventScenariosTx(tx, eventID, episodes); err != nil {
+		if err := reconcileEventScenarioSegmentsTx(tx, eventID, episode); err != nil {
 			return err
 		}
 	}
-	return ctx.Err()
+	if err := replaceEventScenariosTx(tx, eventID, episodes); err != nil {
+		return err
+	}
+	return nil
 }
 
 func activeEventSegmentsTx(tx *sql.Tx, eventID int) (map[string]EventSegmentRecord, error) {

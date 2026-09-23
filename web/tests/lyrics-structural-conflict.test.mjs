@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { readLyricsEditor } from "./source-surfaces.mjs";
+
+
 test("LyricsEditor turns malformed synced Yjs state into a terminal read-only conflict", async () => {
   const [editor, banner, css] = await Promise.all([
-    readFile(new URL("../src/components/LyricsEditor.tsx", import.meta.url), "utf8"),
+    readLyricsEditor(),
     readFile(new URL("../src/components/lyrics/LyricsCollaborationBanner.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/app/globals.css", import.meta.url), "utf8"),
   ]);

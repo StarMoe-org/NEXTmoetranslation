@@ -560,238 +560,14 @@ func (s *Store) exportLyricsContentSnapshot(ctx context.Context, afterDocuments 
 			FROM song_lyrics_rendition_side_translation_lines
 			ORDER BY document_id,rendition_key,side,locale,position`
 	}
-	queries := []struct {
-		query string
-		scan  func(*sql.Rows) error
-	}{
-		{`SELECT music_id, title_ja, title_zh, title_en, jacket_url, newly_written, updated_at, producer_metadata,
-			lyricist, composer, arranger, assetbundle_name, version_hint, lyrics_version,
-			lyrics_evidence_presence_json, vocal_signals_json, lyrics_catalog_fingerprint, lyrics_catalog_policy_version
-			FROM catalog_music ORDER BY music_id`, func(rows *sql.Rows) error {
-			var record CatalogMusicBackupRecord
-			var presenceJSON, vocalsJSON string
-			if err := rows.Scan(&record.MusicID, &record.TitleJA, &record.TitleZH, &record.TitleEN, &record.JacketURL,
-				&record.NewlyWritten, &record.UpdatedAt, &record.ProducerMetadata, &record.Lyricist, &record.Composer,
-				&record.Arranger, &record.AssetbundleName, &record.VersionHint, &record.LyricsVersion, &presenceJSON,
-				&vocalsJSON, &record.LyricsCatalogFingerprint, &record.LyricsCatalogPolicyVersion); err != nil {
-				return err
-			}
-			if err := json.Unmarshal([]byte(presenceJSON), &record.LyricsEvidencePresence); err != nil {
-				return err
-			}
-			if err := json.Unmarshal([]byte(vocalsJSON), &record.Vocals); err != nil {
-				return err
-			}
-			result.Music = append(result.Music, record)
-			return nil
-		}},
-		{`SELECT performer_id, name_ja, name_zh, name_en, updated_at FROM catalog_performers ORDER BY performer_id`, func(rows *sql.Rows) error {
-			var record CatalogPerformerBackupRecord
-			if err := rows.Scan(&record.PerformerID, &record.NameJA, &record.NameZH, &record.NameEN, &record.UpdatedAt); err != nil {
-				return err
-			}
-			result.Performers = append(result.Performers, record)
-			return nil
-		}},
-		{`SELECT music_id, revision, updated_at, updated_by, attribution, translation_credit, proofreading_credit,
-			source_note, source_url, license_note, source_hash, source_page_id, source_revision_id, source_sha1,
-			source_fetched_at, source_fetched_at_rfc3339 FROM song_lyrics ORDER BY music_id`, func(rows *sql.Rows) error {
-			var record LyricsDocumentBackupRecord
-			if err := rows.Scan(&record.MusicID, &record.Revision, &record.UpdatedAt, &record.UpdatedBy,
-				&record.Attribution, &record.TranslationCredit, &record.ProofreadingCredit,
-				&record.SourceNote, &record.SourceURL, &record.LicenseNote, &record.SourceHash,
-				&record.SourcePageID, &record.SourceRevisionID, &record.SourceSHA1, &record.SourceFetchedAt,
-				&record.SourceFetchedAtRFC3339); err != nil {
-				return err
-			}
-			result.Documents = append(result.Documents, record)
-			return nil
-		}},
-		{`SELECT music_id, line_id, position, japanese, zh_cn, en_us, stanza_break_before FROM song_lyric_lines ORDER BY music_id, position`, func(rows *sql.Rows) error {
-			var record LyricsLineBackupRecord
-			if err := rows.Scan(&record.MusicID, &record.LineID, &record.Position, &record.Japanese, &record.Chinese, &record.English, &record.StanzaBreakBefore); err != nil {
-				return err
-			}
-			result.Lines = append(result.Lines, record)
-			return nil
-		}},
-		{`SELECT music_id, line_id, position, text, performer_ids_json, ruby_json FROM song_lyric_segments ORDER BY music_id, line_id, position`, func(rows *sql.Rows) error {
-			var record LyricsSegmentBackupRecord
-			if err := rows.Scan(&record.MusicID, &record.LineID, &record.Position, &record.Text, &record.PerformerIDsJSON, &record.RubyJSON); err != nil {
-				return err
-			}
-			result.Segments = append(result.Segments, record)
-			return nil
-		}},
-		{`SELECT music_id, revision, updated_at, payload_json FROM song_lyrics_publications ORDER BY music_id`, func(rows *sql.Rows) error {
-			var record LyricsPublicationBackupRecord
-			if err := rows.Scan(&record.MusicID, &record.Revision, &record.UpdatedAt, &record.PayloadJSON); err != nil {
-				return err
-			}
-			result.Publications = append(result.Publications, record)
-			return nil
-		}},
-		{`SELECT music_id, withdrawn_at, withdrawn_by FROM song_lyrics_public_withdrawals ORDER BY music_id`, func(rows *sql.Rows) error {
-			var record LyricsPublicWithdrawalBackupRecord
-			if err := rows.Scan(&record.MusicID, &record.WithdrawnAt, &record.WithdrawnBy); err != nil {
-				return err
-			}
-			result.PublicWithdrawals = append(result.PublicWithdrawals, record)
-			return nil
-		}},
-		{`SELECT document_id,music_id,schema_version,reason_code,document_json,document_sha256,manifest_batch_sha256,created_at
-			FROM song_lyrics_source_documents ORDER BY music_id`, func(rows *sql.Rows) error {
-			var record LyricsSourceDocumentBackupRecord
-			if err := rows.Scan(&record.DocumentID, &record.MusicID, &record.SchemaVersion, &record.ReasonCode,
-				&record.DocumentJSON, &record.DocumentSHA256, &record.ManifestBatchSHA256, &record.CreatedAt); err != nil {
-				return err
-			}
-			result.SourceDocuments = append(result.SourceDocuments, record)
-			return nil
-		}},
-		{`SELECT document_id,provider,rendition_key,origin,page_id,revision_id,revision_timestamp,
-			mediawiki_sha1,page_title,canonical_revision_url,fetched_at,categories_json,section,
-			composition_rendition_key,version_reason,index_evidence_refs_json,fixed_identity_json,
-			fixed_identity_sha256,raw_byte_count,raw_wikitext_sha256,artifact_sha256
-			FROM song_lyrics_source_artifacts ORDER BY document_id,rendition_key`, func(rows *sql.Rows) error {
-			var record LyricsSourceArtifactBackupRecord
-			if err := rows.Scan(&record.DocumentID, &record.Provider, &record.RenditionKey, &record.Origin,
-				&record.PageID, &record.RevisionID, &record.RevisionTimestamp, &record.MediaWikiSHA1, &record.PageTitle,
-				&record.CanonicalRevisionURL, &record.FetchedAt, &record.CategoriesJSON, &record.Section,
-				&record.CompositionRenditionKey, &record.VersionReason, &record.IndexEvidenceRefsJSON,
-				&record.FixedIdentityJSON, &record.FixedIdentitySHA256,
-				&record.RawByteCount, &record.RawWikitextSHA256, &record.ArtifactSHA256); err != nil {
-				return err
-			}
-			result.SourceArtifacts = append(result.SourceArtifacts, record)
-			return nil
-		}},
-		{`SELECT evidence.provider,evidence.evidence_id,evidence.sha256,evidence.kind,evidence.origin,
-			evidence.page_id,evidence.revision_id,evidence.revision_timestamp,evidence.mediawiki_sha1,evidence.page_title,
-			evidence.canonical_revision_url,evidence.categories_json,evidence.canonical_request_url,
-			evidence.fetched_at,evidence.raw_bytes,evidence.raw_byte_count,evidence.raw_sha256,evidence.created_at
-			FROM lyrics_source_index_evidence evidence
-			WHERE EXISTS (
-				SELECT 1 FROM song_lyrics_source_artifact_index_evidence link
-				WHERE link.provider=evidence.provider AND link.evidence_id=evidence.evidence_id
-				  AND link.sha256=evidence.sha256
-			)
-			ORDER BY evidence.provider,evidence.evidence_id`, func(rows *sql.Rows) error {
-			var record LyricsSourceIndexEvidenceBackupRecord
-			var pageID, revisionID sql.NullInt64
-			if err := rows.Scan(&record.Provider, &record.EvidenceID, &record.SHA256, &record.Kind, &record.Origin,
-				&pageID, &revisionID, &record.RevisionTimestamp, &record.MediaWikiSHA1, &record.PageTitle,
-				&record.CanonicalRevisionURL, &record.CategoriesJSON, &record.CanonicalRequestURL, &record.FetchedAt,
-				&record.RawBytes, &record.RawByteCount, &record.RawSHA256, &record.CreatedAt); err != nil {
-				return err
-			}
-			if pageID.Valid {
-				record.PageID = int(pageID.Int64)
-			}
-			if revisionID.Valid {
-				record.RevisionID = int(revisionID.Int64)
-			}
-			record.RawBytes = append([]byte(nil), record.RawBytes...)
-			revisionTimestamp, err := contentBackupEvidenceRevisionTimestamp(record.Provider, record.Kind, record.RawBytes)
-			if err != nil || record.RevisionTimestamp != revisionTimestamp {
-				return fmt.Errorf("lyrics source index evidence %s/%s revision timestamp does not match exact raw evidence", record.Provider, record.EvidenceID)
-			}
-			result.SourceIndexEvidence = append(result.SourceIndexEvidence, record)
-			return nil
-		}},
-		{`SELECT document_id,rendition_key,position,provider,evidence_id,sha256
-			FROM song_lyrics_source_artifact_index_evidence ORDER BY document_id,rendition_key,position`, func(rows *sql.Rows) error {
-			var record LyricsSourceArtifactEvidenceBackupRecord
-			if err := rows.Scan(&record.DocumentID, &record.RenditionKey, &record.Position, &record.Provider,
-				&record.EvidenceID, &record.SHA256); err != nil {
-				return err
-			}
-			result.SourceArtifactEvidence = append(result.SourceArtifactEvidence, record)
-			return nil
-		}},
-		{`SELECT document_id,component,rendition_key,contribution_sha256
-			FROM song_lyrics_component_contributions ORDER BY document_id,component`, func(rows *sql.Rows) error {
-			var record LyricsSourceContributionBackupRecord
-			if err := rows.Scan(&record.DocumentID, &record.Component, &record.RenditionKey, &record.ContributionSHA256); err != nil {
-				return err
-			}
-			result.SourceContributions = append(result.SourceContributions, record)
-			return nil
-		}},
-		{`SELECT document_id,rendition_key,locale,translation_credit,proofreading_credit,updated_at,updated_by,revision
-			FROM song_lyrics_rendition_localizations ORDER BY document_id,rendition_key,locale`, func(rows *sql.Rows) error {
-			var record LyricsRenditionLocalizationBackupRecord
-			if err := rows.Scan(&record.DocumentID, &record.RenditionKey, &record.Locale,
-				&record.TranslationCredit, &record.ProofreadingCredit, &record.UpdatedAt, &record.UpdatedBy, &record.Revision); err != nil {
-				return err
-			}
-			result.RenditionLocalizations = append(result.RenditionLocalizations, record)
-			return nil
-		}},
-		{translationLinesQuery, func(rows *sql.Rows) error {
-			var record LyricsRenditionTranslationLineBackupRecord
-			if err := rows.Scan(&record.DocumentID, &record.RenditionKey, &record.Side, &record.Locale, &record.Position, &record.Text); err != nil {
-				return err
-			}
-			result.RenditionTranslationLines = append(result.RenditionTranslationLines, record)
-			return nil
-		}},
-	}
+	queries := catalogBackupExportQueries(&result)
+	queries = append(queries, lyricsDocumentBackupExportQueries(&result, afterDocuments)...)
+	queries = append(queries, lyricsSourceBackupExportQueries(&result)...)
+	queries = append(queries, lyricsRenditionBackupExportQueries(&result, translationLinesQuery)...)
 	if hasTranslationEditionSchema == 1 {
-		queries = append(queries,
-			struct {
-				query string
-				scan  func(*sql.Rows) error
-			}{`SELECT document_id,default_edition_key,revision,updated_at,updated_by
-				FROM song_lyrics_translation_edition_state ORDER BY document_id`, func(rows *sql.Rows) error {
-				var record LyricsTranslationEditionStateBackupRecord
-				if err := rows.Scan(&record.DocumentID, &record.DefaultEditionKey, &record.Revision, &record.UpdatedAt, &record.UpdatedBy); err != nil {
-					return err
-				}
-				result.TranslationEditionStates = append(result.TranslationEditionStates, record)
-				return nil
-			}},
-			struct {
-				query string
-				scan  func(*sql.Rows) error
-			}{`SELECT document_id,edition_key,label,created_at,created_by
-				FROM song_lyrics_translation_editions ORDER BY document_id,edition_key`, func(rows *sql.Rows) error {
-				var record LyricsTranslationEditionBackupRecord
-				if err := rows.Scan(&record.DocumentID, &record.EditionKey, &record.Label, &record.CreatedAt, &record.CreatedBy); err != nil {
-					return err
-				}
-				result.TranslationEditions = append(result.TranslationEditions, record)
-				return nil
-			}},
-			struct {
-				query string
-				scan  func(*sql.Rows) error
-			}{`SELECT document_id,edition_key,rendition_key,locale,translation_credit,proofreading_credit,updated_at,updated_by
-				FROM song_lyrics_translation_edition_localizations ORDER BY document_id,edition_key,rendition_key,locale`, func(rows *sql.Rows) error {
-				var record LyricsTranslationEditionLocalizationBackupRecord
-				if err := rows.Scan(&record.DocumentID, &record.EditionKey, &record.RenditionKey, &record.Locale,
-					&record.TranslationCredit, &record.ProofreadingCredit, &record.UpdatedAt, &record.UpdatedBy); err != nil {
-					return err
-				}
-				result.TranslationEditionLocalizations = append(result.TranslationEditionLocalizations, record)
-				return nil
-			}},
-			struct {
-				query string
-				scan  func(*sql.Rows) error
-			}{`SELECT document_id,edition_key,rendition_key,side,locale,position,text
-				FROM song_lyrics_translation_edition_lines ORDER BY document_id,edition_key,rendition_key,side,locale,position`, func(rows *sql.Rows) error {
-				var record LyricsTranslationEditionLineBackupRecord
-				if err := rows.Scan(&record.DocumentID, &record.EditionKey, &record.RenditionKey, &record.Side,
-					&record.Locale, &record.Position, &record.Text); err != nil {
-					return err
-				}
-				result.TranslationEditionLines = append(result.TranslationEditionLines, record)
-				return nil
-			}},
-		)
+		queries = append(queries, lyricsTranslationEditionBackupExportQueries(&result)...)
 	}
-	for queryIndex, item := range queries {
+	for _, item := range queries {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
@@ -816,8 +592,8 @@ func (s *Store) exportLyricsContentSnapshot(ctx context.Context, afterDocuments 
 		if err := rows.Close(); err != nil {
 			return result, err
 		}
-		if queryIndex == 2 && afterDocuments != nil {
-			afterDocuments()
+		if item.afterRows != nil {
+			item.afterRows()
 		}
 	}
 	if err := exportRecoveryLyricsContentTx(ctx, tx, &result); err != nil {
@@ -849,6 +625,249 @@ func (s *Store) exportLyricsContentSnapshot(ctx context.Context, afterDocuments 
 	return result, nil
 }
 
+// lyricsBackupExportQuery is one ordered read of the lyrics backup snapshot.
+// afterRows runs once the query's rows are consumed, inside the same snapshot.
+type lyricsBackupExportQuery struct {
+	query     string
+	scan      func(*sql.Rows) error
+	afterRows func()
+}
+
+func catalogBackupExportQueries(result *LyricsContentExport) []lyricsBackupExportQuery {
+	return []lyricsBackupExportQuery{
+		{query: `SELECT music_id, title_ja, title_zh, title_en, jacket_url, newly_written, updated_at, producer_metadata,
+			lyricist, composer, arranger, assetbundle_name, version_hint, lyrics_version,
+			lyrics_evidence_presence_json, vocal_signals_json, lyrics_catalog_fingerprint, lyrics_catalog_policy_version
+			FROM catalog_music ORDER BY music_id`, scan: func(rows *sql.Rows) error {
+			var record CatalogMusicBackupRecord
+			var presenceJSON, vocalsJSON string
+			if err := rows.Scan(&record.MusicID, &record.TitleJA, &record.TitleZH, &record.TitleEN, &record.JacketURL,
+				&record.NewlyWritten, &record.UpdatedAt, &record.ProducerMetadata, &record.Lyricist, &record.Composer,
+				&record.Arranger, &record.AssetbundleName, &record.VersionHint, &record.LyricsVersion, &presenceJSON,
+				&vocalsJSON, &record.LyricsCatalogFingerprint, &record.LyricsCatalogPolicyVersion); err != nil {
+				return err
+			}
+			if err := json.Unmarshal([]byte(presenceJSON), &record.LyricsEvidencePresence); err != nil {
+				return err
+			}
+			if err := json.Unmarshal([]byte(vocalsJSON), &record.Vocals); err != nil {
+				return err
+			}
+			result.Music = append(result.Music, record)
+			return nil
+		}},
+		{query: `SELECT performer_id, name_ja, name_zh, name_en, updated_at FROM catalog_performers ORDER BY performer_id`, scan: func(rows *sql.Rows) error {
+			var record CatalogPerformerBackupRecord
+			if err := rows.Scan(&record.PerformerID, &record.NameJA, &record.NameZH, &record.NameEN, &record.UpdatedAt); err != nil {
+				return err
+			}
+			result.Performers = append(result.Performers, record)
+			return nil
+		}},
+	}
+}
+
+func lyricsDocumentBackupExportQueries(result *LyricsContentExport, afterDocuments func()) []lyricsBackupExportQuery {
+	return []lyricsBackupExportQuery{
+		{query: `SELECT music_id, revision, updated_at, updated_by, attribution, translation_credit, proofreading_credit,
+			source_note, source_url, license_note, source_hash, source_page_id, source_revision_id, source_sha1,
+			source_fetched_at, source_fetched_at_rfc3339 FROM song_lyrics ORDER BY music_id`, scan: func(rows *sql.Rows) error {
+			var record LyricsDocumentBackupRecord
+			if err := rows.Scan(&record.MusicID, &record.Revision, &record.UpdatedAt, &record.UpdatedBy,
+				&record.Attribution, &record.TranslationCredit, &record.ProofreadingCredit,
+				&record.SourceNote, &record.SourceURL, &record.LicenseNote, &record.SourceHash,
+				&record.SourcePageID, &record.SourceRevisionID, &record.SourceSHA1, &record.SourceFetchedAt,
+				&record.SourceFetchedAtRFC3339); err != nil {
+				return err
+			}
+			result.Documents = append(result.Documents, record)
+			return nil
+		}, afterRows: afterDocuments},
+		{query: `SELECT music_id, line_id, position, japanese, zh_cn, en_us, stanza_break_before FROM song_lyric_lines ORDER BY music_id, position`, scan: func(rows *sql.Rows) error {
+			var record LyricsLineBackupRecord
+			if err := rows.Scan(&record.MusicID, &record.LineID, &record.Position, &record.Japanese, &record.Chinese, &record.English, &record.StanzaBreakBefore); err != nil {
+				return err
+			}
+			result.Lines = append(result.Lines, record)
+			return nil
+		}},
+		{query: `SELECT music_id, line_id, position, text, performer_ids_json, ruby_json FROM song_lyric_segments ORDER BY music_id, line_id, position`, scan: func(rows *sql.Rows) error {
+			var record LyricsSegmentBackupRecord
+			if err := rows.Scan(&record.MusicID, &record.LineID, &record.Position, &record.Text, &record.PerformerIDsJSON, &record.RubyJSON); err != nil {
+				return err
+			}
+			result.Segments = append(result.Segments, record)
+			return nil
+		}},
+		{query: `SELECT music_id, revision, updated_at, payload_json FROM song_lyrics_publications ORDER BY music_id`, scan: func(rows *sql.Rows) error {
+			var record LyricsPublicationBackupRecord
+			if err := rows.Scan(&record.MusicID, &record.Revision, &record.UpdatedAt, &record.PayloadJSON); err != nil {
+				return err
+			}
+			result.Publications = append(result.Publications, record)
+			return nil
+		}},
+		{query: `SELECT music_id, withdrawn_at, withdrawn_by FROM song_lyrics_public_withdrawals ORDER BY music_id`, scan: func(rows *sql.Rows) error {
+			var record LyricsPublicWithdrawalBackupRecord
+			if err := rows.Scan(&record.MusicID, &record.WithdrawnAt, &record.WithdrawnBy); err != nil {
+				return err
+			}
+			result.PublicWithdrawals = append(result.PublicWithdrawals, record)
+			return nil
+		}},
+	}
+}
+
+func lyricsSourceBackupExportQueries(result *LyricsContentExport) []lyricsBackupExportQuery {
+	return []lyricsBackupExportQuery{
+		{query: `SELECT document_id,music_id,schema_version,reason_code,document_json,document_sha256,manifest_batch_sha256,created_at
+			FROM song_lyrics_source_documents ORDER BY music_id`, scan: func(rows *sql.Rows) error {
+			var record LyricsSourceDocumentBackupRecord
+			if err := rows.Scan(&record.DocumentID, &record.MusicID, &record.SchemaVersion, &record.ReasonCode,
+				&record.DocumentJSON, &record.DocumentSHA256, &record.ManifestBatchSHA256, &record.CreatedAt); err != nil {
+				return err
+			}
+			result.SourceDocuments = append(result.SourceDocuments, record)
+			return nil
+		}},
+		{query: `SELECT document_id,provider,rendition_key,origin,page_id,revision_id,revision_timestamp,
+			mediawiki_sha1,page_title,canonical_revision_url,fetched_at,categories_json,section,
+			composition_rendition_key,version_reason,index_evidence_refs_json,fixed_identity_json,
+			fixed_identity_sha256,raw_byte_count,raw_wikitext_sha256,artifact_sha256
+			FROM song_lyrics_source_artifacts ORDER BY document_id,rendition_key`, scan: func(rows *sql.Rows) error {
+			var record LyricsSourceArtifactBackupRecord
+			if err := rows.Scan(&record.DocumentID, &record.Provider, &record.RenditionKey, &record.Origin,
+				&record.PageID, &record.RevisionID, &record.RevisionTimestamp, &record.MediaWikiSHA1, &record.PageTitle,
+				&record.CanonicalRevisionURL, &record.FetchedAt, &record.CategoriesJSON, &record.Section,
+				&record.CompositionRenditionKey, &record.VersionReason, &record.IndexEvidenceRefsJSON,
+				&record.FixedIdentityJSON, &record.FixedIdentitySHA256,
+				&record.RawByteCount, &record.RawWikitextSHA256, &record.ArtifactSHA256); err != nil {
+				return err
+			}
+			result.SourceArtifacts = append(result.SourceArtifacts, record)
+			return nil
+		}},
+		{query: `SELECT evidence.provider,evidence.evidence_id,evidence.sha256,evidence.kind,evidence.origin,
+			evidence.page_id,evidence.revision_id,evidence.revision_timestamp,evidence.mediawiki_sha1,evidence.page_title,
+			evidence.canonical_revision_url,evidence.categories_json,evidence.canonical_request_url,
+			evidence.fetched_at,evidence.raw_bytes,evidence.raw_byte_count,evidence.raw_sha256,evidence.created_at
+			FROM lyrics_source_index_evidence evidence
+			WHERE EXISTS (
+				SELECT 1 FROM song_lyrics_source_artifact_index_evidence link
+				WHERE link.provider=evidence.provider AND link.evidence_id=evidence.evidence_id
+				  AND link.sha256=evidence.sha256
+			)
+			ORDER BY evidence.provider,evidence.evidence_id`, scan: func(rows *sql.Rows) error {
+			var record LyricsSourceIndexEvidenceBackupRecord
+			var pageID, revisionID sql.NullInt64
+			if err := rows.Scan(&record.Provider, &record.EvidenceID, &record.SHA256, &record.Kind, &record.Origin,
+				&pageID, &revisionID, &record.RevisionTimestamp, &record.MediaWikiSHA1, &record.PageTitle,
+				&record.CanonicalRevisionURL, &record.CategoriesJSON, &record.CanonicalRequestURL, &record.FetchedAt,
+				&record.RawBytes, &record.RawByteCount, &record.RawSHA256, &record.CreatedAt); err != nil {
+				return err
+			}
+			if pageID.Valid {
+				record.PageID = int(pageID.Int64)
+			}
+			if revisionID.Valid {
+				record.RevisionID = int(revisionID.Int64)
+			}
+			record.RawBytes = append([]byte(nil), record.RawBytes...)
+			revisionTimestamp, err := contentBackupEvidenceRevisionTimestamp(record.Provider, record.Kind, record.RawBytes)
+			if err != nil || record.RevisionTimestamp != revisionTimestamp {
+				return fmt.Errorf("lyrics source index evidence %s/%s revision timestamp does not match exact raw evidence", record.Provider, record.EvidenceID)
+			}
+			result.SourceIndexEvidence = append(result.SourceIndexEvidence, record)
+			return nil
+		}},
+		{query: `SELECT document_id,rendition_key,position,provider,evidence_id,sha256
+			FROM song_lyrics_source_artifact_index_evidence ORDER BY document_id,rendition_key,position`, scan: func(rows *sql.Rows) error {
+			var record LyricsSourceArtifactEvidenceBackupRecord
+			if err := rows.Scan(&record.DocumentID, &record.RenditionKey, &record.Position, &record.Provider,
+				&record.EvidenceID, &record.SHA256); err != nil {
+				return err
+			}
+			result.SourceArtifactEvidence = append(result.SourceArtifactEvidence, record)
+			return nil
+		}},
+		{query: `SELECT document_id,component,rendition_key,contribution_sha256
+			FROM song_lyrics_component_contributions ORDER BY document_id,component`, scan: func(rows *sql.Rows) error {
+			var record LyricsSourceContributionBackupRecord
+			if err := rows.Scan(&record.DocumentID, &record.Component, &record.RenditionKey, &record.ContributionSHA256); err != nil {
+				return err
+			}
+			result.SourceContributions = append(result.SourceContributions, record)
+			return nil
+		}},
+	}
+}
+
+func lyricsRenditionBackupExportQueries(result *LyricsContentExport, translationLinesQuery string) []lyricsBackupExportQuery {
+	return []lyricsBackupExportQuery{
+		{query: `SELECT document_id,rendition_key,locale,translation_credit,proofreading_credit,updated_at,updated_by,revision
+			FROM song_lyrics_rendition_localizations ORDER BY document_id,rendition_key,locale`, scan: func(rows *sql.Rows) error {
+			var record LyricsRenditionLocalizationBackupRecord
+			if err := rows.Scan(&record.DocumentID, &record.RenditionKey, &record.Locale,
+				&record.TranslationCredit, &record.ProofreadingCredit, &record.UpdatedAt, &record.UpdatedBy, &record.Revision); err != nil {
+				return err
+			}
+			result.RenditionLocalizations = append(result.RenditionLocalizations, record)
+			return nil
+		}},
+		{query: translationLinesQuery, scan: func(rows *sql.Rows) error {
+			var record LyricsRenditionTranslationLineBackupRecord
+			if err := rows.Scan(&record.DocumentID, &record.RenditionKey, &record.Side, &record.Locale, &record.Position, &record.Text); err != nil {
+				return err
+			}
+			result.RenditionTranslationLines = append(result.RenditionTranslationLines, record)
+			return nil
+		}},
+	}
+}
+
+func lyricsTranslationEditionBackupExportQueries(result *LyricsContentExport) []lyricsBackupExportQuery {
+	return []lyricsBackupExportQuery{
+		{query: `SELECT document_id,default_edition_key,revision,updated_at,updated_by
+				FROM song_lyrics_translation_edition_state ORDER BY document_id`, scan: func(rows *sql.Rows) error {
+			var record LyricsTranslationEditionStateBackupRecord
+			if err := rows.Scan(&record.DocumentID, &record.DefaultEditionKey, &record.Revision, &record.UpdatedAt, &record.UpdatedBy); err != nil {
+				return err
+			}
+			result.TranslationEditionStates = append(result.TranslationEditionStates, record)
+			return nil
+		}},
+		{query: `SELECT document_id,edition_key,label,created_at,created_by
+				FROM song_lyrics_translation_editions ORDER BY document_id,edition_key`, scan: func(rows *sql.Rows) error {
+			var record LyricsTranslationEditionBackupRecord
+			if err := rows.Scan(&record.DocumentID, &record.EditionKey, &record.Label, &record.CreatedAt, &record.CreatedBy); err != nil {
+				return err
+			}
+			result.TranslationEditions = append(result.TranslationEditions, record)
+			return nil
+		}},
+		{query: `SELECT document_id,edition_key,rendition_key,locale,translation_credit,proofreading_credit,updated_at,updated_by
+				FROM song_lyrics_translation_edition_localizations ORDER BY document_id,edition_key,rendition_key,locale`, scan: func(rows *sql.Rows) error {
+			var record LyricsTranslationEditionLocalizationBackupRecord
+			if err := rows.Scan(&record.DocumentID, &record.EditionKey, &record.RenditionKey, &record.Locale,
+				&record.TranslationCredit, &record.ProofreadingCredit, &record.UpdatedAt, &record.UpdatedBy); err != nil {
+				return err
+			}
+			result.TranslationEditionLocalizations = append(result.TranslationEditionLocalizations, record)
+			return nil
+		}},
+		{query: `SELECT document_id,edition_key,rendition_key,side,locale,position,text
+				FROM song_lyrics_translation_edition_lines ORDER BY document_id,edition_key,rendition_key,side,locale,position`, scan: func(rows *sql.Rows) error {
+			var record LyricsTranslationEditionLineBackupRecord
+			if err := rows.Scan(&record.DocumentID, &record.EditionKey, &record.RenditionKey, &record.Side,
+				&record.Locale, &record.Position, &record.Text); err != nil {
+				return err
+			}
+			result.TranslationEditionLines = append(result.TranslationEditionLines, record)
+			return nil
+		}},
+	}
+}
+
 func (s *Store) ImportTranslationContent(entries []EntryLocalizationRecord, events EventContentExport, lyrics LyricsContentExport) error {
 	return s.ImportTranslationContentContext(context.Background(), entries, events, lyrics)
 }
@@ -878,6 +897,67 @@ func (s *Store) ImportTranslationContentContext(ctx context.Context, entries []E
 }
 
 func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []EntryLocalizationRecord, events EventContentExport, lyrics LyricsContentExport) error {
+	catalogPerformers, err := restoredLyricsPerformerAliases(ctx, lyrics)
+	if err != nil {
+		return err
+	}
+	musicIDs, err := validateRestoredLyricsCatalog(ctx, &lyrics)
+	if err != nil {
+		return err
+	}
+	documentIDs, documentRevisions, err := validateRestoredLyricsDocumentIdentity(ctx, lyrics, catalogPerformers.validIDs, musicIDs)
+	if err != nil {
+		return err
+	}
+	if err := canonicalizeRestoredLyricsPublications(ctx, &lyrics, catalogPerformers, documentIDs, documentRevisions); err != nil {
+		return err
+	}
+	if err := validateRestoredEventContentTx(ctx, tx, events); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := deleteReplacedTranslationContentTx(ctx, tx); err != nil {
+		return err
+	}
+	if err := importEntryLocalizationRowsTx(ctx, tx, entries); err != nil {
+		return err
+	}
+	if err := importEventContentRowsTx(ctx, tx, events); err != nil {
+		return err
+	}
+	if err := importLyricsCatalogRowsTx(ctx, tx, lyrics); err != nil {
+		return err
+	}
+	if err := importLyricsDocumentRowsTx(ctx, tx, lyrics); err != nil {
+		return err
+	}
+	if err := importLyricsRenditionRowsTx(ctx, tx, lyrics); err != nil {
+		return err
+	}
+	if err := importLyricsTranslationEditionRowsTx(ctx, tx, lyrics); err != nil {
+		return err
+	}
+	if err := importLyricsSourceGraphRowsTx(ctx, tx, lyrics); err != nil {
+		return err
+	}
+	if err := restoreLyricsRecoveryContentTx(ctx, tx, lyrics); err != nil {
+		return err
+	}
+	if err := importLyricsLineRowsTx(ctx, tx, lyrics); err != nil {
+		return err
+	}
+	if err := importLyricsPublicationRowsTx(ctx, tx, lyrics); err != nil {
+		return err
+	}
+	if err := supersedeStalePendingLyricsSourceReviewsTx(ctx, tx, time.Now().UTC()); err != nil {
+		return err
+	}
+	return restoreLyricsSourceDocumentDeleteGuardsTx(ctx, tx)
+}
+
+func restoredLyricsPerformerAliases(ctx context.Context, lyrics LyricsContentExport) (catalogPerformerAliases, error) {
 	catalogPerformers := newCatalogPerformerAliases()
 	sortedPerformers := append([]CatalogPerformerBackupRecord(nil), lyrics.Performers...)
 	sort.Slice(sortedPerformers, func(left, right int) bool {
@@ -885,52 +965,68 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 	})
 	for _, performer := range sortedPerformers {
 		if err := ctx.Err(); err != nil {
-			return err
+			return catalogPerformers, err
 		}
 		if performer.PerformerID <= 0 || catalogPerformers.validIDs[performer.PerformerID] {
-			return fmt.Errorf("lyrics performer %d is invalid or duplicated", performer.PerformerID)
+			return catalogPerformers, fmt.Errorf("lyrics performer %d is invalid or duplicated", performer.PerformerID)
 		}
 		addCatalogPerformerAliases(&catalogPerformers, performer.PerformerID,
 			performer.NameJA, performer.NameZH, performer.NameEN)
 	}
 	addCanonicalLyricsSourcePerformerAliases(&catalogPerformers)
 	if err := addAuditedExternalLyricsPerformerAliases(&catalogPerformers); err != nil {
-		return err
+		return catalogPerformers, err
 	}
-	performerIDs := catalogPerformers.validIDs
+	return catalogPerformers, nil
+}
+
+func validateRestoredLyricsCatalog(ctx context.Context, lyrics *LyricsContentExport) (map[int]bool, error) {
 	musicIDs := make(map[int]bool, len(lyrics.Music))
 	for index := range lyrics.Music {
 		music := &lyrics.Music[index]
 		if music.MusicID <= 0 || musicIDs[music.MusicID] {
-			return fmt.Errorf("lyrics catalog music %d is invalid or duplicated", music.MusicID)
+			return nil, fmt.Errorf("lyrics catalog music %d is invalid or duplicated", music.MusicID)
 		}
 		if err := canonicalizeCatalogMusicBackupRecord(music); err != nil {
-			return fmt.Errorf("lyrics catalog music %d: %w", music.MusicID, err)
+			return nil, fmt.Errorf("lyrics catalog music %d: %w", music.MusicID, err)
 		}
 		musicIDs[music.MusicID] = true
 	}
+	return musicIDs, nil
+}
+
+func validateRestoredLyricsDocumentIdentity(ctx context.Context, lyrics LyricsContentExport,
+	performerIDs map[int]bool, musicIDs map[int]bool,
+) (map[int]bool, map[int]int, error) {
 	documentIDs := make(map[int]bool, len(lyrics.Documents))
 	documentRevisions := make(map[int]int, len(lyrics.Documents))
 	for _, document := range lyrics.Documents {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, nil, err
 		}
 		if !musicIDs[document.MusicID] || document.Revision <= 0 || document.UpdatedAt < 0 || documentIDs[document.MusicID] {
-			return fmt.Errorf("lyrics document %d has invalid identity or metadata", document.MusicID)
+			return nil, nil, fmt.Errorf("lyrics document %d has invalid identity or metadata", document.MusicID)
 		}
 		documentIDs[document.MusicID] = true
 		documentRevisions[document.MusicID] = document.Revision
 	}
 	if err := validateRestoredLyricsDocuments(lyrics, performerIDs, documentIDs); err != nil {
-		return err
+		return nil, nil, err
 	}
 	if err := validateRestoredLyricsSourceProvenance(lyrics, documentIDs); err != nil {
-		return err
+		return nil, nil, err
 	}
 	if err := validateRestoredLyricsRecoveryProvenance(lyrics, documentIDs, musicIDs); err != nil {
-		return err
+		return nil, nil, err
 	}
-	sourceBundles, err := restoredPublicLyricsSourceBundles(lyrics)
+	return documentIDs, documentRevisions, nil
+}
+
+func canonicalizeRestoredLyricsPublications(ctx context.Context, lyrics *LyricsContentExport,
+	catalogPerformers catalogPerformerAliases, documentIDs map[int]bool, documentRevisions map[int]int,
+) error {
+	performerIDs := catalogPerformers.validIDs
+	sourceBundles, err := restoredPublicLyricsSourceBundles(*lyrics)
 	if err != nil {
 		return err
 	}
@@ -952,6 +1048,10 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 			return err
 		}
 	}
+	return nil
+}
+
+func validateRestoredEventContentTx(ctx context.Context, tx *sql.Tx, events EventContentExport) error {
 	// These side tables intentionally do not reference legacy event parents so
 	// previous binaries can keep doing replace-imports without cascading away
 	// new locale data. Restore still validates parent identity explicitly.
@@ -1003,9 +1103,12 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 	if err := validateEventContentCanonicalCoverage(events); err != nil {
 		return err
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
+	return nil
+}
+
+// deleteReplacedTranslationContentTx clears the authoritative rows the restore
+// replaces, with the immutability guards suspended for the same transaction.
+func deleteReplacedTranslationContentTx(ctx context.Context, tx *sql.Tx) error {
 	if err := suspendLyricsSourceDocumentDeleteGuardsTx(ctx, tx); err != nil {
 		return err
 	}
@@ -1046,6 +1149,10 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 	if err := restoreEmbeddedLyricsEditorSeedDeleteGuardsTx(ctx, tx); err != nil {
 		return err
 	}
+	return nil
+}
+
+func importEntryLocalizationRowsTx(ctx context.Context, tx *sql.Tx, entries []EntryLocalizationRecord) error {
 	for _, record := range entries {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1056,6 +1163,10 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 			return err
 		}
 	}
+	return nil
+}
+
+func importEventContentRowsTx(ctx context.Context, tx *sql.Tx, events EventContentExport) error {
 	for _, record := range events.Segments {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1094,6 +1205,10 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 			return err
 		}
 	}
+	return nil
+}
+
+func importLyricsCatalogRowsTx(ctx context.Context, tx *sql.Tx, lyrics LyricsContentExport) error {
 	for _, record := range lyrics.Music {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1120,6 +1235,10 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 			return err
 		}
 	}
+	return nil
+}
+
+func importLyricsDocumentRowsTx(ctx context.Context, tx *sql.Tx, lyrics LyricsContentExport) error {
 	for _, record := range lyrics.Documents {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1155,6 +1274,10 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 			return err
 		}
 	}
+	return nil
+}
+
+func importLyricsRenditionRowsTx(ctx context.Context, tx *sql.Tx, lyrics LyricsContentExport) error {
 	for _, record := range lyrics.RenditionLocalizations {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1184,6 +1307,10 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 			return err
 		}
 	}
+	return nil
+}
+
+func importLyricsTranslationEditionRowsTx(ctx context.Context, tx *sql.Tx, lyrics LyricsContentExport) error {
 	for _, record := range lyrics.TranslationEditions {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1225,6 +1352,10 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 			return err
 		}
 	}
+	return nil
+}
+
+func importLyricsSourceGraphRowsTx(ctx context.Context, tx *sql.Tx, lyrics LyricsContentExport) error {
 	for _, record := range lyrics.SourceArtifacts {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1262,9 +1393,10 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 			return err
 		}
 	}
-	if err := restoreLyricsRecoveryContentTx(ctx, tx, lyrics); err != nil {
-		return err
-	}
+	return nil
+}
+
+func importLyricsLineRowsTx(ctx context.Context, tx *sql.Tx, lyrics LyricsContentExport) error {
 	for _, record := range lyrics.Lines {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1289,6 +1421,10 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 			return err
 		}
 	}
+	return nil
+}
+
+func importLyricsPublicationRowsTx(ctx context.Context, tx *sql.Tx, lyrics LyricsContentExport) error {
 	for _, record := range lyrics.Publications {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1307,10 +1443,7 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 			return err
 		}
 	}
-	if err := supersedeStalePendingLyricsSourceReviewsTx(ctx, tx, time.Now().UTC()); err != nil {
-		return err
-	}
-	return restoreLyricsSourceDocumentDeleteGuardsTx(ctx, tx)
+	return nil
 }
 
 func suspendLyricsSourceDocumentDeleteGuardsTx(ctx context.Context, tx *sql.Tx) error {

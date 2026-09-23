@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 
-const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
+import { read, readConsoleSurface } from "./source-surfaces.mjs";
+
 const helperSource = await read("src/lib/event-story-console.ts");
 const helperCompiled = ts.transpileModule(helperSource, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
@@ -77,13 +77,14 @@ test("structural event story updates reconcile every locale while localized upda
 });
 
 test("chapter changes are local filters and use a vertical selector instead of a horizontal strip", async () => {
-  const [consoleSource, css] = await Promise.all([
-    read("src/components/Console.tsx"),
+  const [consoleSource, entriesHook, css] = await Promise.all([
+    readConsoleSurface(),
+    read("src/components/console/useConsoleEntries.ts"),
     read("src/app/globals.css"),
   ]);
-  const loadEntriesBlock = consoleSource.slice(
-    consoleSource.indexOf("const loadEntries = useCallback"),
-    consoleSource.indexOf("useEffect(() => { void loadEntries();"),
+  const loadEntriesBlock = entriesHook.slice(
+    entriesHook.indexOf("const loadEntries = useCallback"),
+    entriesHook.indexOf("useEffect(() => { void loadEntries();"),
   );
 
   assert.match(loadEntriesBlock, /listEventStoryEpisodeNos\(visible\)/);
@@ -98,11 +99,10 @@ test("chapter changes are local filters and use a vertical selector instead of a
 });
 
 test("memoized entry rows receive stable current-state selection callbacks", async () => {
-  const consoleSource = await read("src/components/Console.tsx");
-  const entryRowBlock = consoleSource.slice(
-    consoleSource.indexOf("const EntryRow = React.memo"),
-    consoleSource.indexOf("interface ChapterTab"),
-  );
+  const [consoleSource, entryRow] = await Promise.all([
+    readConsoleSurface(), read("src/components/console/EntryRow.tsx"),
+  ]);
+  const entryRowBlock = entryRow.slice(entryRow.indexOf("const EntryRow = React.memo"));
 
   assert.match(consoleSource, /const selectionStateRef = useRef\(\{ selectedKey, entryDirty, eventTxtDraftDirty \}\)/);
   assert.match(consoleSource, /const runOrGuardRef = useRef\(runOrGuard\)/);
@@ -113,14 +113,17 @@ test("memoized entry rows receive stable current-state selection callbacks", asy
 });
 
 test("event story collaboration freezes conflicting TXT drafts and reloads authoritative revisions", async () => {
-  const consoleSource = await read("src/components/Console.tsx");
-  const promoteBlock = consoleSource.slice(
-    consoleSource.indexOf("const promoteStory ="),
-    consoleSource.indexOf("const retryStory ="),
+  const [consoleSource, producerOperations, drafts] = await Promise.all([
+    readConsoleSurface(), read("src/components/console/ProducerOperationsShell.tsx"),
+    read("src/components/console/console-drafts.ts"),
+  ]);
+  const promoteBlock = producerOperations.slice(
+    producerOperations.indexOf("const promoteStory ="),
+    producerOperations.indexOf("const retryStory ="),
   );
-  const recoveryBlock = consoleSource.slice(
-    consoleSource.indexOf("function recoverEventTxtDraft"),
-    consoleSource.indexOf("function overlayEventTxtDraft"),
+  const recoveryBlock = drafts.slice(
+    drafts.indexOf("function recoverEventTxtDraft"),
+    drafts.indexOf("function overlayEventTxtDraft"),
   );
 
   assert.match(consoleSource, /findEventStoryUpdateTarget\(entries, update\)/);

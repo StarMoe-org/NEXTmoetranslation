@@ -884,6 +884,13 @@ func (s *Store) SaveLyricsRenditionMutationWithBeforeCommit(
 	return result, changed, err
 }
 
+// lyricsRenditionEditorDiff holds the requested and stored translation state
+// one save compares before it writes.
+type lyricsRenditionEditorDiff struct {
+	requested, stored           []lyricscontract.RenditionTranslation
+	requestedSides, storedSides map[string]map[string][]string
+}
+
 func (s *Store) saveLyricsRenditionMutation(
 	input LyricsRenditionDocument,
 	user string,
@@ -896,112 +903,22 @@ func (s *Store) saveLyricsRenditionMutation(
 		return LyricsRenditionDocument{}, false, nil, err
 	}
 	defer tx.Rollback()
-	bundle, err := loadLyricsRenditionEditorBundle(tx, input.MusicID)
+	bundle, selection, current, err := loadLyricsRenditionMutationTx(tx, input)
 	if err != nil {
 		return LyricsRenditionDocument{}, false, nil, err
 	}
-	selection, err := loadLyricsTranslationEditionSelection(tx, bundle, input.TranslationEditionKey, input.TranslationEditionKey != "")
-	if errors.Is(err, ErrLyricsTranslationEditionNotFound) {
-		return LyricsRenditionDocument{}, false, nil, &LyricsRenditionContractError{Code: "translation_edition_not_found"}
+	if err := validateLyricsRenditionMutationInput(&input, current); err != nil {
+		return LyricsRenditionDocument{}, false, nil, err
 	}
+	diff, err := diffLyricsRenditionEditorTranslations(input, current, selection)
 	if err != nil {
 		return LyricsRenditionDocument{}, false, nil, err
 	}
-	current, err := buildLyricsTranslationEditionDocument(bundle, selection)
+	sourceChanged, err := persistLyricsRenditionSourceDocumentTx(tx, &bundle, input)
 	if err != nil {
 		return LyricsRenditionDocument{}, false, nil, err
 	}
-	if err := normalizeLyricsTranslationEditionEnvelope(&input, current); err != nil {
-		return LyricsRenditionDocument{}, false, nil, err
-	}
-	if input.Revision != current.Revision {
-		copy := current
-		return LyricsRenditionDocument{}, false, nil, &LyricsRenditionContractError{Code: "revision_conflict", Current: &copy}
-	}
-	if err := validateLyricsRenditionImmutableEnvelope(input, current); err != nil {
-		return LyricsRenditionDocument{}, false, nil, err
-	}
-	requestedSides, requestedPeerBytes, err := lyricsRenditionEditorSideTranslations(input)
-	if err != nil {
-		return LyricsRenditionDocument{}, false, nil, err
-	}
-	storedSides, storedPeerBytes, err := lyricsRenditionEditorSideTranslations(current)
-	if err != nil {
-		return LyricsRenditionDocument{}, false, nil, err
-	}
-	requested, err := lyricsRenditionEditorTranslations(
-		input, current, selection.localization.HasRows || len(requestedSides) > 0, requestedPeerBytes, true,
-	)
-	if err != nil {
-		return LyricsRenditionDocument{}, false, nil, err
-	}
-	stored, err := lyricsRenditionEditorTranslations(
-		current, current, selection.localization.HasRows || len(storedSides) > 0, storedPeerBytes, false,
-	)
-	if err != nil {
-		return LyricsRenditionDocument{}, false, nil, err
-	}
-	sourceChanged, err := updateLyricsSourceDocumentFromEditor(&bundle.document, input)
-	if err != nil {
-		return LyricsRenditionDocument{}, false, nil, err
-	}
-	// A recovery-imported document is owned by the immutable recovery ledger:
-	// its contributions live in lyrics_recovery_import_component_contributions
-	// and its recovery item pins document_sha256. Rewriting the source layer
-	// below would leave the ledger pointing at a document that no longer
-	// exists, so only the translation layer stays editable here.
-	if sourceChanged && bundle.recoveryProvenance {
-		return LyricsRenditionDocument{}, false, nil, &LyricsRenditionContractError{
-			Code:    "source_drift",
-			Details: []string{"recovery-imported source documents are immutable; only translations are editable"},
-		}
-	}
-	if sourceChanged {
-		newDocumentJSON, err := json.Marshal(bundle.document)
-		if err != nil {
-			return LyricsRenditionDocument{}, false, nil, err
-		}
-		newDocumentDigest := sha256.Sum256(newDocumentJSON)
-		newDocumentSHA := hex.EncodeToString(newDocumentDigest[:])
-		if _, err := tx.Exec(`DROP TRIGGER IF EXISTS song_lyrics_source_documents_immutable_update`); err != nil {
-			return LyricsRenditionDocument{}, false, nil, err
-		}
-		if _, err := tx.Exec(`DROP TRIGGER IF EXISTS song_lyrics_component_contributions_immutable_update`); err != nil {
-			return LyricsRenditionDocument{}, false, nil, err
-		}
-		if _, err := tx.Exec(`UPDATE song_lyrics_source_documents
-			SET document_json=?, document_sha256=? WHERE document_id=?`,
-			string(newDocumentJSON), newDocumentSHA, bundle.documentID); err != nil {
-			return LyricsRenditionDocument{}, false, nil, err
-		}
-		expectedRefs, err := storeV3DocumentComponentRefs(bundle.document)
-		if err != nil {
-			return LyricsRenditionDocument{}, false, nil, err
-		}
-		for component, identityKey := range expectedRefs {
-			digest := sha256.Sum256([]byte(newDocumentSHA + "\x00" + component + "\x00" + identityKey))
-			sha := hex.EncodeToString(digest[:])
-			if _, err := tx.Exec(`UPDATE song_lyrics_component_contributions
-				SET contribution_sha256=? WHERE document_id=? AND component=?`, sha, bundle.documentID, component); err != nil {
-				return LyricsRenditionDocument{}, false, nil, err
-			}
-		}
-		// Reinstate the migration v27 immutability guards dropped above, in the
-		// same transaction, so the editor write is the only update they allow.
-		for _, statement := range []string{
-			`CREATE TRIGGER song_lyrics_source_documents_immutable_update BEFORE UPDATE ON song_lyrics_source_documents
-			BEGIN SELECT RAISE(ABORT, 'song lyrics source documents are immutable'); END`,
-			`CREATE TRIGGER song_lyrics_component_contributions_immutable_update
-			BEFORE UPDATE ON song_lyrics_component_contributions
-			BEGIN SELECT RAISE(ABORT, 'song lyrics component contributions are immutable'); END`,
-		} {
-			if _, err := tx.Exec(statement); err != nil {
-				return LyricsRenditionDocument{}, false, nil, err
-			}
-		}
-		bundle.documentSHA = newDocumentSHA
-	}
-	if !sourceChanged && reflect.DeepEqual(requested, stored) && equalLyricsRenditionSideTranslations(requestedSides, storedSides) {
+	if !sourceChanged && reflect.DeepEqual(diff.requested, diff.stored) && equalLyricsRenditionSideTranslations(diff.requestedSides, diff.storedSides) {
 		if beforeCommit != nil {
 			if err := beforeCommit(tx, current, false); err != nil {
 				return LyricsRenditionDocument{}, false, nil, err
@@ -1028,29 +945,7 @@ func (s *Store) saveLyricsRenditionMutation(
 		now = currentUpdatedAt
 	}
 	if selection.authoritative {
-		if err := replaceMaterializedLyricsTranslationEditionTx(tx, bundle, selection.key, input, user, now); err != nil {
-			return LyricsRenditionDocument{}, false, nil, err
-		}
-		if _, err := tx.Exec(`UPDATE song_lyrics_translation_edition_state
-			SET revision=?,updated_at=?,updated_by=? WHERE document_id=?`, nextRevision, now, user, bundle.documentID); err != nil {
-			return LyricsRenditionDocument{}, false, nil, err
-		}
-		if err := rewriteLegacyLyricsTranslationMirrorTx(tx, bundle, selection.defaultKey, nextRevision, now, user); err != nil {
-			return LyricsRenditionDocument{}, false, nil, err
-		}
-		targetsJSON, err := json.Marshal(mutationTargets)
-		if err != nil {
-			return LyricsRenditionDocument{}, false, nil, err
-		}
-		if _, err := tx.Exec(`INSERT INTO audit_log(ts,user,action,detail) VALUES (?,?,'lyrics.rendition.save',?)`,
-			now, user, fmt.Sprintf("musicId=%d revision=%d editionKey=%s targets=%s", input.MusicID, nextRevision, selection.key, targetsJSON)); err != nil {
-			return LyricsRenditionDocument{}, false, nil, err
-		}
-		nextSelection, err := loadLyricsTranslationEditionSelection(tx, bundle, selection.key, true)
-		if err != nil {
-			return LyricsRenditionDocument{}, false, nil, err
-		}
-		result, err := buildLyricsTranslationEditionDocument(bundle, nextSelection)
+		result, err := writeAuthoritativeLyricsTranslationEditionTx(tx, bundle, selection, input, user, now, nextRevision, mutationTargets)
 		if err != nil {
 			return LyricsRenditionDocument{}, false, nil, err
 		}
@@ -1065,53 +960,12 @@ func (s *Store) saveLyricsRenditionMutation(
 		s.NotifyChange()
 		return result, true, mutationTargets, nil
 	}
-	if _, err := tx.Exec(`DELETE FROM song_lyrics_rendition_translation_lines WHERE document_id=?`, bundle.documentID); err != nil {
-		return LyricsRenditionDocument{}, false, nil, err
-	}
-	if _, err := tx.Exec(`DELETE FROM song_lyrics_rendition_side_translation_lines WHERE document_id=?`, bundle.documentID); err != nil {
-		return LyricsRenditionDocument{}, false, nil, err
-	}
-	for _, item := range requested {
-		if _, err := tx.Exec(`INSERT INTO song_lyrics_rendition_localizations
-			(document_id,rendition_key,locale,translation_credit,proofreading_credit,updated_at,updated_by,revision)
-			VALUES (?,?,?,?,?,?,?,?)
-			ON CONFLICT(document_id,rendition_key,locale) DO UPDATE SET
-			translation_credit=excluded.translation_credit,proofreading_credit=excluded.proofreading_credit,
-			updated_at=excluded.updated_at,updated_by=excluded.updated_by,revision=excluded.revision`,
-			bundle.documentID, item.RenditionKey, "zh-CN", item.TranslationCredit, item.ProofreadingCredit,
-			now, user, nextRevision); err != nil {
-			return LyricsRenditionDocument{}, false, nil, err
-		}
-		for position, text := range item.Translations {
-			if _, err := tx.Exec(`INSERT INTO song_lyrics_rendition_translation_lines
-				(document_id,rendition_key,locale,position,text) VALUES (?,?,?,?,?)`,
-				bundle.documentID, item.RenditionKey, "zh-CN", position, text); err != nil {
-				return LyricsRenditionDocument{}, false, nil, err
-			}
-		}
-	}
-	for renditionKey, sides := range requestedSides {
-		for side, translations := range sides {
-			for position, text := range translations {
-				if _, err := tx.Exec(`INSERT INTO song_lyrics_rendition_side_translation_lines
-					(document_id,rendition_key,side,locale,position,text) VALUES (?,?,?,?,?,?)`,
-					bundle.documentID, renditionKey, side, "zh-CN", position, text); err != nil {
-					return LyricsRenditionDocument{}, false, nil, err
-				}
-			}
-		}
-	}
-	targetsJSON, err := json.Marshal(mutationTargets)
-	if err != nil {
-		return LyricsRenditionDocument{}, false, nil, err
-	}
-	if _, err := tx.Exec(`INSERT INTO audit_log(ts,user,action,detail) VALUES (?,?,'lyrics.rendition.save',?)`,
-		now, user, fmt.Sprintf("musicId=%d revision=%d targets=%s", input.MusicID, nextRevision, targetsJSON)); err != nil {
+	if err := writeLyricsRenditionTranslationsTx(tx, bundle, diff, input, user, now, nextRevision, mutationTargets); err != nil {
 		return LyricsRenditionDocument{}, false, nil, err
 	}
 	nextState := lyricsRenditionLocalizationState{
-		HasRows: true, Revision: nextRevision, UpdatedAt: now, Translations: requested,
-		SideTranslations: requestedSides,
+		HasRows: true, Revision: nextRevision, UpdatedAt: now, Translations: diff.requested,
+		SideTranslations: diff.requestedSides,
 	}
 	selection.localization = nextState
 	result, err := buildLyricsTranslationEditionDocument(bundle, selection)
@@ -1128,6 +982,223 @@ func (s *Store) saveLyricsRenditionMutation(
 	}
 	s.NotifyChange()
 	return result, true, mutationTargets, nil
+}
+
+// loadLyricsRenditionMutationTx reads the stored editor bundle and the
+// translation edition the request addresses.
+func loadLyricsRenditionMutationTx(tx *sql.Tx, input LyricsRenditionDocument) (
+	lyricsRenditionEditorBundle, lyricsTranslationEditionSelection, LyricsRenditionDocument, error,
+) {
+	bundle, err := loadLyricsRenditionEditorBundle(tx, input.MusicID)
+	if err != nil {
+		return lyricsRenditionEditorBundle{}, lyricsTranslationEditionSelection{}, LyricsRenditionDocument{}, err
+	}
+	selection, err := loadLyricsTranslationEditionSelection(tx, bundle, input.TranslationEditionKey, input.TranslationEditionKey != "")
+	if errors.Is(err, ErrLyricsTranslationEditionNotFound) {
+		return lyricsRenditionEditorBundle{}, lyricsTranslationEditionSelection{}, LyricsRenditionDocument{}, &LyricsRenditionContractError{Code: "translation_edition_not_found"}
+	}
+	if err != nil {
+		return lyricsRenditionEditorBundle{}, lyricsTranslationEditionSelection{}, LyricsRenditionDocument{}, err
+	}
+	current, err := buildLyricsTranslationEditionDocument(bundle, selection)
+	if err != nil {
+		return lyricsRenditionEditorBundle{}, lyricsTranslationEditionSelection{}, LyricsRenditionDocument{}, err
+	}
+	return bundle, selection, current, nil
+}
+
+func validateLyricsRenditionMutationInput(input *LyricsRenditionDocument, current LyricsRenditionDocument) error {
+	if err := normalizeLyricsTranslationEditionEnvelope(input, current); err != nil {
+		return err
+	}
+	if input.Revision != current.Revision {
+		copy := current
+		return &LyricsRenditionContractError{Code: "revision_conflict", Current: &copy}
+	}
+	if err := validateLyricsRenditionImmutableEnvelope(*input, current); err != nil {
+		return err
+	}
+	return nil
+}
+
+func diffLyricsRenditionEditorTranslations(input, current LyricsRenditionDocument,
+	selection lyricsTranslationEditionSelection,
+) (lyricsRenditionEditorDiff, error) {
+	requestedSides, requestedPeerBytes, err := lyricsRenditionEditorSideTranslations(input)
+	if err != nil {
+		return lyricsRenditionEditorDiff{}, err
+	}
+	storedSides, storedPeerBytes, err := lyricsRenditionEditorSideTranslations(current)
+	if err != nil {
+		return lyricsRenditionEditorDiff{}, err
+	}
+	requested, err := lyricsRenditionEditorTranslations(
+		input, current, selection.localization.HasRows || len(requestedSides) > 0, requestedPeerBytes, true,
+	)
+	if err != nil {
+		return lyricsRenditionEditorDiff{}, err
+	}
+	stored, err := lyricsRenditionEditorTranslations(
+		current, current, selection.localization.HasRows || len(storedSides) > 0, storedPeerBytes, false,
+	)
+	if err != nil {
+		return lyricsRenditionEditorDiff{}, err
+	}
+	return lyricsRenditionEditorDiff{
+		requested: requested, stored: stored, requestedSides: requestedSides, storedSides: storedSides,
+	}, nil
+}
+
+// persistLyricsRenditionSourceDocumentTx rewrites the source layer when the
+// editor changed it, and reports whether it did.
+func persistLyricsRenditionSourceDocumentTx(tx *sql.Tx, bundle *lyricsRenditionEditorBundle,
+	input LyricsRenditionDocument,
+) (bool, error) {
+	sourceChanged, err := updateLyricsSourceDocumentFromEditor(&bundle.document, input)
+	if err != nil {
+		return false, err
+	}
+	// A recovery-imported document is owned by the immutable recovery ledger:
+	// its contributions live in lyrics_recovery_import_component_contributions
+	// and its recovery item pins document_sha256. Rewriting the source layer
+	// below would leave the ledger pointing at a document that no longer
+	// exists, so only the translation layer stays editable here.
+	if sourceChanged && bundle.recoveryProvenance {
+		return false, &LyricsRenditionContractError{
+			Code:    "source_drift",
+			Details: []string{"recovery-imported source documents are immutable; only translations are editable"},
+		}
+	}
+	if sourceChanged {
+		newDocumentJSON, err := json.Marshal(bundle.document)
+		if err != nil {
+			return false, err
+		}
+		newDocumentDigest := sha256.Sum256(newDocumentJSON)
+		newDocumentSHA := hex.EncodeToString(newDocumentDigest[:])
+		if _, err := tx.Exec(`DROP TRIGGER IF EXISTS song_lyrics_source_documents_immutable_update`); err != nil {
+			return false, err
+		}
+		if _, err := tx.Exec(`DROP TRIGGER IF EXISTS song_lyrics_component_contributions_immutable_update`); err != nil {
+			return false, err
+		}
+		if _, err := tx.Exec(`UPDATE song_lyrics_source_documents
+			SET document_json=?, document_sha256=? WHERE document_id=?`,
+			string(newDocumentJSON), newDocumentSHA, bundle.documentID); err != nil {
+			return false, err
+		}
+		expectedRefs, err := storeV3DocumentComponentRefs(bundle.document)
+		if err != nil {
+			return false, err
+		}
+		for component, identityKey := range expectedRefs {
+			digest := sha256.Sum256([]byte(newDocumentSHA + "\x00" + component + "\x00" + identityKey))
+			sha := hex.EncodeToString(digest[:])
+			if _, err := tx.Exec(`UPDATE song_lyrics_component_contributions
+				SET contribution_sha256=? WHERE document_id=? AND component=?`, sha, bundle.documentID, component); err != nil {
+				return false, err
+			}
+		}
+		// Reinstate the migration v27 immutability guards dropped above, in the
+		// same transaction, so the editor write is the only update they allow.
+		for _, statement := range []string{
+			`CREATE TRIGGER song_lyrics_source_documents_immutable_update BEFORE UPDATE ON song_lyrics_source_documents
+			BEGIN SELECT RAISE(ABORT, 'song lyrics source documents are immutable'); END`,
+			`CREATE TRIGGER song_lyrics_component_contributions_immutable_update
+			BEFORE UPDATE ON song_lyrics_component_contributions
+			BEGIN SELECT RAISE(ABORT, 'song lyrics component contributions are immutable'); END`,
+		} {
+			if _, err := tx.Exec(statement); err != nil {
+				return false, err
+			}
+		}
+		bundle.documentSHA = newDocumentSHA
+	}
+	return sourceChanged, nil
+}
+
+func writeAuthoritativeLyricsTranslationEditionTx(tx *sql.Tx, bundle lyricsRenditionEditorBundle,
+	selection lyricsTranslationEditionSelection, input LyricsRenditionDocument, user string,
+	now int64, nextRevision int, mutationTargets []LyricsRenditionMutationTarget,
+) (LyricsRenditionDocument, error) {
+	if err := replaceMaterializedLyricsTranslationEditionTx(tx, bundle, selection.key, input, user, now); err != nil {
+		return LyricsRenditionDocument{}, err
+	}
+	if _, err := tx.Exec(`UPDATE song_lyrics_translation_edition_state
+			SET revision=?,updated_at=?,updated_by=? WHERE document_id=?`, nextRevision, now, user, bundle.documentID); err != nil {
+		return LyricsRenditionDocument{}, err
+	}
+	if err := rewriteLegacyLyricsTranslationMirrorTx(tx, bundle, selection.defaultKey, nextRevision, now, user); err != nil {
+		return LyricsRenditionDocument{}, err
+	}
+	targetsJSON, err := json.Marshal(mutationTargets)
+	if err != nil {
+		return LyricsRenditionDocument{}, err
+	}
+	if _, err := tx.Exec(`INSERT INTO audit_log(ts,user,action,detail) VALUES (?,?,'lyrics.rendition.save',?)`,
+		now, user, fmt.Sprintf("musicId=%d revision=%d editionKey=%s targets=%s", input.MusicID, nextRevision, selection.key, targetsJSON)); err != nil {
+		return LyricsRenditionDocument{}, err
+	}
+	nextSelection, err := loadLyricsTranslationEditionSelection(tx, bundle, selection.key, true)
+	if err != nil {
+		return LyricsRenditionDocument{}, err
+	}
+	result, err := buildLyricsTranslationEditionDocument(bundle, nextSelection)
+	if err != nil {
+		return LyricsRenditionDocument{}, err
+	}
+	return result, nil
+}
+
+func writeLyricsRenditionTranslationsTx(tx *sql.Tx, bundle lyricsRenditionEditorBundle,
+	diff lyricsRenditionEditorDiff, input LyricsRenditionDocument, user string,
+	now int64, nextRevision int, mutationTargets []LyricsRenditionMutationTarget,
+) error {
+	if _, err := tx.Exec(`DELETE FROM song_lyrics_rendition_translation_lines WHERE document_id=?`, bundle.documentID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM song_lyrics_rendition_side_translation_lines WHERE document_id=?`, bundle.documentID); err != nil {
+		return err
+	}
+	for _, item := range diff.requested {
+		if _, err := tx.Exec(`INSERT INTO song_lyrics_rendition_localizations
+			(document_id,rendition_key,locale,translation_credit,proofreading_credit,updated_at,updated_by,revision)
+			VALUES (?,?,?,?,?,?,?,?)
+			ON CONFLICT(document_id,rendition_key,locale) DO UPDATE SET
+			translation_credit=excluded.translation_credit,proofreading_credit=excluded.proofreading_credit,
+			updated_at=excluded.updated_at,updated_by=excluded.updated_by,revision=excluded.revision`,
+			bundle.documentID, item.RenditionKey, "zh-CN", item.TranslationCredit, item.ProofreadingCredit,
+			now, user, nextRevision); err != nil {
+			return err
+		}
+		for position, text := range item.Translations {
+			if _, err := tx.Exec(`INSERT INTO song_lyrics_rendition_translation_lines
+				(document_id,rendition_key,locale,position,text) VALUES (?,?,?,?,?)`,
+				bundle.documentID, item.RenditionKey, "zh-CN", position, text); err != nil {
+				return err
+			}
+		}
+	}
+	for renditionKey, sides := range diff.requestedSides {
+		for side, translations := range sides {
+			for position, text := range translations {
+				if _, err := tx.Exec(`INSERT INTO song_lyrics_rendition_side_translation_lines
+					(document_id,rendition_key,side,locale,position,text) VALUES (?,?,?,?,?,?)`,
+					bundle.documentID, renditionKey, side, "zh-CN", position, text); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	targetsJSON, err := json.Marshal(mutationTargets)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO audit_log(ts,user,action,detail) VALUES (?,?,'lyrics.rendition.save',?)`,
+		now, user, fmt.Sprintf("musicId=%d revision=%d targets=%s", input.MusicID, nextRevision, targetsJSON)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateLyricsRenditionImmutableEnvelope(input, current LyricsRenditionDocument) error {

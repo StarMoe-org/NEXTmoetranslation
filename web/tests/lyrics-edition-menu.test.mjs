@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
+import { read, readLyricsEditor } from "./source-surfaces.mjs";
+
 
 test("LyricsEditionMenu is a portal-backed mixed selection and command menu", async () => {
   const menu = await read("src/components/LyricsEditionMenu.tsx");
@@ -51,7 +51,7 @@ test("translation-edition selection never becomes a sideways control", async () 
   const [menu, css, editor] = await Promise.all([
     read("src/components/LyricsEditionMenu.tsx"),
     read("src/app/globals.css"),
-    read("src/components/LyricsEditor.tsx"),
+    readLyricsEditor(),
   ]);
   const editionCSS = css.split(".lyrics-edition-selector")[1].split(".lyrics-error")[0];
   assert.doesNotMatch(`${menu}\n${editionCSS}`, /overflow-x|carousel|swipe|scroll-snap|touch-action|border-radius:\s*999px/i);
@@ -66,7 +66,7 @@ test("translation-edition selection never becomes a sideways control", async () 
 });
 
 test("clean authoritative reload retains the current edition and falls back through server default metadata", async () => {
-  const editor = await read("src/components/LyricsEditor.tsx");
+  const editor = await readLyricsEditor();
   assert.match(editor, /activeTranslationEditionKeyRef\.current \|\| currentEditionDocument\.translationEditionKey/);
   assert.match(editor, /getLyrics\(item\.musicId, preferredEditionKey \|\| undefined\)/);
   assert.match(editor, /preferredEditionKey && reason instanceof APIError && reason\.status === 404[\s\S]*getLyrics\(item\.musicId\)/);
@@ -75,7 +75,7 @@ test("clean authoritative reload retains the current edition and falls back thro
 });
 
 test("LyricsEditor guards every edition transition and keeps clone discard semantics explicit", async () => {
-  const editor = await read("src/components/LyricsEditor.tsx");
+  const editor = await readLyricsEditor();
   assert.match(editor, /setPendingTransition\(\{ kind: "edition-switch", editionKey \}\)/);
   assert.match(editor, /setPendingTransition\(\{ kind: "edition-command", command \}\)/);
   assert.match(editor, /保存并继续/);

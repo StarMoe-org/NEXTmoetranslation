@@ -61,7 +61,7 @@ func TestOperationalDetailsRequireAdminAndServerBoundsBodyRead(t *testing.T) {
 	defer database.Close()
 	authService := auth.New(database, "operations-secret-at-least-32-bytes", time.Hour)
 	mux := http.NewServeMux()
-	registerOperationalRoutes(mux, database, authService)
+	registerOperationalRoutes(mux, operationalDeps{database: database, auth: authService})
 
 	public := httptest.NewRecorder()
 	mux.ServeHTTP(public, httptest.NewRequest(http.MethodGet, "/healthz/details", nil))
@@ -95,7 +95,7 @@ func TestReadinessRequiresInitialProjectionButLivenessDoesNot(t *testing.T) {
 	authService := auth.New(database, "operations-secret-at-least-32-bytes", time.Hour)
 	projection := &operationalProjection{}
 	mux := http.NewServeMux()
-	registerOperationalRoutes(mux, database, authService, projection)
+	registerOperationalRoutes(mux, operationalDeps{database: database, auth: authService, projection: projection})
 
 	ready := httptest.NewRecorder()
 	mux.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
@@ -151,7 +151,7 @@ func TestReadinessRechecksVolatileStateImmediatelyBeforeSuccess(t *testing.T) {
 	authService := auth.New(database, "operations-secret-at-least-32-bytes", time.Hour)
 	projection := &changingProjection{}
 	mux := http.NewServeMux()
-	registerOperationalRoutes(mux, database, authService, projection)
+	registerOperationalRoutes(mux, operationalDeps{database: database, auth: authService, projection: projection})
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != `{"status":"not_ready"}` || projection.calls != 2 {
@@ -182,7 +182,7 @@ func TestProductionReadinessRequiresSearchOrValidatedCache(t *testing.T) {
 	projection := &operationalProjection{status: filesvc.ProjectionStatus{Generation: 1}}
 	search := &operationalSearch{}
 	mux := http.NewServeMux()
-	registerOperationalRoutesWithSearch(mux, database, authService, nil, projection, search)
+	registerOperationalRoutes(mux, operationalDeps{database: database, auth: authService, projection: projection, search: search})
 
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
@@ -286,7 +286,7 @@ func TestDrainingAdmitsOnlyExactHealthAndReadinessProbes(t *testing.T) {
 	projection := &operationalProjection{status: filesvc.ProjectionStatus{Generation: 1}}
 	state := &lifecycle.State{}
 	mux := http.NewServeMux()
-	registerOperationalRoutesWithLifecycle(mux, database, authService, state, projection)
+	registerOperationalRoutes(mux, operationalDeps{database: database, auth: authService, draining: state, projection: projection})
 	entered := 0
 	for _, path := range []string{"/read", "/api/work", "/api/lyrics/source/search", "/files/data/search-index.json"} {
 		mux.HandleFunc(path, func(http.ResponseWriter, *http.Request) { entered++ })

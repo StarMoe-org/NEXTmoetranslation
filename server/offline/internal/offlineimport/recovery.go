@@ -425,7 +425,7 @@ func insertRecoveryImportBatchTx(ctx context.Context, tx *sql.Tx, root lyricsroo
 func verifyRecoveryImportBatchTx(ctx context.Context, tx *sql.Tx, root lyricsrootmanifest.Manifest,
 	manifest lyricsrecoveryimport.Manifest, receipt lyricsrecoveryimport.EvidenceReceipt, actor string,
 ) error {
-	coverageJSON, values, err := recoveryBatchValues(root, manifest, receipt)
+	coverageJSON, _, err := recoveryBatchValues(root, manifest, receipt)
 	if err != nil {
 		return err
 	}
@@ -444,7 +444,6 @@ func verifyRecoveryImportBatchTx(ctx context.Context, tx *sql.Tx, root lyricsroo
 	if err != nil {
 		return err
 	}
-	_ = values
 	if stored.batch != manifest.BatchSHA256 || stored.schema != manifest.SchemaVersion || stored.rootSchema != root.SchemaVersion ||
 		stored.rootID != root.RootID || stored.rootSHA != root.RootSHA256 || stored.catalogCount != manifest.Root.CatalogCount ||
 		stored.musicIDs != manifest.Root.MusicIDsSHA256 || stored.coverage != coverageJSON ||

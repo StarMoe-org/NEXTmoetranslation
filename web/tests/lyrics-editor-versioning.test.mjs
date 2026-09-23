@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { readLyricsEditor } from "./source-surfaces.mjs";
+
+
 test("LyricsEditor selects stable rendition families without merging equal text", async () => {
   const [editor, metadata] = await Promise.all([
-    readFile(new URL("../src/components/LyricsEditor.tsx", import.meta.url), "utf8"),
+    readLyricsEditor(),
     readFile(new URL("../src/components/lyrics/LyricsMetadataCard.tsx", import.meta.url), "utf8"),
   ]);
   const combined = `${editor}\n${metadata}`;
@@ -38,7 +41,7 @@ test("LyricsEditor selects stable rendition families without merging equal text"
 });
 
 test("authoritative conflict reload retains the current stable rendition side", async () => {
-  const editor = await readFile(new URL("../src/components/LyricsEditor.tsx", import.meta.url), "utf8");
+  const editor = await readLyricsEditor();
   const conflictStart = editor.indexOf('<Modal open={confirmConflictReload');
   const conflictReload = editor.slice(conflictStart, editor.indexOf('open={editionWorkflow', conflictStart));
 
@@ -50,7 +53,7 @@ test("authoritative conflict reload retains the current stable rendition side", 
 });
 
 test("save and publish preflight block dangling Game references before network mutation", async () => {
-  const editor = await readFile(new URL("../src/components/LyricsEditor.tsx", import.meta.url), "utf8");
+  const editor = await readLyricsEditor();
   const savePreflight = editor.indexOf("const preflightProblems = lyricsVersionSaveProblems(lyrics);");
   const saveRequest = editor.indexOf("await checkpointLyrics(musicID)");
 
@@ -63,7 +66,7 @@ test("save and publish preflight block dangling Game references before network m
 
 test("ruby editing, performer squares, and private component provenance remain explicit", async () => {
   const [editor, lineEditor, css] = await Promise.all([
-    readFile(new URL("../src/components/LyricsEditor.tsx", import.meta.url), "utf8"),
+    readLyricsEditor(),
     readFile(new URL("../src/components/lyrics/LyricsLineEditor.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/app/globals.css", import.meta.url), "utf8"),
   ]);
@@ -80,7 +83,7 @@ test("ruby editing, performer squares, and private component provenance remain e
 
 test("VOCALOID-only lyrics omit performer controls, squares, and publication requirements", async () => {
   const [editor, lineEditor, review] = await Promise.all([
-    readFile(new URL("../src/components/LyricsEditor.tsx", import.meta.url), "utf8"),
+    readLyricsEditor(),
     readFile(new URL("../src/components/lyrics/LyricsLineEditor.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/components/LyricsSourceReview.tsx", import.meta.url), "utf8"),
   ]);
@@ -98,7 +101,7 @@ test("VOCALOID-only lyrics omit performer controls, squares, and publication req
 
 test("catalog listing requests every song and delegates total size to cursor pagination", async () => {
   const [editor, api] = await Promise.all([
-    readFile(new URL("../src/components/LyricsEditor.tsx", import.meta.url), "utf8"),
+    readLyricsEditor(),
     readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8"),
   ]);
 
@@ -110,7 +113,7 @@ test("catalog listing requests every song and delegates total size to cursor pag
 
 test("embedded Public Lyrics metadata remains independent from editable SQLite state", async () => {
   const [editor, sidebar, api] = await Promise.all([
-    readFile(new URL("../src/components/LyricsEditor.tsx", import.meta.url), "utf8"),
+    readLyricsEditor(),
     readFile(new URL("../src/components/lyrics/LyricsCatalogSidebar.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8"),
   ]);

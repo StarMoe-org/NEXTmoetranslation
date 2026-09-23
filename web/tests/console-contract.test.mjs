@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
+import { read, readConsoleSurface, readLyricsEditor } from "./source-surfaces.mjs";
 
 test("the full-screen app layout keeps the lyrics workspace stretched with independent scrolling", async () => {
   const css = await read("src/app/globals.css");
@@ -15,7 +14,7 @@ test("the full-screen app layout keeps the lyrics workspace stretched with indep
 
 test("translation console exposes deterministic sort modes and activity-name filtering", async () => {
   const [consoleSource, toolbar, api, model] = await Promise.all([
-    read("src/components/Console.tsx"), read("src/components/console/ConsoleToolbar.tsx"),
+    readConsoleSurface(), read("src/components/console/ConsoleToolbar.tsx"),
     read("src/lib/api.ts"), read("../server/internal/model/model.go"),
   ]);
   const combined = `${consoleSource}\n${toolbar}`;
@@ -56,7 +55,7 @@ test("Chinese and English console requests always carry an explicit locale", asy
 
 test("translation review keeps a fixed editor above an independently scrolling lower list", async () => {
   const [consoleSource, css] = await Promise.all([
-    read("src/components/Console.tsx"),
+    readConsoleSurface(),
     read("src/app/globals.css"),
   ]);
   assert.match(consoleSource, /const translationWorkspaceRef = useRef<HTMLDivElement>\(null\)/);
@@ -75,7 +74,7 @@ test("translation review keeps a fixed editor above an independently scrolling l
 });
 
 test("locale changes expose save discard and cancel dirty choices", async () => {
-  const consoleSource = await read("src/components/Console.tsx");
+  const consoleSource = await readConsoleSurface();
   assert.match(consoleSource, /保存并继续/);
   assert.match(consoleSource, /放弃修改/);
   assert.match(consoleSource, />取消</);
@@ -83,7 +82,7 @@ test("locale changes expose save discard and cancel dirty choices", async () => 
 });
 
 test("all destructive console transitions share the dirty guard", async () => {
-  const consoleSource = await read("src/components/Console.tsx");
+  const consoleSource = await readConsoleSurface();
   for (const contract of [
     'runOrGuard("切换内容"', 'runOrGuard("切换条目"', 'runOrGuard("关闭当前条目"',
     'runOrGuard("退出登录"', 'runOrGuard("切换编辑语言"', "beforeunload", "lyricsEditorRef.current?.save",
@@ -93,7 +92,7 @@ test("all destructive console transitions share the dirty guard", async () => {
 });
 
 test("dirty state survives filtering and event reload tools are guarded", async () => {
-  const consoleSource = await read("src/components/Console.tsx");
+  const consoleSource = await readConsoleSurface();
   assert.match(consoleSource, /entries\.find\(\(entry\) => entry\.key === selectedKey\)/);
   for (const label of ["运行 AI 剧情翻译", "重新获取剧情", "重排序对话"]) {
     assert.ok(consoleSource.includes(`guardProducerMutation("${label}"`), `unguarded producer action: ${label}`);
@@ -107,7 +106,7 @@ test("dirty state survives filtering and event reload tools are guarded", async 
 
 test("event story TXT import uses authoritative snapshots, selective local drafts, undo, and the existing save path", async () => {
   const [api, consoleSource, importer, codec] = await Promise.all([
-    read("src/lib/api.ts"), read("src/components/Console.tsx"), read("src/components/EventStoryTxtImport.tsx"),
+    read("src/lib/api.ts"), readConsoleSurface(), read("src/components/EventStoryTxtImport.tsx"),
     read("src/lib/event-txt-import.mjs"),
   ]);
   assert.match(api, /getEventEpisodeSnapshot[\s\S]*\/event-story\/episode-snapshot/);
@@ -141,7 +140,7 @@ test("event story TXT import uses authoritative snapshots, selective local draft
 
 test("event story segment revisions survive detail flattening and advance from mutation responses", async () => {
   const [api, labels, consoleSource] = await Promise.all([
-    read("src/lib/api.ts"), read("src/lib/labels.ts"), read("src/components/Console.tsx"),
+    read("src/lib/api.ts"), read("src/lib/labels.ts"), readConsoleSurface(),
   ]);
   assert.match(api, /interface EventStorySegment[\s\S]*revision\?: number/);
   assert.match(api, /interface EventStoryUpdateResult[\s\S]*revision: number/);
@@ -162,7 +161,7 @@ test("event story segment revisions survive detail flattening and advance from m
 });
 
 test("console generations fence loads and saves while tab identity reconciles realtime edits", async () => {
-  const consoleSource = await read("src/components/Console.tsx");
+  const consoleSource = await readConsoleSurface();
   assert.match(consoleSource, /loadGenerationRef\.current !== generation/);
   assert.equal((consoleSource.match(/loadGenerationRef\.current !== generation\) return false/g) || []).length, 2);
   assert.match(consoleSource, /contextGenerationRef\.current !== generation/);
@@ -193,7 +192,7 @@ test("console generations fence loads and saves while tab identity reconciles re
 
 test("lyrics collaboration reads an imperative dirty snapshot before parent effects can report it", async () => {
   const [consoleSource, editor] = await Promise.all([
-    read("src/components/Console.tsx"), read("src/components/LyricsEditor.tsx"),
+    readConsoleSurface(), readLyricsEditor(),
   ]);
   assert.match(editor, /snapshot: \(\) => \(\{[\s\S]*dirty: lyricsRef\.current != null/);
   assert.match(editor, /document: lyricsRef\.current \? JSON\.parse\(JSON\.stringify\(lyricsRef\.current\)\)/);
@@ -206,7 +205,7 @@ test("lyrics collaboration reads an imperative dirty snapshot before parent effe
 });
 
 test("parent dirty actions stay non-cancelable and generation-fenced while awaiting save", async () => {
-  const consoleSource = await read("src/components/Console.tsx");
+  const consoleSource = await readConsoleSurface();
   assert.match(consoleSource, /const \[pendingActionBusy, setPendingActionBusy\] = useState\(false\)/);
   assert.match(consoleSource, /pendingActionBusyRef\.current = true/);
   assert.match(consoleSource, /pendingActionRef\.current\?\.token === pending\.token/);
@@ -220,7 +219,9 @@ test("parent dirty actions stay non-cancelable and generation-fenced while await
 });
 
 test("restore conflicts never offer save-first and stale drafts can only be exported or discarded", async () => {
-  const consoleSource = await read("src/components/Console.tsx");
+  const [consoleSource, shell] = await Promise.all([
+    readConsoleSurface(), read("src/components/console/ProducerOperationsShell.tsx"),
+  ]);
   assert.match(consoleSource, /event === "content\.restored"[\s\S]*reconcileContent\("restore"\)/);
   assert.match(consoleSource, /captureUnsavedDraft/);
   assert.match(consoleSource, /contentConflict\?\.draft \?\? preservedConflictDraftRef\.current \?\? captureUnsavedDraft\(\)/);
@@ -228,14 +229,14 @@ test("restore conflicts never offer save-first and stale drafts can only be expo
   assert.match(consoleSource, /旧缓冲区仅可导出后手动合并/);
   assert.match(consoleSource, /舍弃旧缓冲区并继续/);
   assert.match(consoleSource, /if \(writeFenceRef\.current \|\| savingRef\.current/);
-  const conflict = consoleSource.slice(consoleSource.indexOf('<Modal open={contentConflict != null}'));
+  const conflict = shell.slice(shell.indexOf('<Modal open={contentConflict != null}'));
   assert.doesNotMatch(conflict, /保存并继续/);
 });
 
 test("SSE gaps lock writes until authoritative reconciliation completes", async () => {
   const [consoleSource, ws, editor] = await Promise.all([
-    read("src/components/Console.tsx"), read("src/lib/sse.ts"),
-    read("src/components/LyricsEditor.tsx"),
+    readConsoleSurface(), read("src/lib/sse.ts"),
+    readLyricsEditor(),
   ]);
   assert.ok(ws.includes('"sse.disconnected"'), 'missing transport sse.disconnected event');
   assert.ok(ws.includes('"sse.reconnected"'), 'missing transport sse.reconnected event');
@@ -267,10 +268,12 @@ test("SSE gaps lock writes until authoritative reconciliation completes", async 
 });
 
 test("stale conflict resolution revalidates proof and live SSE before releasing the write fence", async () => {
-  const consoleSource = await read("src/components/Console.tsx");
-  const reconcile = consoleSource.slice(consoleSource.indexOf("const reconcileContent = async"), consoleSource.indexOf("reconcileContentRef.current = reconcileContent"));
-  const resolve = consoleSource.slice(consoleSource.indexOf("const resolveContentConflict"), consoleSource.indexOf("const exportConflictDraft"));
-  const sseHandler = consoleSource.slice(consoleSource.indexOf("useSSE((event, data)"), consoleSource.indexOf("  }, true);", consoleSource.indexOf("useSSE((event, data)")));
+  const [consoleSource, realtime] = await Promise.all([
+    readConsoleSurface(), read("src/components/console/useConsoleRealtime.ts"),
+  ]);
+  const reconcile = realtime.slice(realtime.indexOf("const reconcileContent = async"), realtime.indexOf("reconcileContentRef.current = reconcileContent"));
+  const resolve = realtime.slice(realtime.indexOf("const resolveContentConflict"), realtime.indexOf("const exportConflictDraft"));
+  const sseHandler = realtime.slice(realtime.indexOf("useSSE((event, data)"), realtime.indexOf("  }, true);", realtime.indexOf("useSSE((event, data)")));
 
   assert.equal((reconcile.match(/if \(!sseConnectedRef\.current\)/g) || []).length, 2);
   assert.match(reconcile, /const failReconcile = \(message: string\)/);
@@ -287,7 +290,7 @@ test("stale conflict resolution revalidates proof and live SSE before releasing 
 
 test("realtime fence blocks writes without blocking local logout discard or cancel", async () => {
   const [consoleSource, editor] = await Promise.all([
-    read("src/components/Console.tsx"), read("src/components/LyricsEditor.tsx"),
+    readConsoleSurface(), readLyricsEditor(),
   ]);
   const localGuard = consoleSource.slice(consoleSource.indexOf("const runOrGuard"), consoleSource.indexOf("const guardProducerMutation"));
   assert.doesNotMatch(localGuard, /writeFenceRef\.current/);
@@ -295,7 +298,7 @@ test("realtime fence blocks writes without blocking local logout discard or canc
   assert.match(consoleSource, /pendingActionBusyRef\.current \|\| savingRef\.current \|\| \(saveFirst && writeFenceRef\.current\)/);
   assert.match(consoleSource, /onClick=\{\(\) => void continuePendingAction\(false\)\} disabled=\{pendingActionBusy \|\| saving\}>放弃修改/);
   assert.match(consoleSource, /onClick=\{closePendingAction\} disabled=\{pendingActionBusy \|\| saving\}>取消/);
-  assert.equal((consoleSource.slice(consoleSource.indexOf("const guardProducerMutation"), consoleSource.indexOf("const highlightRemoteRow")).match(/if \(writeFenceRef\.current\)/g) || []).length, 2);
+  assert.equal((consoleSource.slice(consoleSource.indexOf("const guardProducerMutation"), consoleSource.indexOf("const { save, handleSourceChange")).match(/if \(writeFenceRef\.current\)/g) || []).length, 2);
   assert.match(consoleSource, /保存等待期间实时校对已锁定，上游操作未执行/);
   assert.match(editor, /\(saveFirst \|\| pending\.kind === "publish" \|\| editionTransition\) && writeLockedRef\.current/);
   assert.match(editor, /onClick=\{\(\) => void continuePendingTransition\(false\)\}[\s\S]{0,220}>放弃并继续/);
@@ -315,7 +318,7 @@ test("auth initialization preserves shared sessions on transient failures and ex
 
 test("lyrics workspace covers catalog, verified source import, draft, and publication", async () => {
   const [editor, lineEditor, sidebar, metadata, projection, api, sourceImport] = await Promise.all([
-    read("src/components/LyricsEditor.tsx"), read("src/components/lyrics/LyricsLineEditor.tsx"),
+    readLyricsEditor(), read("src/components/lyrics/LyricsLineEditor.tsx"),
     read("src/components/lyrics/LyricsCatalogSidebar.tsx"), read("src/components/lyrics/LyricsMetadataCard.tsx"),
     read("src/components/lyrics/LyricsProjectionStatusCard.tsx"),
     read("src/lib/api.ts"),
@@ -411,7 +414,7 @@ test("lyrics workspace covers catalog, verified source import, draft, and public
 
 test("lyrics mutations validate and correlate 2xx responses before clearing local recovery state", async () => {
   const [api, editor, validator] = await Promise.all([
-    read("src/lib/api.ts"), read("src/components/LyricsEditor.tsx"), read("src/lib/lyrics-save.mjs"),
+    read("src/lib/api.ts"), readLyricsEditor(), read("src/lib/lyrics-save.mjs"),
   ]);
   assert.match(api, /body = await res\.json\(\) as T[\s\S]*invalid_json_response/);
   assert.match(api, /response = await apiFetch<unknown>\(path, options, true\)/);
@@ -456,7 +459,7 @@ test("entry saves opt into and strictly correlate the additive response contract
 
 test("editor UI hides mutations while preserving read-only backup status", async () => {
   const [consoleSource, settings] = await Promise.all([
-    read("src/components/Console.tsx"),
+    readConsoleSurface(),
     read("src/components/SettingsModal.tsx"),
   ]);
   assert.match(consoleSource, /role === "admin" && locale === "zh-CN" && <>/);
@@ -469,7 +472,7 @@ test("editor UI hides mutations while preserving read-only backup status", async
 
 test("lyrics transitions guard dirty publication and ignore stale song loads", async () => {
   const [editor, sidebar] = await Promise.all([
-    read("src/components/LyricsEditor.tsx"),
+    readLyricsEditor(),
     read("src/components/lyrics/LyricsCatalogSidebar.tsx"),
   ]);
   const combined = `${editor}\n${sidebar}`;
@@ -497,8 +500,8 @@ test("lyrics transitions guard dirty publication and ignore stale song loads", a
 
 test("lyrics collaboration consumes server-derived rendition targets and freezes dirty shared revisions", async () => {
   const [api, sse, consoleSource, editor, collaboration] = await Promise.all([
-    read("src/lib/api.ts"), read("src/lib/sse.ts"), read("src/components/Console.tsx"),
-    read("src/components/LyricsEditor.tsx"), read("src/lib/lyrics-collaboration.mjs"),
+    read("src/lib/api.ts"), read("src/lib/sse.ts"), readConsoleSurface(),
+    readLyricsEditor(), read("src/lib/lyrics-collaboration.mjs"),
   ]);
   assert.match(api, /JSON\.stringify\(buildLyricsSavePayload\(lyrics, sourceImportToken, getClientID\(\)\)\)/);
   assert.match(api, /musicId, revision, clientId: getClientID\(\)/);
@@ -526,7 +529,7 @@ test("lyrics collaboration consumes server-derived rendition targets and freezes
 
 test("backup restore requires typed confirmation and enters the shared dirty guard", async () => {
   const [consoleSource, admin, api] = await Promise.all([
-    read("src/components/Console.tsx"), read("src/components/AdminModal.tsx"), read("src/lib/api.ts"),
+    readConsoleSurface(), read("src/components/AdminModal.tsx"), read("src/lib/api.ts"),
   ]);
   assert.match(consoleSource, /<AdminModal[\s\S]*guardProducerMutation={guardProducerMutation}/);
   assert.match(admin, /restoreConfirmation !== `RESTORE:\$\{restoreTarget\}`/);
@@ -537,7 +540,7 @@ test("backup restore requires typed confirmation and enters the shared dirty gua
 
 test("settings and admin upstream producers enter the shared write and dirty fence", async () => {
   const [consoleSource, admin, settings] = await Promise.all([
-    read("src/components/Console.tsx"), read("src/components/AdminModal.tsx"), read("src/components/SettingsModal.tsx"),
+    readConsoleSurface(), read("src/components/AdminModal.tsx"), read("src/components/SettingsModal.tsx"),
   ]);
   assert.match(consoleSource, /<SettingsModal[\s\S]*locale={locale}[\s\S]*guardProducerMutation={guardProducerMutation}/);
   assert.match(settings, /<BadgeFilterCard locale={locale} \/>/);
@@ -561,7 +564,7 @@ test("settings and admin upstream producers enter the shared write and dirty fen
 
 test("existing account and settings surfaces remain mounted", async () => {
   const [consoleSource, admin] = await Promise.all([
-    read("src/components/Console.tsx"), read("src/components/AdminModal.tsx"),
+    readConsoleSurface(), read("src/components/AdminModal.tsx"),
   ]);
   assert.match(consoleSource, /<SettingsModal/);
   assert.match(consoleSource, /<AdminModal/);
@@ -602,7 +605,7 @@ test("console and workspace share the atomic session protocol and token-bound SS
 
 test("console writes carry tab-memory producer proof through strict editor routes", async () => {
   const [api, consoleSource] = await Promise.all([
-    read("src/lib/api.ts"), read("src/components/Console.tsx"),
+    read("src/lib/api.ts"), readConsoleSurface(),
   ]);
   for (const route of [
     "/editor/v1/entry?response=correlated-v1", "/editor/v1/event-story/update", "/editor/v1/event-story/promote-human",
@@ -682,7 +685,7 @@ test("light and dark themes retain readable text, controls, and native form colo
 
 test("dialogs, navigation, forms, and live feedback expose accessibility semantics", async () => {
   const [modal, consoleSource, providers, login, register, admin, settings] = await Promise.all([
-    read("src/components/Modal.tsx"), read("src/components/Console.tsx"), read("src/app/providers.tsx"),
+    read("src/components/Modal.tsx"), readConsoleSurface(), read("src/app/providers.tsx"),
     read("src/components/LoginPage.tsx"), read("src/components/RegisterPage.tsx"),
     read("src/components/AdminModal.tsx"), read("src/components/SettingsModal.tsx"),
   ]);
@@ -708,7 +711,7 @@ test("dialogs, navigation, forms, and live feedback expose accessibility semanti
 
 test("lyrics editor implements reusable line and segment structure controls", async () => {
   const [editor, lineEditor] = await Promise.all([
-    read("src/components/LyricsEditor.tsx"), read("src/components/lyrics/LyricsLineEditor.tsx"),
+    readLyricsEditor(), read("src/components/lyrics/LyricsLineEditor.tsx"),
   ]);
   for (const contract of ["removeLine", "moveLine", "addSegment", "splitSegment", "removeSegment", "moveSegment", "setSourcePreview(null)"]) {
     assert.ok(editor.includes(contract), `missing lyrics structure contract: ${contract}`);
