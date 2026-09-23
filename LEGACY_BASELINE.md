@@ -9,27 +9,29 @@ This baseline characterizes the pre-locale, pre-lyrics behavior without changing
 | `GET /api/categories`, `GET /api/entries` | `server/internal/api/legacy_contract_test.go` and `server/internal/api/testdata/legacy/` |
 | `PUT /api/editor/v1/entry` ok, noop, error, insertion, arbitrary v1 field/source, actor and ID preservation | `server/internal/api/legacy_contract_test.go` |
 | Event summary/detail/update/error | `server/internal/api/legacy_contract_test.go` and its event fixtures |
-| Deleted legacy write routes now answering the JSON API 404 | `server/internal/api/routes_contract_test.go` |
+| Deleted unversioned write routes now answering the JSON API 404, and the strict import twin's producer-state requirement | `server/internal/api/routes_contract_test.go` |
 | First-run setup, login, `/me`, refresh | Normalized golden responses in `server/internal/api/testdata/legacy/`; JWT values and expiration timestamps are type-checked before normalization |
-| SSE authentication, headers, entry update, event update, and noop suppression | `server/internal/api/sse_test.go` |
+| SSE authentication, headers, first `gate.status` frame, entry update, event update, and noop suppression | `server/internal/api/sse_test.go` |
 | Flat/full category bytes and event-story bytes | `server/internal/files/legacy_golden_test.go` and `server/internal/files/testdata/legacy/` |
 | Public GET/HEAD, CORS, cache policy, strong ETag, and conditional GET | `server/internal/filesvc/service_test.go` |
 | Chinese search-index shape and omission rules | `server/internal/searchindex/builder_test.go` and `server/internal/searchindex/testdata/legacy/search-index.json` |
-| Official CN application and Mysekai propagation | `server/internal/store/legacy_contract_test.go` and its source-precedence fixture |
+| Official CN application and Mysekai propagation | `server/internal/store/legacy_contract_test.go` and `server/internal/store/testdata/legacy/source-precedence.json` |
 | JP/CN primary/fallback source chains | `server/internal/translator/translator_test.go` |
 | Upstream initial, unchanged, forced, and changed-version trigger behavior | `server/internal/upstream/watcher_test.go` |
 | Public-projection backup/restore round trip | `server/internal/backup/legacy_contract_test.go` |
 | Git backup first commit and unchanged no-commit behavior | Local bare-Git characterization in `server/internal/backup/legacy_contract_test.go` |
 | S3 timestamped/latest PUTs, SigV4 headers, and latest-object restore | Local HTTP characterization in `server/internal/backup/legacy_contract_test.go` |
-| Old SQLite schema and representative data | Reviewable `server/internal/db/testdata/legacy-v2.sql`, immutable `legacy-v2.db`, and SHA-256 assertion in `legacy_fixture_test.go` |
+| Old SQLite schema and representative data | Reviewable `server/internal/db/testdata/legacy-v2.sql`, immutable `legacy-v2.db`, and SHA-256 assertion in `server/internal/db/legacy_fixture_test.go` |
 
-## Frozen Legacy Quirks
+## Intended Behavior These Tests Freeze
 
-The tests describe current behavior, including behavior that a later migration may deliberately fix:
+The tests describe current behavior. Two source-precedence rules are deliberate product decisions, not pending fixes:
 
-- The legacy unversioned write routes (`PUT /api/entry`, `PUT /api/category/batch`, `PUT /api/lyrics/save`, `POST /api/lyrics/translation-editions`, `POST /api/lyrics/publish`, `POST /api/lyrics/unpublish`, `PUT /api/event-story/update`, `POST /api/event-story/promote-human`, `POST /api/backup/push`) were removed; the frozen response bodies above are now characterized through their `/api/editor/v1/*` twins, which additionally require `X-Moe-Loaded-Producer-State`. `POST /api/admin/lyrics-source-reviews/import` is the one remaining lenient-gate write route, kept until SekaiText-Moe sends that header.
-- Official non-empty CN text overwrites `human`, `llm`, `unknown`, and existing `cn` rows. Only `pinned` is protected; an empty official value preserves existing non-empty text. This is kept behavior, not a pending fix: editors pin (控制台「锁定」) a manual translation to protect it from the next official CN sync.
+- Official non-empty CN text overwrites `human`, `llm`, `unknown`, and existing `cn` rows. Only `pinned` is protected; an empty official value preserves existing non-empty text. Editors protect a manual translation from the next official CN sync by saving it as `pinned` (控制台「锁定保存」), and the console says so on every official entry.
 - Mysekai `tag` propagation overwrites a matching `flavorText` value and source without checking the flavorText source, so pinning the `flavorText` entry does not protect it; only the `tag` entry's own source decides what is propagated.
+
+The remaining frozen behaviors are legacy compatibility constraints that the public consumers still depend on:
+
 - V1 entry updates accept arbitrary field and source strings and insert a missing row inside a supported category.
 - Event public JSON omits title source, talk sources, talk order, and speaker names. A legacy backup/restore therefore preserves public bytes but restores line sources from story metadata and loses title provenance and speakers.
 - API event updates always return `{"status":"ok"}` on an existing target, blank source becomes `human`, and entry noops do not emit SSE.
@@ -68,24 +70,10 @@ Go benchmark range across three runs:
 
 These values are diagnostic snapshots, not performance thresholds. Re-run them on the deployment class before using them as an SLO.
 
-## Validation Record
-
-Commands run from this worktree:
-
-| Command | Exit | Result |
-| --- | ---: | --- |
-| `cd server && go test ./...` | 0 | All Go packages passed |
-| `cd server && go test -race ./...` | 0 | All Go packages passed under the race detector |
-| `cd web && npm ci` | 1 | Environment refused the lockfile's `npmmirror.com` tarball with npm `EALLOWREMOTE` because remote package fetching is disabled |
-| `cd web && npm run lint` | 127 | `next` unavailable because dependency installation did not complete |
-| `cd web && npm run build` | 127 | `next` unavailable because dependency installation did not complete |
-
-The repository has no additional Makefile, Taskfile, `justfile`, or web test script. Git and SQLite were available locally; GitHub and S3 semantics use local deterministic substitutes and do not publish or contact production services.
-
 ## Residual Baseline Gaps
 
-- There is no web test framework, so localStorage session behavior and same-account console reconciliation remain static-code contracts rather than browser-executed tests.
+- There is no browser-executed test harness, so localStorage session behavior and same-account console reconciliation remain static-code contracts checked by `web/tests/session-protocol.test.mjs` and `web/tests/console-contract.test.mjs` rather than real browser runs.
 - No production database or historical backup was available. The old SQLite fixture is synthetic but uses the exact current pre-locale schema and representative rows.
 - No live CDN, GitHub, S3-compatible service, or upstream domain was contacted. Network tests use local HTTP servers and a local bare Git repository.
-- The `/translation/*` alias is still established directly in `main.go`; public handler behavior is covered under `/files/*`, but the alias wiring has no isolated test seam.
+- The `/translation/*` alias is established by `registerPublicFileRoutes` in `server/http.go`; public handler behavior is covered under `/files/*`, but the alias rewrite itself has no isolated test seam.
 - Failure-after-partial-import and point-in-time backup consistency remain known uncharacterized hazards. The round-trip test explicitly captures the current lossy public projection rather than asserting losslessness or atomicity.

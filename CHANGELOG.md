@@ -1,5 +1,52 @@
 # 更新日志
 
+## 2026-09-23 — 治理与减重轮
+
+一轮以“行为不变、现有测试即合同”为前提的治理：写入门禁收敛到 `/api/editor/v1/*`，离线工具与 Sekaipedia 配置数据移出生产二进制，四个超大文件按职责拆开。本轮新增数据库迁移 v35 与 v36。
+
+### 破坏性变更
+
+- 删除 9 条无版本号写路由（`PUT /api/entry`、`PUT /api/category/batch`、`PUT /api/lyrics/save`、`POST /api/lyrics/translation-editions`、`POST /api/lyrics/publish`、`POST /api/lyrics/unpublish`、`PUT /api/event-story/update`、`POST /api/event-story/promote-human`、`POST /api/backup/push`）→ JSON 404。写入统一走 `/api/editor/v1/*`。保留 `POST /api/admin/lyrics-source-reviews/import`（宽松门禁，SekaiText 仍在用）并新增严格双胞 `POST /api/editor/v1/admin/lyrics-source-reviews/import`。
+- 删除 WebSocket hub 与 `/ws`；`gate.status` 改经 SSE 发出，连接即推当前门禁状态。
+- 只读接口与探针对写方法返回 405 + `Allow: GET, HEAD`。
+- 数据库 schema v35：`song_lyrics_public_withdrawals`。
+
+### 公开歌词投影
+
+- 取消发布会真正从公开文件撤下 bundle 内的歌曲（撤下标记）；发布清除标记；bundle 加载失败时仅用数据库降级重建并上报 Degraded；译本元数据变更与曲名批量修改立即触发全量发布。
+- 目录接口 `runtimeLyrics` 改为反映实际公开投影（bundle 覆盖 + 数据库发布 − 撤下），控制台“公开镜像”随投影 generation 刷新。
+- 制品 pin 单一来源 `contracts/public-lyrics/baseline.json`；CI 校验已提交归档。
+
+### 控制台
+
+- 歌词编辑器 dirty 判定改用键序无关的 canonical JSON；修复 checkpoint 后无法发布的死循环。
+- 官方 CN 条目提示“下次同步会覆盖，长期保留请锁定保存”。
+- revision-0 手动歌词可输入日文与注音；ruby 无读音不再被客户端拒收。
+- 活动剧情「整篇标记人工」等严格 producer 操作不再在客户端被 409 拦截：producer proof 改为动作结束后再清除（`guardProducerMutation`），写栅栏仍在期间阻挡其他写入。
+
+### P0 止血（14 个提交）
+
+- 服务端 11 项：upstream 同步版本记录、translator 事件重试与占位、682 迁移幂等、恢复备份覆盖度、v3 源层编辑拒绝、collab checkpoint envelope、令牌撤销关房、事件时间戳、config 旧值归一化、restore 触发器/投影缓存、S3 latest 指针。
+- 控制台 2 项见上节（revision-0 手动歌词、ruby 无读音）；官方 CN 优先的文档说明（`beda9b3`）见「来源优先级真相」。
+
+### 结构
+
+- 拆出共享的 `lyricscontract` 之后，`offlineimport`、`lyricssourceoffline`、`lyricsproviderpolicy` 等离线包移出生产依赖闭包；`go list -deps .` 已不含任何 `moesekai/server/offline/` 包（端点表由 `lyricssource` 自持，并由 offline 侧的 `endpoint_pin_test.go` pin 到策略表）；新增 `TestProductionBinaryDoesNotLinkOfflinePackages` 守门。
+- store 的 recovery-import 测试 fixture 不再依赖离线包（a322647）。
+- lyricsctl 删除手抄 flag 表，参数原样转发委托二进制；修复 `-expected-plan-sha256` / `-*-authorization` / catalog-filter `-output` 被 lyricsctl 误拒（ce4b0d0）。
+- 数据库 schema v36：`lyrics_provider_page_targets` / `lyrics_provider_contributor_aliases`，种子为原先编译进 `api/server.go` 的 37 条 Sekaipedia 乐曲→页面标题映射与 26 条词曲作者别名；新增管理 API `GET /api/admin/lyrics-providers/sekaipedia/targets`、`PUT`/`DELETE /api/admin/lyrics-providers/sekaipedia/targets/{musicId}`（整表校验后热替换来源注册表，无需重启）与“管理设置 → 歌词来源映射（Sekaipedia）”面板；两表属配置数据，不进入 Git/S3 内容备份。
+- 全部离线 operator 命令与 16 个专用包迁入嵌套 Go module `server/offline/`（`moesekai/server/offline`，`replace moesekai/server => ../`）；主模块 `cmd/` 只剩 `migrate`；`production_deps_test.go` 改为断言无 `moesekai/server/offline/` 前缀依赖；端点 pin 测试迁至 offline 侧经 `RecoveryProviderConfig(...).APIEndpoint` 比对；CI 分别在 `server/` 与 `server/offline/` 跑 test/vet/race；主模块 `go mod tidy` 去掉无人引用的 `golang.org/x/net`。删除一次性发行命令 `lyrics-release-today` 与 `lyrics-recovery-acceptance-launcher`（可在 f0039fb 的 `server/cmd/` 找回）。恢复计划的精确源码闭包策略升级为 `moesekai-recovery-source-selection-v3`（六个包根、两份 go.mod/go.sum、允许且仅允许 `replace moesekai/server => ../`）。
+- `Console.tsx` 2123 → 487 行：实时与条目逻辑切入 `web/src/components/console/` 的 `useConsoleRealtime`（SSE 事件路由、producer proof、冲突冻结）、`useConsoleEntries`（侧栏加载、选择、章节导航）、`useEntryEditor`，界面切成 `TranslationEntryWorkspace`、`ProducerOperationsShell`（含 `useProducerOperations`）、`ConsoleSidebar`、`EntryRow`、`EventStoryToolbar`，草稿与偏好落到 `console-drafts.ts`、`preferences.ts`、`types.ts`、`useAppUpdateProbe.ts`。
+- `LyricsEditor.tsx` 2143 → 251 行：切入 `web/src/components/lyrics/` 的 `lyricsEditorState.ts`（`useLyricsEditorState` / `useLyricsActiveTarget`）、`useLyricsDocumentLoader`、`useLyricsDocumentCommands` 与纯变换 `lyricsDocumentCommands.ts`、`lyricsDocumentModel.ts`、`useLyricsPersistence`、`useLyricsSourceWorkflow`、`LyricsDocumentView`；主组件只做组合与模态框。
+- store 大函数分段：`validateRestoredLyricsRecoveryProvenance` 拆为 `recoveryBackupGraph` 的 batch/item/source/artifact/evidence/contribution 校验方法；`importOrderedTx` 拆为 `preservedEventStoryLocalizationsTx`、`deleteReplacedEventStoryRowsTx`、`insertEventStoryMetaTx`、`insertEventStoryEpisodesTx`、`restorePreservedEventStoryLocalizationsTx`、`reconcileImportedEventScenariosTx`；`saveLyricsRenditionMutation` 拆为 load/validate/diff/persist 四步；内容备份导出与恢复导入按表分组为 `*BackupExportQueries` 与 `import*RowsTx`。
+- 服务端装配：`NewServer` 移入 `server/internal/api/server_wiring.go`，路由注册留在 `routes.go`，JSON 解码与导入授权分到 `json_body.go`、`lyrics_import_grants.go`；`main.go` 1098 → 98 行，启动装配拆到 `startup.go`、`wiring.go`、`http.go`、`seed.go`、`shutdown.go`、`env.go`、`operational.go`。
+- 文档：README 压到四节（这是什么／怎么跑／来源优先级真相／发布怎么工作）；`PRODUCTION_CONTRACT.md` 只保留主站与 operator 依赖面并把迁移清单补到 v36；`LEGACY_BASELINE.md` 把官方 CN 优先从“冻结怪癖”改写为有意行为；`STANDALONE_RELEASE.md` 的制品 pin 统一指向 `contracts/public-lyrics/baseline.json`。
+
+### 验证
+
+- `go vet ./...` 与 `go test ./...` 全绿；web `node --test tests/*.test.mjs` 219 项通过，`tsc --noEmit` 与 `eslint src --max-warnings=0` 零输出；`./scripts/verify-release.sh` 通过。
+- Orca 浏览器端到端：登录、v1 保存、活动剧情、歌词保存/发布/撤下、SSE `gate.status`、管理面板。
+
 ## 2026-09-19 — 代码审查修复轮
 
 一轮以“不丢失现有功能与行为”为前提的审查，共 19 个提交，全部为缺陷修复与一处文档更正，没有新增功能。数据库 schema 未变更。
