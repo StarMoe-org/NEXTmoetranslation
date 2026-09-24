@@ -502,3 +502,34 @@ func TestApplySideStoryOfficialImportTakesOverIdenticalLLMRows(t *testing.T) {
 		t.Fatalf("identical official row bumped to %+v", row)
 	}
 }
+
+func TestApplySideStoryKeepsTheReasonOfALocaleLeftInErrorWithoutAFetch(t *testing.T) {
+	s := newSideStoryTestStore(t)
+	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, sideStoryTestCard("170", 1, "cn/170", "en/170"))
+	jp := sideStoryTestScript(t, "test_card_170_01", sideStoryTestTalk{"テスト話者", "テスト台詞です"})
+	en := sideStoryTestScript(t, "test_card_170_01", sideStoryTestTalk{"Tester", "Test line one"})
+	cnReason := "zh-CN: GET cn-a: http 403; GET cn-b: http 403"
+	for step, test := range []struct {
+		fetch SideStoryEpisodeFetch
+		want  string
+	}{
+		{SideStoryEpisodeFetch{JP: fetchedJP(jp), CN: SideStoryFetchOutcome{Attempted: true, Err: "GET cn-a: http 403; GET cn-b: http 403"},
+			EN: SideStoryFetchOutcome{Attempted: true, Missing: true}}, cnReason + "; en-US: not found"},
+		{SideStoryEpisodeFetch{JP: fetchedJP(jp), EN: SideStoryFetchOutcome{Attempted: true, Err: "GET en-a: timeout", Transient: true}},
+			cnReason + "; en-US: GET en-a: timeout"},
+		{SideStoryEpisodeFetch{JP: SideStoryFetchOutcome{Attempted: true, Err: "timeout", Transient: true}}, "ja-JP: timeout; " + cnReason},
+		{SideStoryEpisodeFetch{JP: fetchedJP(jp), EN: fetchedJP(en)}, cnReason},
+	} {
+		test.fetch.Kind, test.fetch.StoryID, test.fetch.EpisodeKey = "card", "170", "1"
+		applied := mustApplySideStory(t, s, sideStoryTestNow, test.fetch).Episodes[0]
+		if state := sideStoryEpisodeState(t, s, "card", "170", "1"); applied.Error != test.want || state.lastError != test.want || applied.CNState != "error" {
+			t.Fatalf("step %d result %+v stored %q want %q", step+1, applied, state.lastError, test.want)
+		}
+	}
+	cn := sideStoryTestScript(t, "test_card_170_01", sideStoryTestTalk{"测试说话人", "测试台词一"})
+	applied := mustApplySideStory(t, s, sideStoryTestNow, SideStoryEpisodeFetch{Kind: "card", StoryID: "170", EpisodeKey: "1",
+		JP: fetchedJP(jp), CN: fetchedJP(cn), EN: fetchedJP(en)}).Episodes[0]
+	if state := sideStoryEpisodeState(t, s, "card", "170", "1"); applied.Error != "" || state.lastError != "" || applied.CNState != "imported" {
+		t.Fatalf("refresh after the CN error %+v stored %q", applied, state.lastError)
+	}
+}

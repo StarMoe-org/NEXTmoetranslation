@@ -77,6 +77,45 @@ type sideStoryApplyEpisode struct {
 	cnPath, enPath   string
 	cnState, enState string
 	attempts         int
+	lastError        string
+}
+
+// keptError returns the stored part of locale left in mismatch or error by
+// an apply that did not fetch it: the backfill does not fetch it again.
+func (e sideStoryApplyEpisode) keptError(locale, state string) string {
+	if state != SideStoryStateMismatch && state != SideStoryStateError {
+		return ""
+	}
+	return sideStoryErrorPart(e.lastError, locale)
+}
+
+// sideStoryErrorPart returns locale's part of an episode's last_error, whose
+// parts are "<locale>: <message>" joined with "; ". A message may itself
+// contain "; ", so only a following locale prefix starts a new part.
+func sideStoryErrorPart(lastError, locale string) string {
+	var parts []string
+	for _, piece := range strings.Split(lastError, "; ") {
+		if len(parts) > 0 && !sideStoryErrorPartStart(piece) {
+			parts[len(parts)-1] += "; " + piece
+		} else {
+			parts = append(parts, piece)
+		}
+	}
+	for _, part := range parts {
+		if strings.HasPrefix(part, locale+": ") {
+			return part
+		}
+	}
+	return ""
+}
+
+func sideStoryErrorPartStart(piece string) bool {
+	for _, locale := range []string{model.LocaleJapanese, model.LocaleChinese, model.LocaleEnglish} {
+		if strings.HasPrefix(piece, locale+": ") {
+			return true
+		}
+	}
+	return false
 }
 
 // ApplySideStoryFetchesContext records fetched scripts in one transaction.
@@ -107,9 +146,9 @@ func (s *Store) ApplySideStoryFetchesContext(ctx context.Context, fetches []Side
 func applySideStoryFetchTx(ctx context.Context, tx *sql.Tx, fetch SideStoryEpisodeFetch, stamp int64) (SideStoryEpisodeApply, bool, error) {
 	out := SideStoryEpisodeApply{Kind: fetch.Kind, StoryID: fetch.StoryID, EpisodeKey: fetch.EpisodeKey}
 	var episode sideStoryApplyEpisode
-	err := tx.QueryRowContext(ctx, `SELECT script_sha256,cn_asset_path,en_asset_path,cn_state,en_state,attempts
+	err := tx.QueryRowContext(ctx, `SELECT script_sha256,cn_asset_path,en_asset_path,cn_state,en_state,attempts,last_error
 		FROM side_story_episodes WHERE kind=? AND story_id=? AND episode_key=?`, fetch.Kind, fetch.StoryID, fetch.EpisodeKey).
-		Scan(&episode.scriptSHA256, &episode.cnPath, &episode.enPath, &episode.cnState, &episode.enState, &episode.attempts)
+		Scan(&episode.scriptSHA256, &episode.cnPath, &episode.enPath, &episode.cnState, &episode.enState, &episode.attempts, &episode.lastError)
 	if errors.Is(err, sql.ErrNoRows) {
 		out.Error = "episode not found"
 		return out, false, nil
@@ -136,7 +175,13 @@ func applySideStoryFetchTx(ctx context.Context, tx *sql.Tx, fetch SideStoryEpiso
 				delay = sideStoryBackoff(attempts)
 			}
 		}
-		out.Error = model.LocaleJapanese + ": " + message
+		messages := []string{model.LocaleJapanese + ": " + message}
+		for _, kept := range []string{episode.keptError(model.LocaleChinese, episode.cnState), episode.keptError(model.LocaleEnglish, episode.enState)} {
+			if kept != "" {
+				messages = append(messages, kept)
+			}
+		}
+		out.Error = strings.Join(messages, "; ")
 		_, err := tx.ExecContext(ctx, `UPDATE side_story_episodes SET attempts=?,next_attempt_at=?,last_error=?,updated_at=?
 			WHERE kind=? AND story_id=? AND episode_key=?`, attempts, stamp+int64(delay/time.Second), out.Error, stamp,
 			fetch.Kind, fetch.StoryID, fetch.EpisodeKey)
@@ -171,8 +216,13 @@ func applySideStoryFetchTx(ctx context.Context, tx *sql.Tx, fetch SideStoryEpiso
 		}
 		*target.state = state
 		out.OfficialWritten += written
-		if message != "" {
+		switch {
+		case message != "":
 			messages = append(messages, target.locale+": "+message)
+		case !target.outcome.Attempted:
+			if kept := episode.keptError(target.locale, state); kept != "" {
+				messages = append(messages, kept)
+			}
 		}
 		retry = max(retry, localeRetry)
 	}
