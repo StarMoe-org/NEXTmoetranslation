@@ -295,15 +295,16 @@ func syncSideStoryTitleLineTx(ctx context.Context, tx *sql.Tx, kind, storyID str
 }
 
 // writeSideStoryOfficialTx applies the official-write rule: insert when there
-// is no row, replace an official or llm row whose text differs, never touch a
-// human row. It reports whether a row was written.
+// is no row, replace an official row whose text differs and any llm row (an
+// identical one becomes official), never touch a human row. It reports whether
+// a row was written.
 func writeSideStoryOfficialTx(ctx context.Context, tx *sql.Tx, kind, storyID, episodeKey, jpKey, locale, text string, stamp int64) (bool, error) {
 	result, err := tx.ExecContext(ctx, `INSERT INTO side_story_line_localizations
 		(kind,story_id,episode_key,jp_key,locale,text,source,revision,updated_by,updated_at)
 		VALUES (?,?,?,?,?,?,'official',1,'sync',?)
 		ON CONFLICT(kind,story_id,episode_key,jp_key,locale) DO UPDATE SET text=excluded.text,source='official',
 			revision=revision+1,updated_by='sync',updated_at=excluded.updated_at
-		WHERE source IN ('official','llm') AND text<>excluded.text`,
+		WHERE source='llm' OR (source='official' AND text<>excluded.text)`,
 		kind, storyID, episodeKey, jpKey, locale, text, stamp)
 	if err != nil {
 		return false, err

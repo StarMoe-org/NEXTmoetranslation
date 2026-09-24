@@ -448,3 +448,57 @@ func TestApplySideStoryOfficial404StaysPendingAndRetriesADayLater(t *testing.T) 
 		t.Fatalf("a transient EN failure did not keep its shorter backoff: %+v", state)
 	}
 }
+
+func TestApplySideStoryOfficialImportTakesOverIdenticalLLMRows(t *testing.T) {
+	s := newSideStoryTestStore(t)
+	ctx := context.Background()
+	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, sideStoryTestCard("160", 1, "cn/160", "en/160"), sideStoryTestCard("161", 1, "cn/161", ""))
+	talks := []sideStoryTestTalk{{"テスト話者", "テスト台詞です"}, {"テスト相手", "テスト返事だよ"}}
+	cn := sideStoryTestScript(t, "test_card_160_01", sideStoryTestTalk{"测试说话人", "测试台词一"}, sideStoryTestTalk{"测试对象", "测试回答"})
+	en := sideStoryTestScript(t, "test_card_160_01", sideStoryTestTalk{"Tester", "Test line one"}, sideStoryTestTalk{"Other", "Test answer"})
+	for _, id := range []string{"160", "161"} {
+		mustApplySideStory(t, s, sideStoryTestNow, SideStoryEpisodeFetch{Kind: "card", StoryID: id, EpisodeKey: "1",
+			JP: fetchedJP(sideStoryTestScript(t, "test_card_"+id+"_01", talks...))})
+	}
+	mustUpdateSideStory(t, s, "card", "160", "1", "zh-CN",
+		SideStoryLineEdit{JP: "テスト台詞です", Text: "测试台词一", Source: "llm"}, SideStoryLineEdit{JP: "テスト話者", Text: "测试说话人", Source: "llm"},
+		SideStoryLineEdit{JP: "テスト返事だよ", Text: "测试模型回答", Source: "llm"}, SideStoryLineEdit{JP: "テスト相手", Text: "测试对象", Source: "llm"})
+	mustUpdateSideStory(t, s, "card", "160", "1", "en-US", SideStoryLineEdit{JP: "テスト話者", Text: "Tester", Source: "llm"})
+	mustUpdateSideStory(t, s, "card", "161", "1", "zh-CN", SideStoryLineEdit{JP: "テスト話者", Text: "测试说话人"})
+
+	result := mustApplySideStory(t, s, sideStoryTestNow.Add(time.Hour),
+		SideStoryEpisodeFetch{Kind: "card", StoryID: "160", EpisodeKey: "1", JP: fetchedJP(sideStoryTestScript(t, "test_card_160_01", talks...)),
+			CN: fetchedJP(cn), EN: fetchedJP(en)},
+		SideStoryEpisodeFetch{Kind: "card", StoryID: "161", EpisodeKey: "1", JP: fetchedJP(sideStoryTestScript(t, "test_card_161_01", talks...)),
+			CN: fetchedJP(cn)})
+	if !result.Changed || result.Episodes[0].OfficialWritten != 8 || result.Episodes[1].OfficialWritten != 3 {
+		t.Fatalf("official import over llm rows %+v changed=%v", result.Episodes, result.Changed)
+	}
+	for _, test := range []struct {
+		id, jp, locale string
+		want           sideStoryTestRow
+	}{
+		{"160", "テスト台詞です", "zh-CN", sideStoryTestRow{text: "测试台词一", source: "official", updatedBy: "sync", revision: 2}},
+		{"160", "テスト返事だよ", "zh-CN", sideStoryTestRow{text: "测试回答", source: "official", updatedBy: "sync", revision: 2}},
+		{"160", "テスト話者", "en-US", sideStoryTestRow{text: "Tester", source: "official", updatedBy: "sync", revision: 2}},
+		{"161", "テスト話者", "zh-CN", sideStoryTestRow{text: "测试说话人", source: "human", updatedBy: "test-editor", revision: 1}},
+	} {
+		if row, _ := sideStoryRow(t, s, "card", test.id, "1", test.jp, test.locale); row != test.want {
+			t.Errorf("%s %s %s row %+v want %+v", test.id, test.jp, test.locale, row, test.want)
+		}
+	}
+	for locale, want := range map[string]string{"zh-CN": "official_cn", "en-US": "official_en"} {
+		_, file, ok, err := s.SideStoryPublicFileForStoryContext(ctx, "card", "160", locale)
+		if err != nil || !ok || file.Source != want || file.Episodes[0].Source != want {
+			t.Errorf("%s public file ok=%v err=%v %+v want label %s", locale, ok, err, file, want)
+		}
+	}
+	result = mustApplySideStory(t, s, sideStoryTestNow.Add(2*time.Hour), SideStoryEpisodeFetch{Kind: "card", StoryID: "160", EpisodeKey: "1",
+		JP: fetchedJP(sideStoryTestScript(t, "test_card_160_01", talks...)), CN: fetchedJP(cn), EN: fetchedJP(en)})
+	if result.Changed || result.Episodes[0].OfficialWritten != 0 {
+		t.Fatalf("identical official re-import wrote rows: %+v", result.Episodes[0])
+	}
+	if row, _ := sideStoryRow(t, s, "card", "160", "1", "テスト台詞です", "zh-CN"); row.revision != 2 {
+		t.Fatalf("identical official row bumped to %+v", row)
+	}
+}
