@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"moesekai/server/internal/model"
@@ -43,14 +44,12 @@ func gachaFixture(t *testing.T, gachas []map[string]any) string {
 	return string(body)
 }
 
-func TestExtractGachaInfoPairsByIDWithExactKeys(t *testing.T) {
+func TestExtractGachaInfoRegistersExactJPKeysWithoutCN(t *testing.T) {
 	description := syntheticGachaDescription(101)
 	if len(description) < 4<<10 {
 		t.Fatalf("fixture description is %d bytes, want a several-KB text", len(description))
 	}
-	cnDescription := "限定扭蛋「测试用扭蛋101」开启！\n\n【开放时间】\n……"
 	summary := "期間限定メンバーが登場！\n対象メンバーの出現確率アップ！"
-	cnSummary := "限定成员登场！\n对象成员出现概率提升！"
 	bubble := "限定メンバー\n登場中！"
 	jpOnlySummary := "  前後に空白がある概要\n"
 
@@ -66,17 +65,19 @@ func TestExtractGachaInfoPairsByIDWithExactKeys(t *testing.T) {
 			"gachaId": 104, "summary": jpOnlySummary,
 		}},
 	})
+	// The CN server's own announcement for the same gacha id is not a translation.
 	cn := gachaFixture(t, []map[string]any{
-		{"id": 102, "name": "测试扭蛋B", "gachaInformation": map[string]any{"summary": cnSummary}},
 		{"id": 101, "name": "测试扭蛋A", "gachaInformation": map[string]any{
-			"summary": cnSummary, "bubbleText": bubble, "description": cnDescription + "\n",
+			"summary": "测试译文一", "bubbleText": "测试译文二", "description": "测试译文三\n【开放时间】\n……",
 		}},
 	})
+	var cnFetched atomic.Bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/jp-master/gachas.json":
 			fmt.Fprint(w, jp)
 		case "/cn-master/gachas.json":
+			cnFetched.Store(true)
 			fmt.Fprint(w, cn)
 		default:
 			http.NotFound(w, r)
@@ -91,9 +92,9 @@ func TestExtractGachaInfoPairsByIDWithExactKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantPairs := map[string]map[string]string{
-		"summary":     {summary: cnSummary, jpOnlySummary: ""},
+		"summary":     {summary: "", jpOnlySummary: ""},
 		"bubbleText":  {bubble: ""},
-		"description": {description: cnDescription},
+		"description": {description: ""},
 	}
 	wantTrace := map[string]map[string][]string{
 		"summary":     {summary: {"101", "102"}, jpOnlySummary: {"104"}},
@@ -111,7 +112,17 @@ func TestExtractGachaInfoPairsByIDWithExactKeys(t *testing.T) {
 			t.Fatalf("%s trace = %q, want %q", field, got, wantTrace[field])
 		}
 	}
+	if cnFetched.Load() {
+		t.Fatal("extractGachaInfo fetched the CN gachas.json")
+	}
 
+	if _, err := tr.store.ImportCategory("gachaInfo", model.Category{
+		"summary":     {summary: {Text: "测试译文四", Source: model.SourceLLM, Ids: []string{"101"}}},
+		"bubbleText":  {bubble: {Text: "测试译文五", Source: model.SourceHuman}},
+		"description": {description: {Text: "测试译文六", Source: model.SourcePinned}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := tr.store.ApplyCNCategory("gachaInfo", fields); err != nil {
 		t.Fatal(err)
 	}
@@ -119,17 +130,60 @@ func TestExtractGachaInfoPairsByIDWithExactKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantDescription := model.Entry{Text: cnDescription, Source: model.SourceCN, Ids: []string{"101"}}
-	if got := stored["description"][description]; !reflect.DeepEqual(got, wantDescription) {
-		t.Fatalf("stored description = %+v, want %+v", got, wantDescription)
+	wantStored := model.Category{
+		"summary": {
+			summary:       {Text: "测试译文四", Source: model.SourceLLM, Ids: []string{"101", "102"}},
+			jpOnlySummary: {Text: "", Source: model.SourceUnknown, Ids: []string{"104"}},
+		},
+		"bubbleText":  {bubble: {Text: "测试译文五", Source: model.SourceHuman, Ids: []string{"101"}}},
+		"description": {description: {Text: "测试译文六", Source: model.SourcePinned, Ids: []string{"101"}}},
 	}
-	wantPending := model.Entry{Text: "", Source: model.SourceUnknown, Ids: []string{"104"}}
-	if got := stored["summary"][jpOnlySummary]; !reflect.DeepEqual(got, wantPending) {
-		t.Fatalf("stored untranslated summary = %+v, want %+v", got, wantPending)
+	if !reflect.DeepEqual(stored, wantStored) {
+		t.Fatalf("stored gachaInfo = %+v, want %+v", stored, wantStored)
+	}
+	candidates, _, err := tr.store.AICandidates("gachaInfo", "summary", 0)
+	if err != nil || !reflect.DeepEqual(candidates, []string{jpOnlySummary}) {
+		t.Fatalf("AI candidates = %q err=%v, want only the new key", candidates, err)
 	}
 	gacha, err := tr.store.CategoryData("gacha")
 	if err != nil || len(gacha) != 0 {
 		t.Fatalf("gachaInfo sync touched gacha: %+v err=%v", gacha, err)
+	}
+}
+
+func TestExtractGachaKeepsCNNameSharedWithLaterJPOnlyGacha(t *testing.T) {
+	jp := gachaFixture(t, []map[string]any{
+		{"id": 101, "name": "テストガチャA"},
+		{"id": 102, "name": "テストガチャB"},
+		{"id": 900, "name": "テストガチャA"},
+		{"id": 901, "name": "テストガチャB"},
+	})
+	cn := gachaFixture(t, []map[string]any{
+		{"id": 101, "name": "测试扭蛋A"},
+		{"id": 102, "name": "测试扭蛋B"},
+		{"id": 901, "name": "テストガチャB"},
+	})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/jp-master/gachas.json":
+			fmt.Fprint(w, jp)
+		case "/cn-master/gachas.json":
+			fmt.Fprint(w, cn)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	tr, _, cfg := openTestTranslator(t)
+	configureLocalSources(t, cfg, upstream.URL)
+
+	fields, err := tr.extractGacha()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"テストガチャA": "测试扭蛋A", "テストガチャB": "测试扭蛋B"}
+	if got := fields["name"].Pairs; !reflect.DeepEqual(got, want) {
+		t.Fatalf("name pairs = %q, want %q", got, want)
 	}
 }
 

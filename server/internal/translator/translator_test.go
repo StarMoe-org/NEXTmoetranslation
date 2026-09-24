@@ -184,6 +184,20 @@ func TestCollectPairBlanksWhenEqual(t *testing.T) {
 	}
 }
 
+func TestCollectPairKeepsCNOverLaterRecordWithoutCN(t *testing.T) {
+	m := map[string]string{}
+	collectPair(m, "日本語", "中文")
+	collectPair(m, "日本語", "")
+	collectPair(m, " 日本語 ", "日本語")
+	if m["日本語"] != "中文" {
+		t.Errorf("a later record without CN blanked the pair: %q", m["日本語"])
+	}
+	collectPair(m, "日本語", "测试译文二")
+	if m["日本語"] != "测试译文二" {
+		t.Errorf("a later record with CN did not replace the pair: %q", m["日本語"])
+	}
+}
+
 func TestExtractMusicIsReadOnlyAndReturnsCatalog(t *testing.T) {
 	tr, database, cfg := openCatalogTestTranslator(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

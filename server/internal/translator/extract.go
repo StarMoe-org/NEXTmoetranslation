@@ -157,28 +157,27 @@ func (t *Translator) extractGacha() (map[string]store.CNApplyField, error) {
 
 var gachaInfoFields = []string{"summary", "bubbleText", "description"}
 
-// extractGachaInfo pairs gachaInformation texts by gacha id. Keys keep the
-// exact masterdata text, line breaks and surrounding whitespace included.
+// extractGachaInfo registers the JP gachaInformation texts untranslated: the
+// CN server's gachaInformation is its own announcement (CN dates, anniversary
+// numbering, rules), not a translation of the JP text. Keys keep the exact
+// masterdata text, line breaks and surrounding whitespace included.
 func (t *Translator) extractGachaInfo() (map[string]store.CNApplyField, error) {
 	jp, err := t.fetchMasterdata("gachas.json", "jp")
 	if err != nil {
 		return nil, err
 	}
-	cn, err := t.fetchMasterdata("gachas.json", "cn")
-	if err != nil {
-		return nil, err
-	}
-	cnByID := byIntID(cn, "id")
 	out := newExtractResult(gachaInfoFields...)
 	tm := newTraceMap(gachaInfoFields...)
 	for _, item := range jp {
 		id := getInt(item, "id")
 		jpInfo := asMap(item["gachaInformation"])
-		cnInfo := asMap(cnByID[id]["gachaInformation"])
 		for _, field := range gachaInfoFields {
 			jpText := getString(jpInfo, field)
+			if strings.TrimSpace(jpText) == "" {
+				continue
+			}
 			tm.addExact(field, jpText, id)
-			collectExactPair(out[field].Pairs, jpText, getString(cnInfo, field))
+			out[field].Pairs[jpText] = ""
 		}
 	}
 	return out.withTrace(tm), nil

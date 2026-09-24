@@ -39,7 +39,7 @@ curl -sS -X PUT "$BASE/api/editor/v1/entry" -H "Authorization: Bearer $TOKEN" \
 ```
 
 - 请求体：`{category, field, key, text, source, locale?, clientId?}`。`category` 取 `cards skills events information music gacha gachaInfo virtualLive sticker comic mysekai costumes characters units`；`source` 只接受 `cn human pinned llm unknown`。官方 CN 同步会覆盖除 `pinned` 以外的来源。
-- `gachaInfo`（卡池简介与说明）的字段是 `summary`、`bubbleText`、`description`，取自 `gachas.json` 的 `gachaInformation`。`key` 是该字段的完整日文原文，换行和首尾空白都逐字保留（JSON 中换行写作 `\n`），不要 trim 或重新排版；先用 `GET /api/entries?category=gachaInfo&field=<字段>` 取回原键再提交。`text` 里的换行原样保存。长文只受 8 MiB 请求体上限限制。
+- `gachaInfo`（卡池简介与说明）的字段是 `summary`、`bubbleText`、`description`，取自日服 `gachas.json` 的 `gachaInformation`。这个分类不导入官方 CN：国服的 `gachaInformation` 是国服自己的公告（国服日期、周年序号、规则），不是日文的译文。CN 同步只登记日文键，新键为空（`source` 为 `unknown`），已有译文不变；译文由管理员按需触发 AI 或由编辑与 agent 填写。`key` 是该字段的完整日文原文，换行和首尾空白都逐字保留（JSON 中换行写作 `\n`），不要 trim 或重新排版；先用 `GET /api/entries?category=gachaInfo&field=<字段>` 取回原键再提交。`text` 里的换行原样保存。长文只受 8 MiB 请求体上限限制。
 - 词条必须已存在（先 `GET /api/entries?category=&field=` 取键）；不存在的键返回 `409 entry source identity changed; reload before saving`。
 - 省略 `locale` 写中文；`locale` 只接受 `zh-CN`、`en-US`（`ja-JP` 只读，`400`）。加查询参数 `?response=correlated-v1` 可让成功响应回带 `category/field/key/text/source`。
 

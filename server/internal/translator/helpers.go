@@ -139,7 +139,9 @@ func (tm traceMap) addExactStr(field, jpText, refID string) {
 	tm[field][jpText] = append(tm[field][jpText], refID)
 }
 
-// collectPair stores jp->cn, blanking cn when it equals jp (untranslated).
+// collectPair stores jp->cn, blanking cn when it equals jp (untranslated). A
+// record without CN text never blanks the pair of an earlier record that
+// shares its JP text.
 func collectPair(target map[string]string, jp, cn string) {
 	jp = strings.TrimSpace(jp)
 	cn = strings.TrimSpace(cn)
@@ -149,18 +151,8 @@ func collectPair(target map[string]string, jp, cn string) {
 	if cn == jp {
 		cn = ""
 	}
-	target[jp] = cn
-}
-
-// collectExactPair is collectPair without trimming the jp key: the main site
-// looks these texts up by the unmodified masterdata string.
-func collectExactPair(target map[string]string, jp, cn string) {
-	if strings.TrimSpace(jp) == "" {
+	if cn == "" && target[jp] != "" {
 		return
-	}
-	cn = strings.TrimSpace(cn)
-	if cn == strings.TrimSpace(jp) {
-		cn = ""
 	}
 	target[jp] = cn
 }
