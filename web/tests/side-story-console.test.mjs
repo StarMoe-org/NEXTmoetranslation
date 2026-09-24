@@ -360,7 +360,16 @@ function editorHarness({ respond, entry, locale = "zh-CN", kind = "card" }) {
   let editValue = "测试草稿";
   const api = {
     APIError: TestAPIError,
-    updateSideStoryLines: async (...args) => { calls.push(args); return respond(...args); },
+    updateSideStoryLines: async (...args) => {
+      calls.push(args);
+      const result = await respond(...args);
+      // Like the real client, a response for another story, episode or locale is invalid.
+      const [kind, id, episode, locale] = args;
+      if (result.kind !== kind || result.id !== id || result.episode !== episode || result.locale !== locale) {
+        throw new TestAPIError(502, { error: "invalid_side_story_response" });
+      }
+      return result;
+    },
     updateEntry: async () => { throw new Error("generic save must not run for a side story"); },
     updateEventStoryLine: async () => { throw new Error("event save must not run for a side story"); },
   };
@@ -387,13 +396,13 @@ function editorHarness({ respond, entry, locale = "zh-CN", kind = "card" }) {
 }
 
 const talkEntry = model.buildSideStoryEntries(detail)[2];
-const okResult = (lines) => ({ status: "ok", kind: "card", id: "101", episode: "1", locale: "zh-CN", updated: lines.length, unchanged: 0, lines });
+const okResult = ([kind, id, episode, locale], lines) => ({ status: "ok", kind, id, episode, locale, updated: lines.length, unchanged: 0, lines });
 
 test("saving a line sends one PUT with expectedRevision and applies the returned revision", async () => {
   const harness = editorHarness({
     entry: { ...talkEntry, revision: 3 },
     locale: "en-US",
-    respond: () => okResult([{ jp: "テスト台詞二", role: "talk", position: 2, text: "测试草稿", source: "human", revision: 4 }]),
+    respond: (...args) => okResult(args, [{ jp: "テスト台詞二", role: "talk", position: 2, text: "测试草稿", source: "human", revision: 4 }]),
   });
   assert.equal(await harness.editor.save("human", false), true);
   assert.deepEqual(harness.calls, [["card", "101", "1", "en-US", [{ jp: "テスト台詞二", text: "测试草稿", source: "human", expectedRevision: 3 }]]]);
@@ -428,7 +437,7 @@ test("a TXT batch saves the whole episode in one PUT and reports conflicts witho
     { jp: "テスト台詞二", text: "测试台词二", source: "human", expectedRevision: 0 },
     { jp: "テスト話者", text: "测试说话人", source: "human", expectedRevision: 1 },
   ];
-  const saved = editorHarness({ entry: talkEntry, respond: (...args) => okResult(args[4].map((edit, index) => ({ ...edit, role: "talk", position: index, revision: edit.expectedRevision + 1 }))) });
+  const saved = editorHarness({ entry: talkEntry, respond: (...args) => okResult(args, args[4].map((edit, index) => ({ ...edit, role: "talk", position: index, revision: edit.expectedRevision + 1 }))) });
   assert.deepEqual(await saved.editor.saveSideStoryBatch("1", edits), { status: "saved", updated: 2, unchanged: 0 });
   assert.equal(saved.calls.length, 1);
   assert.deepEqual(saved.calls[0][4], edits);
