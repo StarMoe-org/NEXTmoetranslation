@@ -1,6 +1,6 @@
 # NextTrans
 
-Project SEKAI 翻译校对系统。生产发布合同是 NEXT 自有的 standalone 单镜像：SQLite 是唯一编辑真源，一个 Go 进程同时提供控制台静态页、`/api`、`/sse`、`/yjs` 协作 WebSocket，以及 CDN 友好的 `/files/*` 与 `/translation/*` 公开文件（与旧系统格式完全兼容，pjsk.moe 侧零改动）。翻译词条、活动剧情、歌词草稿与发布状态都在同一个数据库里；公开 JSON 由数据库投影再生成，而不是手工维护的文件。当前数据库 schema 版本为 v38（v37 放宽 `song_lyrics_source_artifacts` 的来源检查，允许 `https://projectsekai.fandom.com`；v38 只新建恢复台账接管表 `lyrics_recovery_takeovers`；迁移只能前进，部署前检查见 [`ROLLBACK_RUNBOOK.md`](ROLLBACK_RUNBOOK.md)）。
+Project SEKAI 翻译校对系统。生产发布合同是 NEXT 自有的 standalone 单镜像：SQLite 是唯一编辑真源，一个 Go 进程同时提供控制台静态页、`/api`、`/sse`、`/yjs` 协作 WebSocket，以及 CDN 友好的 `/files/*` 与 `/translation/*` 公开文件（与旧系统格式完全兼容，pjsk.moe 侧零改动）。翻译词条、活动剧情、歌词草稿与发布状态都在同一个数据库里；公开 JSON 由数据库投影再生成，而不是手工维护的文件。当前数据库 schema 版本为 v39（v37 放宽 `song_lyrics_source_artifacts` 的来源检查，允许 `https://projectsekai.fandom.com`；v38 只新建恢复台账接管表 `lyrics_recovery_takeovers`；v39 `side_stories` 只新建卡牌剧情与区域对话的四张表；迁移只能前进，部署前检查见 [`ROLLBACK_RUNBOOK.md`](ROLLBACK_RUNBOOK.md)）。
 
 ```
 NEXTmoetranslation/
@@ -84,7 +84,7 @@ go run ./cmd/lyrics-import-stage \
   -confirm-local-offline
 ```
 
-各离线命令对数据库 schema 的要求不同：`lyrics-stage` 要求迁移历史连续、止于 v18 至 v38；`lyrics-import-stage`、`lyrics-recovery-import` 与 `lyrics-recovery-public-candidate` 要求连续的 v27 至 v38；`lyrics-preflight` 要求目录库正好是 v18；`lyrics-catalog-filter` 只读最高版本号，不设上限，也不检查连续性。新的 schema 版本要先审阅兼容性，再提高这些上限。只要有一首歌被整曲文档接管（v38 的 `lyrics_recovery_takeovers`），或者有一首歌的 source 文档归编辑器所有（用 `PUT /api/editor/v1/lyrics/document` 发布过的歌、迁移 v32 写入的歌曲 682、内嵌编辑器 seed 写入的歌，见 `refuseRecoveryItemsForEditorOwnedSongs`），`lyrics-recovery-import` 就拒绝新的恢复批次，因为批次必须覆盖整个曲库。v32 写入过歌曲 682 的数据库从一开始就是这样。重放已导入的批次不受影响。
+各离线命令对数据库 schema 的要求不同：`lyrics-stage` 要求迁移历史连续、止于 v18 至 v39；`lyrics-import-stage`、`lyrics-recovery-import` 与 `lyrics-recovery-public-candidate` 要求连续的 v27 至 v39（v39 只加卡牌剧情与区域对话的表，已审阅为兼容，v40 起拒绝）；`lyrics-preflight` 要求目录库正好是 v18；`lyrics-catalog-filter` 只读最高版本号，不设上限，也不检查连续性。新的 schema 版本要先审阅兼容性，再提高这些上限。只要有一首歌被整曲文档接管（v38 的 `lyrics_recovery_takeovers`），或者有一首歌的 source 文档归编辑器所有（用 `PUT /api/editor/v1/lyrics/document` 发布过的歌、迁移 v32 写入的歌曲 682、内嵌编辑器 seed 写入的歌，见 `refuseRecoveryItemsForEditorOwnedSongs`），`lyrics-recovery-import` 就拒绝新的恢复批次，因为批次必须覆盖整个曲库。v32 写入过歌曲 682 的数据库从一开始就是这样。重放已导入的批次不受影响。
 
 ### 测试
 
@@ -110,3 +110,35 @@ mysekai 的 `tag` → `flavorText` 镜像是另一条独立规则：同名 jp ke
 **歌词公开投影。** 镜像内嵌的已验收 Public Lyrics v3 只读包只是冷启动基线（归档 SHA-256 与数量 pin 统一记在 `contracts/public-lyrics/baseline.json`）。每次 files-service 投影重建先做数据库投影，再用数据库发布覆盖同名条目：`POST /api/editor/v1/lyrics/publish` 让一首歌立刻出现在 `/files/translation/lyrics/index.json` 与 `music_<id>.json`（含 `v2/{locale}/` 镜像），不需要改文件或重打镜像；`POST /api/editor/v1/lyrics/unpublish` 即使该曲存在于内嵌包内也会把它从索引和详情路由撤下——撤下标记写在 schema v35 的 `song_lyrics_public_withdrawals` 表里，与删除 publication 行同一个事务，发布时清除，并随内容备份一起携带。内嵌包加载失败不阻塞重建，投影只用数据库内容并把状态记为 degraded。
 
 **什么时候真正落到公开路径。** 发布/取消发布、整首文档发布、source-v3 保存（含控制台的协作保存）、译本元数据变更、`music`/`title` 批量修改都会请求一次立即重建（`PublishNow`），其余写入走去抖重建。`GET /api/projection/status` 返回最近发布的 `generation`、是否 `pending`、`lastSuccessAt` 与脱敏 `lastError`；数据库在批量写返回时就已经落库，而该次保存对应的 `/files` 与 `/translation` 字节要等状态推进到更晚的非 pending generation 且 `lastError` 为空之后才算生效。控制台侧栏和管理面板的「立即全量发布」按钮调用 `POST /api/projection/publish`，触发一次全量构建并回传同一个状态对象。
+
+## 卡牌剧情与区域对话
+
+卡牌剧情（`kind=card`，故事 ID 是卡牌 ID，有前篇 `1` 和后篇 `2`）与区域对话（`kind=area`，故事 ID 是 scenarioId，只有 `1`）翻译成 `zh-CN` 与 `en-US`，日文脚本只读。数据在 schema v39 的 `side_stories`、`side_story_episodes`、`side_story_lines`、`side_story_line_localizations` 四张表里，行以去掉首尾空白的日文原文为键，来源为 `official`、`llm`、`human`。
+
+**路由。** 编辑可用 `GET /api/editor/v1/stories`（列表）、`GET /api/editor/v1/story/{kind}/{id}`（详情）、`GET /api/editor/v1/story/{kind}/{id}/{episode}/snapshot`（TXT 导入快照）、`GET /api/editor/v1/stories/sync`（回填状态）和 `PUT /api/editor/v1/story/{kind}/{id}/{episode}`。PUT 走与其他内容写入相同的门禁，每行带 `expectedRevision`，整批全有或全无：未知行返回 `422 unknown_lines`，修订冲突返回 `409 revision_conflict`。管理员另有 `POST /api/editor/v1/story/{kind}/{id}/ai`（producer 任务 `ai-side-story`，只填空行）、`POST /api/editor/v1/story/{kind}/{id}/refresh`（立即重抓）和 `POST /api/editor/v1/stories/sync`（立即跑一轮回填）。agent 用法和每条路由的示例见 [`contracts/editor-api/README.md`](contracts/editor-api/README.md) 第 8 节，合同见 [`PRODUCTION_CONTRACT.md`](PRODUCTION_CONTRACT.md) 的 Card Stories And Area Talk。
+
+**后台回填。** 设置 `side_story_backfill.enabled` 不为 false（未设置即为开，管理设置里可随时暂停）且 `SIDE_STORY_BACKFILL_ENABLED` 不为 false 时，服务进程按轮抓取日文脚本和官方 CN/EN 脚本。它按 TalkData 下标配对写入官方译文，覆盖 `official` 与 `llm` 行，从不改动 `human` 行，也从不调用 LLM。已列出资源路径的官方脚本返回 404 或返回的仍是日文时，该语言保持 `pending`，24 小时后重试；ScenarioId 或 TalkData 条数与日文不同时标为 `mismatch`；`absent` 只表示该服务器没有这一话的资源路径。内容备份恢复后，回填不等 6 小时就重建目录。以下 env 每次启动都校验，非法值会让启动失败（它们和下面 6 个上游 env 都列在 `.env.example` 里）：
+
+| env | 默认 | 取值 |
+| --- | --- | --- |
+| `SIDE_STORY_BACKFILL_ENABLED` | `true`（未设置或为空） | `strconv.ParseBool` 接受的值 |
+| `SIDE_STORY_BACKFILL_INTERVAL_MS` | `60000` | 1000–86400000 |
+| `SIDE_STORY_BACKFILL_BATCH` | `30` | 1–500 的规范整数 |
+| `SIDE_STORY_BACKFILL_REQUEST_DELAY_MS` | `1000` | 100–60000 |
+
+**上游。** 新增 6 个设置，和其他 `upstream.*` 设置一样只在首次启动由 env 写入，之后在管理设置里修改；留空时用默认值：
+
+| 设置 | env | 默认 |
+| --- | --- | --- |
+| `upstream.en_masterdata_url` | `UPSTREAM_EN_MASTERDATA_URL` | `https://metadata.pjsk.moe/en/master` |
+| `upstream.en_masterdata_fallback_url` | `UPSTREAM_EN_MASTERDATA_FALLBACK_URL` | `https://raw.githubusercontent.com/Team-Haruki/haruki-sekai-en-master/main/master` |
+| `upstream.jp_scripts_url` | `UPSTREAM_JP_SCRIPTS_URL` | `https://storage.exmeaning.com/sekai-jp-assets` |
+| `upstream.jp_scripts_fallback_url` | `UPSTREAM_JP_SCRIPTS_FALLBACK_URL` | `https://assets.unipjsk.com/startapp`（只用于卡牌剧情） |
+| `upstream.cn_scripts_url` | `UPSTREAM_CN_SCRIPTS_URL` | `https://sekai-assets-bdf29c81.seiunx.net/cn-assets/startapp` |
+| `upstream.en_scripts_url` | `UPSTREAM_EN_SCRIPTS_URL` | `https://storage.exmeaning.com/sekai-en-assets` |
+
+JP 与 CN 的目录沿用现有的 `upstream.jp_masterdata_url`、`upstream.cn_masterdata_url` 链。
+
+**公开文件。** `zh-CN` 发布在 `/files/translation/cardStory/card_<cardId>.json` 与 `/files/translation/areaTalk/group_<n>.json`，`en-US` 发布在 `/files/v2/en-US/translation/` 下的同名路径；`n` 是 JP actionSet ID 整除 100，没有其他语言的镜像。PUT、AI 和 refresh 在响应前重建所涉故事的文件，正在进行的全量重建不会把这次发布或撤下换回去；回填写入后走去抖重建，窗口为 `FILES_REBUILD_DEBOUNCE_MS`（默认 300000 ms），持续有写入时最多等两个窗口。
+
+**备份。** 内容备份的 `translation-content/manifest.json` 升到 `schemaVersion` 2，新增 `translation-content/side-stories.json`，与其他内容在同一个恢复事务里恢复。`schemaVersion` 1 的旧备份仍可恢复，但会清空卡牌剧情与区域对话的四张表；早于 v39 的程序拒绝恢复 `schemaVersion` 2 的备份。Git 目标每次只推一个 `backup.tar.gz`（设置 `MOESEKAI_BACKUP_ENCRYPTION_KEY` 时为 `backup.enc`），GitHub 拒收超过 100 MiB 的文件，所以它必须低于这个上限，体积估算见 [`PRODUCTION_CONTRACT.md`](PRODUCTION_CONTRACT.md) 的 Backup And Restore。回滚与恢复步骤见 [`ROLLBACK_RUNBOOK.md`](ROLLBACK_RUNBOOK.md)。

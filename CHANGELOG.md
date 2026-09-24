@@ -1,5 +1,58 @@
 # 更新日志
 
+## Phase S：卡牌剧情与区域对话（phase-s-20260924）
+
+这一阶段加入卡牌剧情和区域对话的翻译。后台从 JP、CN、EN 服务器回填日文脚本和官方译文，编辑与 agent 逐行校对，管理员按需触发 AI 翻译或重抓，`zh-CN` 与 `en-US` 各自发布公开文件。本阶段新增数据库迁移 v39，只能前进；内容备份升到 `schemaVersion` 2。
+
+### 部署须知
+
+- 数据库 schema v39 `side_stories`：只新建 `side_stories`、`side_story_episodes`、`side_story_lines`、`side_story_line_localizations` 四张表和索引 `idx_side_story_line_localizations_locale`。外键从故事到译文逐级级联删除，CHECK 约束固定 kind、ID、状态、语言和来源的取值；迁移不写任何行，也不改已有表（`TestMigrationV39UpgradesAV38DatabaseByOnlyAddingSideStoryTables`、`TestV39SideStoryConstraintsRejectInvalidRows`、`TestV39SideStoryRowsCascadeFromStoryToLocalization`）。`TestMigrationsAfterV34MustNotMutateContentTables` 只允许 v39 创建这四张表及其索引。
+- 生产自 2026-09-24（`d4825a8`）起已在 v38，所以本阶段部署只执行 v39，执行前自动生成 `/data/moesekai.db.pre-migration-v39.bak`；仍停在 v34 的库走 v34→v39，只在 v35 之前生成一份 `.pre-migration-v35.bak`。数据库记录 v39 之后，旧版本拒绝打开它（`database migration version 39 is newer than this binary`）。
+- 内容备份的 `translation-content/manifest.json` 升到 `schemaVersion` 2，新增第四个文件 `translation-content/side-stories.json`。早于 v39 的程序遇到它会报 `unsupported translation content schemaVersion 2`，拒绝恢复；本版本恢复 `schemaVersion` 1 或没有 manifest 的旧备份时，会清空四张 side-story 表。回滚步骤见 `ROLLBACK_RUNBOOK.md`。
+- 离线工具的 schema 上限从 38 提到 39：`lyrics-stage` 接受止于 v18–v39 的历史，`lyrics-import-stage`、`lyrics-recovery-import`、`lyrics-recovery-public-candidate` 接受连续的 v27–v39，v40 起拒绝（`TestLyricsImportRuntimeSchemasAllowReviewedV27ThroughV39Contiguously`、`TestRunRejectsUnreviewedV40RuntimeWithoutCreatingOutput`）。
+- 新增 env `SIDE_STORY_BACKFILL_ENABLED`（默认 `true`）、`SIDE_STORY_BACKFILL_INTERVAL_MS`（默认 60000，1000–86400000）、`SIDE_STORY_BACKFILL_BATCH`（默认 30，1–500）、`SIDE_STORY_BACKFILL_REQUEST_DELAY_MS`（默认 1000，100–60000）。每次启动都会校验，非法值会让启动失败（`TestSideStoryBackfillConfigurationDefaultsAndIsStrict`）。运行时开关是新设置 `side_story_backfill.enabled`（未设置即为开，管理设置弹窗里可改），它与旧版 CN 自动同步的 `scheduler.enabled` 无关：生产上 `scheduler.enabled` 一直为 false，打开它会在上游版本变化时同步 CN 内容并对新活动剧情自动调用 AI，所以回填不再借用它。想在验证完成前关掉回填，部署时设 `SIDE_STORY_BACKFILL_ENABLED=false`，或把该设置改为 false（`TestSideStoryBackfillRunsOnlyWhileItsSettingAndEnvAllowIt`）。
+- 新增 6 个上游设置：`upstream.en_masterdata_url`、`upstream.en_masterdata_fallback_url`、`upstream.jp_scripts_url`、`upstream.jp_scripts_fallback_url`、`upstream.cn_scripts_url`、`upstream.en_scripts_url`，分别由 `UPSTREAM_EN_MASTERDATA_URL`、`UPSTREAM_EN_MASTERDATA_FALLBACK_URL`、`UPSTREAM_JP_SCRIPTS_URL`、`UPSTREAM_JP_SCRIPTS_FALLBACK_URL`、`UPSTREAM_CN_SCRIPTS_URL`、`UPSTREAM_EN_SCRIPTS_URL` 首次写入。默认值和主机见 `PRODUCTION_CONTRACT.md`，生产环境按 `validateUpstreamURLSetting` 校验（`TestUpstreamURLSettingsFailClosedInProduction`、`TestSideStorySourcesDefaultToTheStartappMirrorsAndFollowOverrides`、`TestSeedConfigFromEnvSeedsTheSideStorySourceBases`）。`.env.example` 列出了这 6 个上游变量和上面 4 个回填变量的默认值。
+- 公开文件的去抖重建现在最多等两个窗口：窗口仍是 `FILES_REBUILD_DEBOUNCE_MS`（默认 300000 ms，100–86400000），每次改动重新计时，但从开始等待算起两个窗口后一定开始重建，每分钟一轮的回填写入不会一直推迟所有公开文件的发布（`TestDebouncedWriteWaitsOneWindow`、`TestSteadyWritesStillPublishWithinTwoDebounceWindows`）。
+
+### 接口
+
+- 新增 8 条路由，都用带方法的路由模式，方法不对返回 JSON 404（`TestSideStoryRoutesAreMethodScoped`）。编辑可读列表、详情、快照和回填状态，也可以 PUT；AI、refresh 和触发回填只限管理员（`TestSideStoryRoutesSeparateEditorsFromAdmins`）。没有接上回填 worker 时，需要它的路由返回 `503 side_story_unavailable`（`TestSideStoryRoutesWithoutARunnerAnswerUnavailable`）。用法和示例见 `contracts/editor-api/README.md` 第 8 节。
+- `GET /api/editor/v1/stories` 按 `kind`、`locale`、`status` 列出故事及翻译进度，`GET /api/editor/v1/story/{kind}/{id}` 返回全部话和行（`TestSideStoryListFiltersByStatusAndValidatesQuery`、`TestSideStoryDetailValidatesIdentityAndLocale`、`TestListSideStoriesCountsLinesStatusAndPrimarySource`）。
+- `PUT /api/editor/v1/story/{kind}/{id}/{episode}` 经 `strictContentMutation`，每行带 `expectedRevision`，整批全有或全无：未知行返回 `422 unknown_lines`，修订冲突返回 `409 revision_conflict` 并在 `current.conflicts` 里给出当前文本。有改动时，响应前重建该故事的公开文件并广播 `sidestory.updated`（`TestSideStoryUpdateWritesPublishesAndReportsConflicts`、`TestSideStoryUpdateIsAStrictContentMutation`、`TestSideStoryUpdatePublishesThePublicFileIncrementally`、`TestUpdateSideStoryLinesIsAllOrNothing`、`TestUpdateSideStoryLinesValidatesInput`）。
+- `GET /api/editor/v1/story/{kind}/{id}/{episode}/snapshot` 现抓日文脚本，与库里的 SHA-256 比对后，按活动剧情快照的格式导出，控制台的 TXT 导入器可以直接读取（`TestSideStorySnapshotSatisfiesTheConsoleImporter`、`TestSideStorySnapshotRejectsMissingOrChangedScripts`）。
+- `POST /api/editor/v1/story/{kind}/{id}/ai` 作为 producer 任务 `ai-side-story` 运行，只填空行，写成 `llm`，不覆盖列出目标之后被改过的行（`TestSideStoryAITranslatesThroughTheRunner`、`TestSideStoryAITranslationsOnlyFillLinesUnchangedSinceTheirTargets`、`TestSideStoryAIRunsOnlyOnDemandWithTheLocalePrompt`）。`en-US` 使用单独的英文 prompt，已有调用方的中文 prompt 逐字节不变（`TestExistingLLMCallersKeepTheChinesePromptByteForByte`）。
+- `POST /api/editor/v1/story/{kind}/{id}/refresh` 立即重抓一个故事的日文、CN、EN 脚本并导入（`TestSideStoryRefreshReturnsTheRunnerApplies`、`TestRefreshSideStoryFetchesEveryLocaleNow`）。`GET` / `POST /api/editor/v1/stories/sync` 读取回填状态或立即唤醒一轮（`TestSideStoryBackfillRoutes`）。
+- 新 SSE 事件 `sidestory.updated` 与 `sidestory.sync`（`TestSideStoryEventNamesMatchTheConsoleVocabulary`）。
+
+### 后台回填
+
+- `translator.SideStoryBackfill` 在服务进程里按轮运行：到期时从 masterdata 重建目录，再以请求间隔抓取到期的话，每 5 话在编辑准入和共享内容锁下写入一次。它不是 producer，不调用 LLM，producer 运行时整轮推迟（`TestSideStoryBackfillRoundImportsOfficialChineseAndEnglish`、`TestSideStoryBackfillDefersWritesWhileAProducerRuns`、`TestSideStoryBackfillRunsOnlyWhileItsSettingAndEnvAllowIt`、`TestServicesConnectTheSideStoryRunnerAndStopItOnShutdown`）。
+- 官方 CN/EN 文本按 TalkData 下标与日文配对。ScenarioId 不同或条数不符时，该语言标为 `mismatch`，一行都不写。超过一半的含假名正文与日文相同（镜像站还在提供新上架脚本的日文占位）时同样一行都不写，但该语言保持 `pending`，`lastError` 记 `zh-CN: official script repeats the Japanese text` 或 `en-US: official script repeats the Japanese text`，与 404 一样 24 小时后重试、不计入 attempts。官方文本只覆盖 `official` 与 `llm` 行，从不改动 `human` 行（`TestApplySideStoryOfficialImportPairsByTalkDataIndex`、`TestApplySideStoryOfficialImportRejectsMismatchedScriptsAndRetriesAMirroredOne`、`TestSideStoryBackfillKeepsHumanRowsAndRefreshesTheCatalogOnDataVersionAndAge`）。
+- 已列出资源路径的 CN/EN 脚本返回 404（镜像还没同步）时，该语言保持 `pending`，`lastError` 记 `zh-CN: not found` 或 `en-US: not found`，24 小时后重试，不计入 attempts；另一种语言同时有暂时性错误时，按那边较早的退避时间重试。已导入过的日文脚本变化时，这次没有抓取的语言回到 `pending`，下一轮就抓，另一种语言这次 404 也不必等 24 小时；另一种语言的暂时性错误仍按它的退避时间。目录里 CN/EN 资源路径变化使该语言回到 `pending` 时，同时清零 attempts、下次重试时间和 `lastError`，新路径下一轮就抓，不等旧路径的 404 重试（JP 路径变化本来如此）。`absent` 只表示该服务器的 masterdata 没有这一话的资源路径（`TestApplySideStoryOfficial404StaysPendingAndRetriesADayLater`、`TestSideStoryBackfillRetriesAMirrorServingJapaneseAndA404ADayLater`、`TestApplySideStoryRequeueAndANewAssetPathOutrankAnother404`、`TestSideStoryProgressCountsStatesPerKind`）。
+- `SideStoryCatalogResult` 新增 `OfficialTitlesWritten`、`TitlesReplaced` 与 `DroppedHumanTitles` 三个计数。JP 话标题变化时，旧标题行连同全部译文删除，计入 `TitlesReplaced`；其中的人工译文计入 `DroppedHumanTitles`，每个 kind 记一行日志 `[side-story] <kind> catalog: changed JP episode titles deleted <N> human title translation(s)`。`NewStories`、`NewEpisodes`、`OfficialRequeued`、`OfficialTitlesWritten` 或 `TitlesReplaced` 不为零的目录刷新算作有改动（只删了官方标题的 JP 标题变化也算），会请求去抖重建并广播 `sidestory.sync`（`TestSyncSideStoryCatalogWritesOfficialTitlesUnderTheOfficialWriteRule`、`TestSideStoryBackfillRebuildsOnCatalogTitleChangesAndLogsDroppedHumanTitles`）。
+- 每轮摘要 `lastRound` 把 `errors`（日文没抓到，或某语言变成 `error`/`mismatch`）和 `retrying`（其余带 `lastError`、等待自动重试的话，如 404、镜像仍返回日文、暂时性错误）分开计数，控制台回填面板分别显示「错误」和「待重试」（`TestSideStoryBackfillRetriesAMirrorServingJapaneseAndA404ADayLater`、`TestSideStoryBackfillBacksOffTransientErrors`）。2026-09-24 本地用真实上游回填时，CN 镜像对 1234–1367 号卡已抓取的话约七成仍返回日文，它们都计入 `retrying`。
+- 内容备份恢复成功后，`afterContentRestore` 先退役协作会话，再调用 `TriggerSideStoryBackfill(true)`，回填开启时不必等 6 小时就重建目录。恢复期间仍持有 producer 门禁，所以刷新可能推迟一轮，最迟在 `SIDE_STORY_BACKFILL_INTERVAL_MS` 之后（`TestAfterContentRestoreRefreshesTheSideStoryCatalog`）。
+- 日文抓取的暂时性失败从 10 分钟起翻倍退避，最长 24 小时，404 等其他失败 24 小时后重试；抓脚本时按源依次尝试，区域对话不走 JP fallback（`TestSideStoryBackoffDoublesFromTenMinutesUpToADay`、`TestFetchSideStoryScriptClassifiesFailuresAndTriesTheNextBase`）。区域分类与主站的 `getAreaCategory` 一致（`TestSideStoryAreaCategoryMatchesTheMainSite`）。
+
+### 公开文件
+
+- `zh-CN` 写到 `/files/translation/cardStory/card_<cardId>.json` 与 `/files/translation/areaTalk/group_<n>.json`，`en-US` 写到 `/files/v2/en-US/translation/` 下的同名路径，`n` 为 JP actionSet ID 整除 100，没有其他语言的镜像。每话和每个文件的 `source` 取 `official_cn`、`official_en`、`human` 或 `llm`（`TestSideStoryFilesJSONBytes`、`TestSideStoryPublicFilesProjectTranslatedTalkBySource`、`TestSideStoryPublicAreaFilesGroupByActionSetHundreds`、`TestFullRebuildServesSideStoriesInZhCNAndEnUSOnly`、`TestRebuildSideStoryRepublishesAndWithdrawsOneFile`）。
+- 增量发布和增量撤下都记下所在的 epoch，正在进行的全量重建不会用旧字节覆盖它们：重建期间首次发布的文件保留，重建期间撤下的文件不会被恢复（`TestFullRebuildKeepsASideStoryFileFirstPublishedDuringIt`、`TestFullRebuildDoesNotRestoreASideStoryFileWithdrawnDuringIt`）。
+- 旧备份布局 `WriteAllContext` 的文件集合不变（`TestWriteAllContextLeavesSideStoriesOut`）。`TestSideStoryProjectionAndListScale` 在 3000 个故事 × 2 话 × 40 行加标题、两种语言的数据上检查投影和列表。
+
+### 备份
+
+- `translation-content/side-stories.json` 带齐四张表的全部列，与其他内容在同一个恢复事务里恢复；删除之前先逐行校验，被篡改的备份不会改动目标库（`TestSideStoryBackupRestoresEveryRowExactly`、`TestSideStoryRestoreRejectsTamperedRowsAndLeavesTheDatabaseUnchanged`、`TestS3BackupCarriesSideStoriesThroughTheManager`）。
+- manifest 的文件集合必须与 `schemaVersion` 对应：v1 恰好 3 个文件，v2 恰好 4 个；v1 与旧格式恢复时清空 side-story 表（`TestTranslationContentManifestFileSetMatchesItsSchemaVersion`、`TestRestoreWithoutSideStoriesClearsTheSideStoryTables`、`TestS3RestoreOfSchemaVersion1BackupClearsSideStories`）。
+- `side-stories.json` 的单文件上限为 256 MiB，记录总数上限从 1,000,000 提到 2,000,000；其余上限不变（`TestSideStoriesContentFileHasItsOwnSizeLimit`、`TestTranslationContentRecordLimitLeavesRoomForProductionScaleSideStories`）。
+- Git 目标每次只推一个文件：`BackupAllContext` 生成一份归档，`publishGitBackupArtifactContext` 用 `backup.tar.gz`（设置了 `MOESEKAI_BACKUP_ENCRYPTION_KEY` 时为 `backup.enc`）替换分支上的全部内容（`TestBackupAllUsesOneSnapshotForS3AndGit`）。GitHub 拒收超过 100 MiB 的文件，所以这个文件必须低于该上限。2026-09-24 的上游探测估计 `side-stories.json` 为 173–192 MiB 的 JSON、gzip 后 23–26 MiB（误差约 ±15%），整个归档约 66–70 MB。
+
+### 控制台与主站
+
+- 控制台新增「卡牌剧情」「区域对话」两个分类：侧边栏筛选与分组、逐行编辑（409 时显示服务器版本并保留草稿）、管理员的 AI 与重抓按钮、按快照整话导入 TXT、回填进度面板，并订阅两个新的 SSE 事件（`web/tests/side-story-console.test.mjs`、`web/tests/side-story-txt-import.test.mjs`）。管理设置弹窗列出 6 个新的上游设置（`web/tests/admin-settings.test.mjs`）。
+- 控制台细节：报错显示服务端 `details` 里的具体原因（如 AI 批次失败的 HTTP 429），`already_running`、`draining`、`internal_error` 有中文说明；`mismatch` 显示为「剧本结构不一致」；重抓结果和工具栏只按当前语言的状态区分「有错误」与「待重试」，404 和镜像仍返回日文不再算失败；TXT 导入把与不含假名的日文相同的文本（一歌、奏这类中日同形的名字）当作译文，与服务端官方导入的规则一致；在从未保存过的空行上「保存并下一条」只跳到下一条，不再写入永久的人工空行；来源修改和 TXT 批量遇到 409 时，对当前选中的行显示「采用服务器版本」；TXT 核对途中切换剧情、语言或话数不会让导入按钮一直停在「正在核对 TXT…」；1.5 秒内切换语言不会被旧语言的列表覆盖（`web/tests/side-story-console.test.mjs`、`web/tests/side-story-txt-import.test.mjs`、`web/tests/side-story-editor.test.mjs`）。管理设置新增「卡牌剧情/区域对话后台回填」开关。
+- 主站 Moesekai（分支 `feat/side-story-translation-20260924`）在 JP 服务器、界面语言为 `zh-CN` 或 `en-US` 且开启翻译时读取这些文件：卡牌页按 `seq` 合并前后篇，区域对话页按 JP actionSet ID 选 `group_<n>` 并以 scenarioId 合并；两个页面在 `serverSource` 从 localStorage 恢复前后各加载一次时丢弃过期的那一次，区域页不会因此只显示日文；查找译文时先用原文、再用去掉首尾空白的原文，与后端的行键一致，活动剧情里以 U+3000 结尾的少数行（如 `event_109_08` 的哼唱行）也能匹配（`web/tests/characterization/side-story-translations.characterization.test.mjs`）。
+
 ## 修复轮（remediation-20260922）
 
 这一轮让 agent 脚本能直接通过 HTTP 读取、提交并发布整首歌词（恢复导入台账里的歌曲也可以），让旧版歌词在首存之后仍可编辑，新增 `gachaInfo` 分类，并修复备份、协作和控制台的一批缺陷。本轮新增数据库迁移 v37 与 v38，都只能前进。
