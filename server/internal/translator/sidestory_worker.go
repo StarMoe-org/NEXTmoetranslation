@@ -55,6 +55,10 @@ type SideStoryBackfill struct {
 	catalogRefreshedAt time.Time
 	catalogVersion     string
 	catalogFailedAt    time.Time
+
+	// lastRequestAt carries the request delay from one round into the next;
+	// only the round goroutine touches it.
+	lastRequestAt time.Time
 }
 
 func NewSideStoryBackfill(t *Translator, opts SideStoryBackfillOptions) *SideStoryBackfill {
@@ -209,8 +213,11 @@ func (w *SideStoryBackfill) round(ctx context.Context, forceCatalog bool) (summa
 		}
 		return summary, false, errSideStoryDeferred
 	}
-	pacer := &sideStoryPacer{delay: w.opts.RequestDelay}
-	defer func() { summary.Requests = pacer.requests }()
+	pacer := &sideStoryPacer{delay: w.opts.RequestDelay, last: w.lastRequestAt}
+	defer func() {
+		summary.Requests = pacer.requests
+		w.lastRequestAt = pacer.last
+	}()
 	var problems []error
 	if w.catalogDue(forceCatalog) {
 		changed, err = w.refreshCatalog(ctx, pacer)

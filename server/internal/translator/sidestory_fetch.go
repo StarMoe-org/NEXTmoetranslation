@@ -19,7 +19,8 @@ import (
 var ErrSideStoryUpstreamUnavailable = errors.New("side story upstream unavailable")
 
 // sideStoryPacer spaces consecutive upstream requests by delay, measured from
-// the end of the previous request, and counts them.
+// the end of the previous request (last, which may predate this pacer), and
+// counts them.
 type sideStoryPacer struct {
 	delay    time.Duration
 	last     time.Time
@@ -27,7 +28,7 @@ type sideStoryPacer struct {
 }
 
 func (p *sideStoryPacer) begin(ctx context.Context) error {
-	if p.requests > 0 && p.delay > 0 {
+	if !p.last.IsZero() && p.delay > 0 {
 		if err := waitContext(ctx, p.delay-time.Since(p.last)); err != nil {
 			return err
 		}

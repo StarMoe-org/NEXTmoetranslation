@@ -419,6 +419,26 @@ func TestSideStoryBackfillHonoursTheRequestDelay(t *testing.T) {
 	}
 }
 
+func TestSideStoryBackfillKeepsTheRequestDelayAcrossRounds(t *testing.T) {
+	h := newSideStoryHarness(t)
+	h.round(t)
+	first := len(h.upstream.requested())
+	const delay = 150 * time.Millisecond
+	h.worker.opts.RequestDelay = delay
+	if !h.worker.TriggerSideStoryBackfill(true) {
+		t.Fatal("trigger rejected while enabled")
+	}
+	<-h.worker.wake
+	h.round(t)
+	requests := h.upstream.requested()
+	if len(requests) <= first {
+		t.Fatal("the triggered round made no request")
+	}
+	if gap := requests[first].at.Sub(requests[first-1].at); gap < delay*9/10 {
+		t.Fatalf("the next round's first request followed the previous round's last one after %s, want at least %s", gap, delay)
+	}
+}
+
 func TestSideStoryBackfillDefersWritesWhileAProducerRuns(t *testing.T) {
 	h := newSideStoryHarness(t)
 	release, err := h.gate.BeginProducerContext(t.Context())
