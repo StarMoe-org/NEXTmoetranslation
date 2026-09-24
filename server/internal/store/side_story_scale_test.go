@@ -10,6 +10,11 @@ import (
 // (3000 stories × 2 episodes × 40 lines plus titles, both locales) and bounds
 // the public projection and the list.
 func TestSideStoryProjectionAndListScale(t *testing.T) {
+	if raceDetectorEnabled {
+		// SQLite runs about 45 times slower under the race detector; the plain
+		// test job enforces the bound.
+		t.Skip("timing bound does not apply under the race detector")
+	}
 	s := newSideStoryTestStore(t)
 	started := time.Now()
 	for _, statement := range []string{
