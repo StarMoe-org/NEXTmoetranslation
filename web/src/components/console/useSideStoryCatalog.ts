@@ -110,9 +110,10 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
     try {
       const result = await triggerSideStorySync(refreshCatalog);
       setSyncStatus((prev) => (prev ? { ...prev, state: result.state } : prev));
-      showRef.current(result.started
-        ? refreshCatalog ? "已开始刷新目录并续跑一轮回填" : "已开始续跑一轮回填"
-        : "回填正在运行，本次请求未重复启动", "ok");
+      // A disabled backfill is a 409; while a round runs, the requested round follows it.
+      showRef.current(result.state.running
+        ? refreshCatalog ? "回填正在运行，本轮结束后将刷新目录并续跑一轮" : "回填正在运行，本轮结束后将续跑一轮"
+        : refreshCatalog ? "已开始刷新目录并续跑一轮回填" : "已开始续跑一轮回填", "ok");
       void loadSyncStatus();
     } catch (error) {
       showRef.current(sideStoryErrorMessage(error, "续跑请求失败"), "err");
