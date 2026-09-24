@@ -254,7 +254,7 @@ func (s *Store) SideStoryProgressContext(ctx context.Context) (map[string]SideSt
 	rows, err = tx.QueryContext(ctx, `SELECT kind,COUNT(*),SUM(script_sha256<>''),SUM(script_sha256='' OR jp_refetch=1),
 		SUM(cn_state='imported'),SUM(cn_state='pending'),SUM(cn_state='absent'),SUM(cn_state='mismatch'),SUM(cn_state='error'),
 		SUM(en_state='imported'),SUM(en_state='pending'),SUM(en_state='absent'),SUM(en_state='mismatch'),SUM(en_state='error'),
-		SUM(last_error<>'' AND (script_sha256='' OR jp_refetch=1))
+		SUM(last_error LIKE 'ja-JP: %' AND (script_sha256='' OR jp_refetch=1))
 		FROM side_story_episodes GROUP BY kind`)
 	if err != nil {
 		return nil, err

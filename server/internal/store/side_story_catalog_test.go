@@ -181,8 +181,22 @@ func TestSyncSideStoryCatalogKeepsTheReasonOfALocaleLeftInMismatch(t *testing.T)
 	story.Episodes[0].JPAssetPath += "_v2"
 	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, story)
 	check("new JP path", nil)
+	// The kept EN reason is no JP fetch error.
+	if progress, err := s.SideStoryProgressContext(context.Background()); err != nil || progress["card"].Errors != 0 {
+		t.Fatalf("progress after the new JP path %+v err=%v", progress["card"], err)
+	}
 	applied = mustApplySideStory(t, s, sideStoryTestNow, SideStoryEpisodeFetch{Kind: "card", StoryID: "40", EpisodeKey: "1", JP: fetchedJP(jp)}).Episodes[0]
 	check("unchanged JP refetch", &applied)
+
+	// A new EN path requeues EN, whose own reason goes with its old path.
+	story.Episodes[0].ENAssetPath += "_v2"
+	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, story)
+	if state := sideStoryEpisodeState(t, s, "card", "40", "1"); state.lastError != "" || state.attempts != 0 || state.nextAttemptAt != 0 {
+		t.Fatalf("new EN path stored %+v", state)
+	}
+	if _, enState := sideStoryEpisodeStates(t, s, "card", "40", "1"); enState != "pending" {
+		t.Fatalf("new EN path left EN %s", enState)
+	}
 }
 
 func TestSyncSideStoryCatalogWritesOfficialTitlesUnderTheOfficialWriteRule(t *testing.T) {
