@@ -47,7 +47,8 @@ func (t *Translator) applySideStoryFetchesContext(ctx context.Context, fetches [
 // RefreshSideStoryContext fetches the JP, CN and EN scripts of every episode
 // of one story now and applies them. It returns sql.ErrNoRows for an unknown
 // story and ErrSideStoryUpstreamUnavailable when no JP script could be fetched
-// because the sources failed; the failures are recorded either way.
+// because the sources failed. A JP fetch failure is stored only on an episode
+// the backfill still queues; on any other it is only returned.
 func (t *Translator) RefreshSideStoryContext(ctx context.Context, kind, storyID string) ([]store.SideStoryEpisodeApply, error) {
 	items, err := t.store.SideStoryEpisodesContext(ctx, kind, storyID)
 	if err != nil {

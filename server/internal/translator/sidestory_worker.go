@@ -368,8 +368,10 @@ func sideStoryEpisodeFailed(episode store.SideStoryEpisodeApply) bool {
 }
 
 // catalogDue lists the kinds whose catalog is due: at the first round, after
-// sideStoryCatalogMaxAge, when the upstream watcher recorded a new data version
-// (only while the watcher runs, which needs scheduler.enabled), or on request.
+// sideStoryCatalogMaxAge, when the upstream data version changed, or on
+// request. The version is written by the upstream watcher's polling, which
+// needs scheduler.enabled, and also by an administrator's manual upstream
+// check or CN sync, which do not.
 // A kind whose refresh failed is retried after sideStoryCatalogRetryDelay
 // unless requested.
 func (w *SideStoryBackfill) catalogDue(force bool) []string {
