@@ -96,6 +96,7 @@ export function SideStoryToolbar({
             onReload={onReload}
           />
         )}
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onReload} disabled={saving}>重新载入本篇</button>
         {role === "admin" && <>
           {writable && <button type="button" className="btn btn-primary btn-sm" onClick={onAI} disabled={busy}>AI 补充翻译{aiScope}</button>}
           <button type="button" className="btn btn-secondary btn-sm" onClick={onRefresh} disabled={busy}>重新获取剧本</button>
