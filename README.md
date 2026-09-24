@@ -1,6 +1,6 @@
 # NextTrans
 
-Project SEKAI 翻译校对系统。生产发布合同是 NEXT 自有的 standalone 单镜像：SQLite 是唯一编辑真源，一个 Go 进程同时提供控制台静态页、`/api`、`/sse`、`/yjs` 协作 WebSocket，以及 CDN 友好的 `/files/*` 与 `/translation/*` 公开文件（与旧系统格式完全兼容，pjsk.moe 侧零改动）。翻译词条、活动剧情、歌词草稿与发布状态都在同一个数据库里；公开 JSON 由数据库投影再生成，而不是手工维护的文件。当前数据库 schema 版本为 v36。
+Project SEKAI 翻译校对系统。生产发布合同是 NEXT 自有的 standalone 单镜像：SQLite 是唯一编辑真源，一个 Go 进程同时提供控制台静态页、`/api`、`/sse`、`/yjs` 协作 WebSocket，以及 CDN 友好的 `/files/*` 与 `/translation/*` 公开文件（与旧系统格式完全兼容，pjsk.moe 侧零改动）。翻译词条、活动剧情、歌词草稿与发布状态都在同一个数据库里；公开 JSON 由数据库投影再生成，而不是手工维护的文件。当前数据库 schema 版本为 v38（v37 放宽 `song_lyrics_source_artifacts` 的来源检查，允许 `https://projectsekai.fandom.com`；v38 只新建恢复台账接管表 `lyrics_recovery_takeovers`；迁移只能前进，部署前检查见 [`ROLLBACK_RUNBOOK.md`](ROLLBACK_RUNBOOK.md)）。
 
 ```
 NEXTmoetranslation/
@@ -84,6 +84,8 @@ go run ./cmd/lyrics-import-stage \
   -confirm-local-offline
 ```
 
+各离线命令对数据库 schema 的要求不同：`lyrics-stage` 要求迁移历史连续、止于 v18 至 v38；`lyrics-import-stage`、`lyrics-recovery-import` 与 `lyrics-recovery-public-candidate` 要求连续的 v27 至 v38；`lyrics-preflight` 要求目录库正好是 v18；`lyrics-catalog-filter` 只读最高版本号，不设上限，也不检查连续性。新的 schema 版本要先审阅兼容性，再提高这些上限。只要有一首歌被整曲文档接管（v38 的 `lyrics_recovery_takeovers`），或者有一首歌的 source 文档归编辑器所有（用 `PUT /api/editor/v1/lyrics/document` 发布过的歌、迁移 v32 写入的歌曲 682、内嵌编辑器 seed 写入的歌，见 `refuseRecoveryItemsForEditorOwnedSongs`），`lyrics-recovery-import` 就拒绝新的恢复批次，因为批次必须覆盖整个曲库。v32 写入过歌曲 682 的数据库从一开始就是这样。重放已导入的批次不受影响。
+
 ### 测试
 
 ```bash
@@ -103,8 +105,8 @@ mysekai 的 `tag` → `flavorText` 镜像是另一条独立规则：同名 jp ke
 
 ## 发布怎么工作
 
-**写入门禁。** 9 条无版本号写路由（`PUT /api/entry`、`PUT /api/category/batch`、`PUT /api/lyrics/save`、`POST /api/lyrics/translation-editions`、`POST /api/lyrics/publish`、`POST /api/lyrics/unpublish`、`PUT /api/event-story/update`、`POST /api/event-story/promote-human`、`POST /api/backup/push`）已删除并返回 JSON 404；全部写入走 `/api/editor/v1/*` 严格路由。每次严格写必须携带与所编辑文档同一份门禁状态的 `X-Moe-Loaded-Producer-State: <instanceId>:<revision>:<completedGeneration>`：缺少该头返回 `428`，重复或畸形返回 `400`，producer 正在运行、revision/generation 过期或进程重启导致 instance 不匹配返回 `409` 并回带当前 producer 状态。唯一保留的宽松门禁写路由是 `POST /api/admin/lyrics-source-reviews/import`（SekaiText-Moe 仍在用），它已有严格双胞 `POST /api/editor/v1/admin/lyrics-source-reviews/import`。`/sse` 连接建立后的第一帧固定是 `gate.status`，因此新开的标签页无需额外轮询就知道当前能不能写。
+**写入门禁。** 内容写入走 `/api/editor/v1/*`。为 agent 脚本重新挂载了三条旧路径：`PUT /api/entry`、`PUT /api/lyrics/save`、`POST /api/lyrics/publish` 分别与 `/api/editor/v1/entry`、`/api/editor/v1/lyrics/save`、`/api/editor/v1/lyrics/publish` 共用同一个鉴权包装与处理函数；其余六条无版本号写路由（`PUT /api/category/batch`、`POST /api/lyrics/translation-editions`、`POST /api/lyrics/unpublish`、`PUT /api/event-story/update`、`POST /api/event-story/promote-human`、`POST /api/backup/push`）仍返回 JSON 404。内容写入的 `X-Moe-Loaded-Producer-State: <instanceId>:<revision>:<completedGeneration>` 头是可选的：不带时按宽松门禁处理（编辑准入加共享内容锁，producer 运行中返回 `409`）；带了就必须与所编辑文档加载时的门禁状态一致——重复或畸形返回 `400`，producer 正在运行、revision/generation 过期或进程重启导致 instance 不匹配返回 `409` 并回带当前 producer 状态。只有 `POST /api/editor/v1/lyrics/{musicId}/collab-ticket` 与 `POST /api/editor/v1/backup/push` 仍强制该头，缺少返回 `428`。`PUT /api/editor/v1/lyrics/document`（管理员）一次提交整首歌词文档并直接发布。歌曲已存有或正在提供歌词时必须带 GET 给出的 `expectedRevision`；`dryRun` 在事务里执行与正式提交相同的写入后回滚，所以正式提交会遇到的错误它同样会返回；它在 `changes` 里列出将要发生的改动。有多个译本的歌用 `translationEditions`、`zhEditions`、`editionCredits` 携带全部译本，原样提交导出结果不会丢掉任何译本。恢复导入台账里的歌曲在首次发布时被接管，台账各行保持不变。同一路径的 `GET ?musicId=<id>`（编辑即可，只读，不需要 producer 头）把公开站当前提供的歌词转成可以直接提交的请求体，并用 `warnings` 列出请求格式装不下的内容；加 `&from=database` 则读数据库里可编辑的版本。`POST /api/editor/v1/lyrics/document/takeover`（管理员）把公开站正在提供的歌原样转成可编辑文档，控制台的「转为可编辑」按钮调用的就是它。agent 调用方式（含 `gachaInfo` 词条的写法）见 [`contracts/editor-api/README.md`](contracts/editor-api/README.md)。宽松门禁写路由 `POST /api/admin/lyrics-source-reviews/import`（SekaiText-Moe 仍在用）保留，它的严格双胞是 `POST /api/editor/v1/admin/lyrics-source-reviews/import`。`/sse` 连接建立后的第一帧固定是 `gate.status`，因此新开的标签页无需额外轮询就知道当前能不能写。
 
 **歌词公开投影。** 镜像内嵌的已验收 Public Lyrics v3 只读包只是冷启动基线（归档 SHA-256 与数量 pin 统一记在 `contracts/public-lyrics/baseline.json`）。每次 files-service 投影重建先做数据库投影，再用数据库发布覆盖同名条目：`POST /api/editor/v1/lyrics/publish` 让一首歌立刻出现在 `/files/translation/lyrics/index.json` 与 `music_<id>.json`（含 `v2/{locale}/` 镜像），不需要改文件或重打镜像；`POST /api/editor/v1/lyrics/unpublish` 即使该曲存在于内嵌包内也会把它从索引和详情路由撤下——撤下标记写在 schema v35 的 `song_lyrics_public_withdrawals` 表里，与删除 publication 行同一个事务，发布时清除，并随内容备份一起携带。内嵌包加载失败不阻塞重建，投影只用数据库内容并把状态记为 degraded。
 
-**什么时候真正落到公开路径。** 发布/取消发布、译本元数据变更、`music`/`title` 批量修改都会请求一次立即重建（`PublishNow`），其余写入走去抖重建。`GET /api/projection/status` 返回最近发布的 `generation`、是否 `pending`、`lastSuccessAt` 与脱敏 `lastError`；数据库在批量写返回时就已经落库，而该次保存对应的 `/files` 与 `/translation` 字节要等状态推进到更晚的非 pending generation 且 `lastError` 为空之后才算生效。控制台侧栏和管理面板的「立即全量发布」按钮调用 `POST /api/projection/publish`，触发一次全量构建并回传同一个状态对象。
+**什么时候真正落到公开路径。** 发布/取消发布、整首文档发布、source-v3 保存（含控制台的协作保存）、译本元数据变更、`music`/`title` 批量修改都会请求一次立即重建（`PublishNow`），其余写入走去抖重建。`GET /api/projection/status` 返回最近发布的 `generation`、是否 `pending`、`lastSuccessAt` 与脱敏 `lastError`；数据库在批量写返回时就已经落库，而该次保存对应的 `/files` 与 `/translation` 字节要等状态推进到更晚的非 pending generation 且 `lastError` 为空之后才算生效。控制台侧栏和管理面板的「立即全量发布」按钮调用 `POST /api/projection/publish`，触发一次全量构建并回传同一个状态对象。

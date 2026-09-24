@@ -9,7 +9,7 @@ This baseline characterizes the pre-locale, pre-lyrics behavior without changing
 | `GET /api/categories`, `GET /api/entries` | `server/internal/api/legacy_contract_test.go` and `server/internal/api/testdata/legacy/` |
 | `PUT /api/editor/v1/entry` ok, noop, error, insertion, arbitrary v1 field/source, actor and ID preservation | `server/internal/api/legacy_contract_test.go` |
 | Event summary/detail/update/error | `server/internal/api/legacy_contract_test.go` and its event fixtures |
-| Deleted unversioned write routes now answering the JSON API 404, and the strict import twin's producer-state requirement | `server/internal/api/routes_contract_test.go` |
+| Unversioned write routes: the six still-deleted paths answering the JSON API 404, the three re-mounted aliases, and the strict import twin's producer-state handling | `server/internal/api/routes_contract_test.go` |
 | First-run setup, login, `/me`, refresh | Normalized golden responses in `server/internal/api/testdata/legacy/`; JWT values and expiration timestamps are type-checked before normalization |
 | SSE authentication, headers, first `gate.status` frame, entry update, event update, and noop suppression | `server/internal/api/sse_test.go` |
 | Flat/full category bytes and event-story bytes | `server/internal/files/legacy_golden_test.go` and `server/internal/files/testdata/legacy/` |
