@@ -39,6 +39,8 @@ export function SideStoryToolbar({
   const episodeLabel = (key: string) => kind === "card" ? `第 ${key} 话` : "本篇";
   const importEpisodes = episodes.filter((episode) => episode.fetched).map((episode) => ({ key: episode.key, label: episodeLabel(episode.key) }));
   const writable = locale !== "ja-JP";
+  // While loading, after a failed load or before the script is fetched nothing is fully translated.
+  const scriptLoaded = entries.length > 0 && visibleEpisodes.every((episode) => episode.fetched);
   const aiScope = selectedEpisode === "all" || episodes.length < 2 ? "" : `（第 ${selectedEpisode} 话）`;
 
   return (
@@ -52,16 +54,16 @@ export function SideStoryToolbar({
               <option key={chapter.episodeNo} value={chapter.episodeNo}>
                 {`第 ${chapter.episodeNo} 话${chapter.title ? ` · ${chapter.title}` : ""} · ${
                   episodes.some((episode) => episode.key === chapter.episodeNo && !episode.fetched) ? "剧本尚未获取"
-                    : chapter.untranslated > 0 ? `未翻译 ${chapter.untranslated} 条` : "已完成"}`}
+                    : !writable ? `${chapter.total} 条` : chapter.untranslated > 0 ? `未翻译 ${chapter.untranslated} 条` : "已完成"}`}
               </option>
             ))}
           </select>
         </label>
       ) : (
         <span className="story-status">
-          {writable && untranslated > 0
-            ? <><span className="story-dot pending" /> {untranslated} 条未翻译</>
-            : <><span className="story-dot done" /> {writable ? "已全部翻译" : "日文原文（只读）"}</>}
+          {!writable ? "日文原文（只读）"
+            : untranslated > 0 ? <><span className="story-dot pending" /> {untranslated} 条未翻译</>
+              : scriptLoaded && <><span className="story-dot done" /> 已全部翻译</>}
         </span>
       )}
       {visibleEpisodes.length > 0 && (
