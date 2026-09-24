@@ -771,8 +771,8 @@ curl -sS "$BASE/api/editor/v1/stories?kind=card&locale=zh-CN&status=untranslated
 #   "sourceCounts":{"official":0,"llm":0,"human":0},"primarySource":"","status":"untranslated","updatedAt":1790000000}]}
 ```
 
-- `kind` 必填。`status` 可选，取 `pending`（还没抓到任何一话的日文脚本）、`untranslated`、`partial`、`translated`，其他值返回 400。
-- 卡牌剧情的计数包含标题行。`primarySource` 是已译行里最多的来源，并列时 human > official > llm，没有已译行时为 `""`。`releasedAt` 是 Unix 毫秒，`updatedAt` 是这个语言最近一次写译文的 Unix 秒；还没有任何该语言译文时，取目录写入或更新这个故事的时间，所以刚入目录、尚无译文的故事也有 `updatedAt`。area 故事另带 `areaId`、`areaCategory`（如 `grade1`）和 `actionSetId`。
+- `kind` 必填。`status` 可选，取 `pending`（还没抓到任何一话的日文脚本）、`untranslated`（已抓到日文，但没有一条正文或说话人行有译文）、`partial`（有正文或说话人行已译，但还有未译的行，标题行也算）、`translated`（全部行都已译），其他值返回 400。只有标题行有译文的故事（例如只有目录写入的官方标题）仍是 `untranslated`。
+- 卡牌剧情的计数（`translatedCount`、`untranslatedCount`、`sourceCounts`）包含标题行。`primarySource` 是已译行里最多的来源，并列时 human > official > llm；没有已译的正文或说话人行时为 `""`，所以 `pending` 和 `untranslated` 的故事都是 `""`。`releasedAt` 是 Unix 毫秒，`updatedAt` 是这个语言最近一次写译文的 Unix 秒；还没有任何该语言译文时，取目录写入或更新这个故事的时间，所以刚入目录、尚无译文的故事也有 `updatedAt`。area 故事另带 `areaId`、`areaCategory`（如 `grade1`）和 `actionSetId`。
 
 ### 8.2 详情：`GET /api/editor/v1/story/{kind}/{id}`
 

@@ -32,11 +32,13 @@ func (c *SideStorySourceCounts) add(source string, count int) {
 	}
 }
 
-func sideStoryStatus(fetchedEpisodes, translated, untranslated int) string {
+// sideStoryStatus judges by translated body and speaker lines, so a story
+// with only official episode titles stays untranslated.
+func sideStoryStatus(fetchedEpisodes, translatedDialogue, untranslated int) string {
 	switch {
 	case fetchedEpisodes == 0:
 		return "pending"
-	case translated == 0:
+	case translatedDialogue == 0:
 		return "untranslated"
 	case untranslated > 0:
 		return "partial"
@@ -120,23 +122,26 @@ func (s *Store) ListSideStoriesContext(ctx context.Context, kind, locale string)
 		return nil, err
 	}
 
-	rows, err = tx.QueryContext(ctx, `SELECT story_id,source,SUM(text<>''),MAX(updated_at) FROM side_story_line_localizations
-		WHERE locale=? AND kind=? GROUP BY story_id,source`, locale, kind)
+	rows, err = tx.QueryContext(ctx, `SELECT loc.story_id,loc.source,SUM(loc.text<>''),SUM(loc.text<>'' AND l.role<>'title'),
+		MAX(loc.updated_at) FROM side_story_line_localizations loc
+		JOIN side_story_lines l ON l.kind=loc.kind AND l.story_id=loc.story_id AND l.episode_key=loc.episode_key AND l.jp_key=loc.jp_key
+		WHERE loc.locale=? AND loc.kind=? GROUP BY loc.story_id,loc.source`, locale, kind)
 	if err != nil {
 		return nil, err
 	}
-	latestWrite := map[string]int64{}
+	latestWrite, translatedDialogue := map[string]int64{}, map[string]int{}
 	for rows.Next() {
 		var id, source string
-		var translated int
+		var translated, dialogue int
 		var updated int64
-		if err := rows.Scan(&id, &source, &translated, &updated); err != nil {
+		if err := rows.Scan(&id, &source, &translated, &dialogue, &updated); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		if summary := index[id]; summary != nil {
 			summary.SourceCounts.add(source, translated)
 			summary.TranslatedCount += translated
+			translatedDialogue[id] += dialogue
 			latestWrite[id] = max(latestWrite[id], updated)
 		}
 	}
@@ -147,8 +152,11 @@ func (s *Store) ListSideStoriesContext(ctx context.Context, kind, locale string)
 	for position := range summaries {
 		summary := &summaries[position]
 		summary.UntranslatedCount = summary.LineCount - summary.TranslatedCount
-		summary.PrimarySource = sideStoryPrimarySource(summary.SourceCounts)
-		summary.Status = sideStoryStatus(summary.FetchedEpisodeCount, summary.TranslatedCount, summary.UntranslatedCount)
+		// Title-only stories read like untranslated ones: no primary source.
+		if translatedDialogue[summary.ID] > 0 {
+			summary.PrimarySource = sideStoryPrimarySource(summary.SourceCounts)
+		}
+		summary.Status = sideStoryStatus(summary.FetchedEpisodeCount, translatedDialogue[summary.ID], summary.UntranslatedCount)
 		if written, ok := latestWrite[summary.ID]; ok {
 			summary.UpdatedAt = written
 		}

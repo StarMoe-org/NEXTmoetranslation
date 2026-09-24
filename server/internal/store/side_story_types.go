@@ -229,7 +229,7 @@ type SideStorySummary struct {
 	TranslatedCount     int                   `json:"translatedCount"`
 	UntranslatedCount   int                   `json:"untranslatedCount"`
 	SourceCounts        SideStorySourceCounts `json:"sourceCounts"`
-	PrimarySource       string                `json:"primarySource"` // most frequent source among translated lines; ties human > official > llm; "" none
+	PrimarySource       string                `json:"primarySource"` // most frequent source among translated lines; ties human > official > llm; "" until a body or speaker line is translated
 	Status              string                `json:"status"`        // pending (no episode fetched) | untranslated | partial | translated
 	UpdatedAt           int64                 `json:"updatedAt"`     // unix seconds, latest translation write, else story update
 }

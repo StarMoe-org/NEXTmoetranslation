@@ -35,7 +35,17 @@ func TestListSideStoriesCountsLinesStatusAndPrimarySource(t *testing.T) {
 	seedSideStoryCard(t, s, "300", 3000)
 	seedSideStoryCard(t, s, "301", 2000)
 	seedSideStoryCard(t, s, "302", 1000)
-	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, sideStoryTestCard("303", 500, "", ""))
+	// Cards 303 (pending) and 304 (fetched) only have official zh-CN titles.
+	withCNTitles := func(story SideStoryCatalogStory) SideStoryCatalogStory {
+		for index := range story.Episodes {
+			story.Episodes[index].CNTitle = "测试官方标题" + story.Episodes[index].Key
+		}
+		return story
+	}
+	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, withCNTitles(sideStoryTestCard("303", 500, "", "")),
+		withCNTitles(sideStoryTestCard("304", 800, "", "")))
+	mustApplySideStory(t, s, sideStoryTestNow, SideStoryEpisodeFetch{Kind: "card", StoryID: "304", EpisodeKey: "1",
+		JP: fetchedJP(sideStoryTestScript(t, "test_card_304_01", sideStoryTestTalk{"テスト話者", "テスト台詞甲"}, sideStoryTestTalk{"", "テスト台詞乙"}))})
 	edit := func(jp, text string) SideStoryLineEdit { return SideStoryLineEdit{JP: jp, Text: text} }
 	mustUpdateSideStory(t, s, "card", "300", "1", "zh-CN",
 		edit("テスト話300-1", "测试标题"), edit("テスト台詞甲", "测试甲"),
@@ -67,8 +77,11 @@ func TestListSideStoriesCountsLinesStatusAndPrimarySource(t *testing.T) {
 			PrimarySource: "official", Status: "partial", UpdatedAt: sideStoryTestNow.Unix()},
 		{Kind: "card", ID: "302", Title: "テスト称号302", CharacterID: 1, ReleasedAt: 1000, EpisodeCount: 2, FetchedEpisodeCount: 1,
 			LineCount: 5, UntranslatedCount: 5, Status: "untranslated", UpdatedAt: sideStoryTestNow.Unix()},
+		{Kind: "card", ID: "304", Title: "テスト称号304", CharacterID: 1, ReleasedAt: 800, EpisodeCount: 2, FetchedEpisodeCount: 1,
+			LineCount: 5, TranslatedCount: 2, UntranslatedCount: 3, SourceCounts: SideStorySourceCounts{Official: 2},
+			Status: "untranslated", UpdatedAt: sideStoryTestNow.Unix()},
 		{Kind: "card", ID: "303", Title: "テスト称号303", CharacterID: 1, ReleasedAt: 500, EpisodeCount: 2,
-			LineCount: 2, UntranslatedCount: 2, Status: "pending", UpdatedAt: sideStoryTestNow.Unix()},
+			LineCount: 2, TranslatedCount: 2, SourceCounts: SideStorySourceCounts{Official: 2}, Status: "pending", UpdatedAt: sideStoryTestNow.Unix()},
 	}
 	if len(list) != len(want) {
 		t.Fatalf("list %+v", list)
