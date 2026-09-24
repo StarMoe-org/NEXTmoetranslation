@@ -436,21 +436,25 @@ func startTestBackfill(t *testing.T, tr *Translator, opts SideStoryBackfillOptio
 	return worker
 }
 
-func TestSideStoryBackfillRunsOnlyWhileTheSchedulerAndEnvAllowIt(t *testing.T) {
+func TestSideStoryBackfillRunsOnlyWhileItsSettingAndEnvAllowIt(t *testing.T) {
 	h := newSideStoryHarness(t)
+	// The legacy CN scheduler stays off throughout: it does not gate the backfill.
 	if err := h.cfg.Set(config.KeySchedulerOn, "false"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cfg.Set(config.KeySideStoryBackfillOn, "false"); err != nil {
 		t.Fatal(err)
 	}
 	worker := startTestBackfill(t, h.tr, SideStoryBackfillOptions{Enabled: true, Interval: 10 * time.Millisecond, Batch: 30})
 	disabled := startTestBackfill(t, h.tr, SideStoryBackfillOptions{Enabled: false, Interval: 10 * time.Millisecond, Batch: 30})
 	time.Sleep(100 * time.Millisecond)
 	if n := len(h.upstream.requested()); n != 0 || worker.TriggerSideStoryBackfill(true) || worker.SideStoryBackfillState().Enabled {
-		t.Fatalf("scheduler off: %d requests, state %+v", n, worker.SideStoryBackfillState())
+		t.Fatalf("setting off: %d requests, state %+v", n, worker.SideStoryBackfillState())
 	}
-	if err := h.cfg.Set(config.KeySchedulerOn, "true"); err != nil {
+	if err := h.cfg.Set(config.KeySideStoryBackfillOn, "true"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "a round after the scheduler was enabled", func() bool { return h.upstream.count("/jp-master/") > 0 })
+	waitFor(t, "a round after the setting was turned on", func() bool { return h.upstream.count("/jp-master/") > 0 })
 	worker.Stop()
 	worker.Wait()
 	// A request sent just before Stop can reach the test server after Wait returns.

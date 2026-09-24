@@ -59,6 +59,7 @@ const (
 	KeyUpstreamFetchConcurrency        = "upstream.fetch_concurrency"
 	KeyMusicAliasesURL                 = "upstream.music_aliases_url"
 	KeySchedulerOn                     = "scheduler.enabled"
+	KeySideStoryBackfillOn             = "side_story_backfill.enabled"
 	KeyLyricsDiscoveryOn               = "lyrics_discovery.enabled"
 	KeyLyricsFetchRevisionOn           = "lyrics_discovery.fetch_revision.enabled"
 	KeyUpstreamLastDataVersion         = "upstream.state.last_data_version"
@@ -100,7 +101,7 @@ var settingKeys = map[string]bool{
 	KeyUpstreamCNAssetsFallbackURL: true, KeyUpstreamENMasterdataURL: true, KeyUpstreamENMasterdataFallbackURL: true,
 	KeyUpstreamJPScriptsURL: true, KeyUpstreamJPScriptsFallbackURL: true, KeyUpstreamCNScriptsURL: true,
 	KeyUpstreamENScriptsURL: true, KeyUpstreamFetchConcurrency: true, KeyMusicAliasesURL: true,
-	KeySchedulerOn: true, KeyLyricsDiscoveryOn: true, KeyLyricsFetchRevisionOn: true, KeyUpstreamLastDataVersion: true, KeyUpstreamPendingDataVersion: true,
+	KeySchedulerOn: true, KeySideStoryBackfillOn: true, KeyLyricsDiscoveryOn: true, KeyLyricsFetchRevisionOn: true, KeyUpstreamLastDataVersion: true, KeyUpstreamPendingDataVersion: true,
 	KeyBackupS3Enabled: true, KeyBackupS3Endpoint: true, KeyBackupS3Region: true,
 	KeyBackupS3Bucket: true, KeyBackupS3Prefix: true, KeyBackupS3AccessKey: true,
 	KeyBackupS3SecretKey: true, KeyBackupGitEnabled: true, KeyBackupGitRepoURL: true,
@@ -192,7 +193,7 @@ func (c *Config) reload() error {
 // validation.
 func canonicalSettingValue(key, value string) (string, bool) {
 	switch key {
-	case KeySchedulerOn, KeyLyricsDiscoveryOn, KeyLyricsFetchRevisionOn, KeyBackupS3Enabled, KeyBackupGitEnabled:
+	case KeySchedulerOn, KeySideStoryBackfillOn, KeyLyricsDiscoveryOn, KeyLyricsFetchRevisionOn, KeyBackupS3Enabled, KeyBackupGitEnabled:
 		switch value {
 		case "1", "yes", "on":
 			return "true", true
@@ -368,7 +369,7 @@ func validateSettingValue(key, value string) error {
 		return nil
 	}
 	switch key {
-	case KeySchedulerOn, KeyLyricsDiscoveryOn, KeyLyricsFetchRevisionOn, KeyBackupS3Enabled, KeyBackupGitEnabled:
+	case KeySchedulerOn, KeySideStoryBackfillOn, KeyLyricsDiscoveryOn, KeyLyricsFetchRevisionOn, KeyBackupS3Enabled, KeyBackupGitEnabled:
 		return canonicalBool()
 	case KeyLLMType:
 		if value != "gemini" && value != "openai" {

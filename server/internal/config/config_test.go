@@ -176,7 +176,7 @@ func TestSetManyValidatesTypedSettingsAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	invalid := map[string]string{
-		KeySchedulerOn: "ture", KeyLyricsDiscoveryOn: "1", KeyLyricsFetchRevisionOn: "yes", KeyBackupS3Enabled: "1", KeyLLMType: "custom",
+		KeySchedulerOn: "ture", KeySideStoryBackfillOn: "maybe", KeyLyricsDiscoveryOn: "1", KeyLyricsFetchRevisionOn: "yes", KeyBackupS3Enabled: "1", KeyLLMType: "custom",
 		KeyLLMRequestTimeoutMS: "0", KeyLLMMaxRetries: "6", KeyBatchSize: "0",
 		KeyRateDelayMS: "-1", KeyUpstreamFetchConcurrency: "13",
 	}
@@ -189,7 +189,7 @@ func TestSetManyValidatesTypedSettingsAtomically(t *testing.T) {
 		}
 	}
 	for key, value := range map[string]string{
-		KeySchedulerOn: "false", KeyLyricsDiscoveryOn: "true", KeyLyricsFetchRevisionOn: "false", KeyBackupS3Enabled: "true", KeyLLMType: "openai",
+		KeySchedulerOn: "false", KeySideStoryBackfillOn: "false", KeyLyricsDiscoveryOn: "true", KeyLyricsFetchRevisionOn: "false", KeyBackupS3Enabled: "true", KeyLLMType: "openai",
 		KeyLLMRequestTimeoutMS: "1", KeyLLMMaxRetries: "5", KeyBatchSize: "200",
 		KeyRateDelayMS: "0", KeyUpstreamFetchConcurrency: "12",
 	} {

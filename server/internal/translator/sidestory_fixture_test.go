@@ -224,9 +224,6 @@ func newSideStoryHarness(t *testing.T) *sideStoryHarness {
 	}
 	h := &sideStoryHarness{upstream: newSideStoryUpstream(t), store: store.New(database), cfg: cfg, gate: editorgate.MustNew()}
 	configureSideStorySources(t, cfg, h.upstream.server.URL)
-	if err := cfg.Set(config.KeySchedulerOn, "true"); err != nil {
-		t.Fatal(err)
-	}
 	h.tr = New(h.store, nil, cfg, h.gate)
 	h.store.OnChange(func() {
 		h.mu.Lock()

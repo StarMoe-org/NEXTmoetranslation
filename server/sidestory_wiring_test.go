@@ -168,7 +168,7 @@ func TestAfterContentRestoreRefreshesTheSideStoryCatalog(t *testing.T) {
 	defer database.Close()
 	svc := buildServices(startupEnv{dataDir: t.TempDir()},
 		runtimeSettings{jwtSecret: "side-story-wiring-secret-at-least-32-bytes"}, database)
-	sources := map[string]string{config.KeySchedulerOn: "true"}
+	sources := map[string]string{}
 	for _, key := range []string{config.KeyUpstreamJPMasterdataURL, config.KeyUpstreamJPMasterdataFallbackURL} {
 		sources[key] = upstream.URL + "/jp-master"
 	}

@@ -90,8 +90,11 @@ func (w *SideStoryBackfill) Stop() { w.cancel() }
 
 func (w *SideStoryBackfill) Wait() { w.wg.Wait() }
 
+// enabled needs SIDE_STORY_BACKFILL_ENABLED not false and the
+// side_story_backfill.enabled setting not false (unset means on); the legacy
+// scheduler.enabled switch does not gate it.
 func (w *SideStoryBackfill) enabled() bool {
-	return w.opts.Enabled && w.ctx.Err() == nil && w.cfg.GetBool(config.KeySchedulerOn, false)
+	return w.opts.Enabled && w.ctx.Err() == nil && w.cfg.GetBool(config.KeySideStoryBackfillOn, true)
 }
 
 // TriggerSideStoryBackfill wakes the worker for an immediate round, after the
