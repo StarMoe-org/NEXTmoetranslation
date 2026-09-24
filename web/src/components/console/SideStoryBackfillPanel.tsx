@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { SideStoryKindProgress, SideStorySyncStatus } from "@/lib/api";
+import { SIDE_STORY_FETCH_STATE_LABELS as LABELS } from "@/lib/side-story-console";
 
 function formatTime(value?: string): string {
   if (!value) return "—";
@@ -13,8 +14,8 @@ function KindProgress({ label, progress }: { label: string; progress?: SideStory
     <div className="side-story-backfill-kind">
       <strong>{label}</strong>
       <span>{progress.stories} 篇 · 已获取 {progress.fetched}/{progress.episodes} 话 · 待获取 {progress.pendingFetch}{progress.errors > 0 ? ` · 获取失败 ${progress.errors}` : ""}</span>
-      <span>简中官方：已导入 {progress.cnImported} · 待导入 {progress.cnPending} · 无 {progress.cnAbsent} · 不匹配 {progress.cnMismatch} · 失败 {progress.cnError}</span>
-      <span>英文官方：已导入 {progress.enImported} · 待导入 {progress.enPending} · 无 {progress.enAbsent} · 不匹配 {progress.enMismatch} · 失败 {progress.enError}</span>
+      <span>简中官方：{LABELS.imported} {progress.cnImported} · {LABELS.pending} {progress.cnPending} · {LABELS.absent} {progress.cnAbsent} · {LABELS.mismatch} {progress.cnMismatch} · {LABELS.error} {progress.cnError}</span>
+      <span>英文官方：{LABELS.imported} {progress.enImported} · {LABELS.pending} {progress.enPending} · {LABELS.absent} {progress.enAbsent} · {LABELS.mismatch} {progress.enMismatch} · {LABELS.error} {progress.enError}</span>
     </div>
   );
 }
