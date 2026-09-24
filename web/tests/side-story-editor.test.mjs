@@ -197,6 +197,40 @@ test("a TXT batch conflict on the selected line raises the server banner", async
   assert.deepEqual(harness.state.remoteConflict, { key: translated.key, user: "服务器", current: { text: "测试服务器译文", revision: 7 } });
 });
 
+test("a conflict on a selected line without a draft puts the server text in the input", async () => {
+  const harness = editorHarness(async () => { throw conflictOn(translated); });
+  harness.state.selectedKey = translated.key;
+  harness.state.editValue = translated.text;
+  await harness.render().handleSourceChange(translated.key, "llm");
+  assert.equal(harness.state.editValue, "测试服务器译文");
+  assert.equal(harness.state.remoteConflict.current.text, "测试服务器译文");
+});
+
+test("a conflict keeps a real draft in the input", async () => {
+  const harness = editorHarness(async () => { throw conflictOn(translated); });
+  harness.state.selectedKey = translated.key;
+  harness.state.editValue = "测试草稿";
+  assert.equal(await harness.render().save(), false);
+  assert.equal(harness.state.editValue, "测试草稿");
+  assert.equal(harness.entries()[1].text, "测试服务器译文");
+});
+
+test("the conflict banner offers keeping the local text only when there is a draft", () => {
+  const entry = { ...translated, lineRole: "talk", text: "测试服务器译文", revision: 7 };
+  const remoteConflict = { key: entry.key, user: "服务器", current: { text: entry.text, revision: 7 } };
+  const withInput = (editValue) => workspaceHTML({
+    filtered: [entry], selectedKey: entry.key, selectedEntry: entry, selectedIndex: 0, remoteConflict, editValue, onReloadStory() {},
+  });
+  const clean = withInput(entry.text);
+  assert.match(clean, /revision 7，输入框已换成服务器当前译文/);
+  assert.match(clean, />知道了</);
+  assert.match(clean, />重新载入本篇</);
+  assert.doesNotMatch(clean, /保留本地并允许覆盖|你的草稿/);
+  const draft = withInput("测试草稿");
+  assert.match(draft, /你的草稿仍保留在输入框中/);
+  assert.match(draft, />保留本地并允许覆盖</);
+});
+
 test("a debounced list refresh scheduled before a locale switch loads the new locale", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const renderer = createRenderer();

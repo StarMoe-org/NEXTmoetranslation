@@ -127,7 +127,14 @@ export function TranslationEntryWorkspace({
                 当前剧情行缺少权威来源身份，已保持只读。请由管理员执行“重新获取剧情”后再编辑。
               </div>
             )}
-            {remoteConflict?.key === selectedEntry.key && remoteConflict.current && (
+            {remoteConflict?.key === selectedEntry.key && remoteConflict.current && editValue === selectedEntry.text && (
+              <div className="remote-conflict-banner revision-conflict" role="alert">
+                服务器上这一行已更新到 revision {remoteConflict.current.revision}，输入框已换成服务器当前译文。
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setRemoteConflict(null)} disabled={saving}>知道了</button>
+                {onReloadStory && <button type="button" className="btn btn-ghost btn-sm" onClick={onReloadStory} disabled={saving}>重新载入本篇</button>}
+              </div>
+            )}
+            {remoteConflict?.key === selectedEntry.key && remoteConflict.current && editValue !== selectedEntry.text && (
               <div className="remote-conflict-banner revision-conflict" role="alert">
                 保存被拒绝：服务器上这一行已更新到 revision {remoteConflict.current.revision}，你的草稿仍保留在输入框中。
                 <div className="remote-conflict-current">服务器当前译文：{remoteConflict.current.text || "（空）"}</div>

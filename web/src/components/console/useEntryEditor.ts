@@ -93,24 +93,28 @@ export function useEntryEditor({
   // Async writes resolve conflicts against the line selected when the response arrives.
   const selectedKeyRef = useRef(selectedKey);
   selectedKeyRef.current = selectedKey;
+  const editValueRef = useRef(editValue);
+  editValueRef.current = editValue;
 
-  // A revision conflict writes nothing: show the server's line and keep the local draft.
+  // A revision conflict writes nothing: show the server's line. A local draft stays in the
+  // input; an input that only held the loaded text takes the server text.
   const applySideStoryConflicts = useCallback((episodeKey: string, conflicts: readonly SideStoryLineConflict[], selected: string | null) => {
     const byJP = new Map(conflicts.map((conflict) => [conflict.jp, conflict]));
+    const selectedEntryNow = selected ? entriesRef.current.find((entry) => entry.key === selected) : undefined;
+    const selectedConflict = selectedEntryNow?.episodeNo === episodeKey && selectedEntryNow.japanese !== undefined
+      ? byJP.get(selectedEntryNow.japanese)
+      : undefined;
     setEntries((prev) => prev.map((entry) => {
       const conflict = entry.episodeNo === episodeKey && entry.japanese !== undefined ? byJP.get(entry.japanese) : undefined;
       return conflict
         ? { ...entry, text: conflict.currentText, source: sideStoryEntrySource(conflict.currentSource), revision: conflict.currentRevision }
         : entry;
     }));
-    const selectedEntryNow = selected ? entriesRef.current.find((entry) => entry.key === selected) : undefined;
-    const selectedConflict = selectedEntryNow?.episodeNo === episodeKey && selectedEntryNow.japanese !== undefined
-      ? byJP.get(selectedEntryNow.japanese)
-      : undefined;
     if (selected && selectedConflict) {
+      if (editValueRef.current === selectedEntryNow?.text) setEditValue(selectedConflict.currentText);
       setRemoteConflict({ key: selected, user: "服务器", current: { text: selectedConflict.currentText, revision: selectedConflict.currentRevision } });
     }
-  }, [entriesRef, setEntries, setRemoteConflict]);
+  }, [entriesRef, setEditValue, setEntries, setRemoteConflict]);
 
   const applyEventTxtDraft = (draft: EventStoryTxtDraft) => {
     if (!isEventStory || Number(field) !== draft.eventId || locale !== draft.locale || writeFenceRef.current || savingRef.current) return;
