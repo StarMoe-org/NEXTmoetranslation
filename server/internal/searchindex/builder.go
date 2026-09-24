@@ -278,12 +278,19 @@ func (b *Builder) waitForWork() string {
 	}
 }
 
+// debounceMaxWaitFactor caps one debounced wait at this many windows, as in
+// filesvc. Changes that keep arriving less than a window apart, such as the
+// side-story backfill's rounds, would otherwise hold every rebuild back.
+const debounceMaxWaitFactor = 2
+
 func (b *Builder) waitForDebounce() bool {
 	if b.debounce <= 0 {
 		return b.ctx.Err() == nil
 	}
 	timer := time.NewTimer(b.debounce)
 	defer timer.Stop()
+	deadline := time.NewTimer(debounceMaxWaitFactor * b.debounce)
+	defer deadline.Stop()
 	for {
 		select {
 		case <-b.ctx.Done():
@@ -297,6 +304,8 @@ func (b *Builder) waitForDebounce() bool {
 			}
 			timer.Reset(b.debounce)
 		case <-timer.C:
+			return true
+		case <-deadline.C:
 			return true
 		}
 	}
