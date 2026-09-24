@@ -10,7 +10,7 @@ import {
   applySideStoryLineStates, sideStoryConflictsFromError, sideStoryEntrySource, sideStoryErrorMessage, sideStoryLineEdit,
   sideStoryLocale, sideStoryMutationResultIsAmbiguous,
 } from "@/lib/side-story-console";
-import { sideStoryLineSaveIsNoop } from "@/lib/side-story-editor";
+import { sideStoryLineSaveIsNoop, sideStoryLineText } from "@/lib/side-story-editor";
 import {
   clearPersistedEventTxtDraft, eventStoryMutationResultIsAmbiguous, persistEventTxtDraft,
 } from "@/components/console/console-drafts";
@@ -178,14 +178,16 @@ export function useEntryEditor({
       if (sideStoryKind) {
         const episodeKey = saveEntry?.episodeNo ?? "";
         if (!saveEntry || !episodeKey) return false;
+        const saveText = sideStoryLineText(saveValue);
         if (sideStoryLineSaveIsNoop(saveEntry, saveValue)) {
           if (saveValue !== saveEntry.text) setEditValue(saveEntry.text);
         } else {
           const result = await updateSideStoryLines(sideStoryKind, saveField, episodeKey, sideStoryLocale(saveLocale),
-            [sideStoryLineEdit(saveEntry, saveValue, src)]);
+            [sideStoryLineEdit(saveEntry, saveText, src)]);
           onSideStorySaved(sideStoryKind);
           if (contextGenerationRef.current !== generation) return true;
           setEntries((prev) => applySideStoryLineStates(prev, episodeKey, result.lines));
+          if (saveText !== saveValue) setEditValue(saveText);
         }
       } else if (isEventStory) {
         const p = parseEventStoryEntryKey(saveKey);

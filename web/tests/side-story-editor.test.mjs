@@ -128,6 +128,19 @@ test("save-and-next on an untranslated line advances without storing an empty hu
   assert.deepEqual(harness.state.saving, [true, false]);
 });
 
+test("whitespace-only text on a stored line is saved as an empty line", async () => {
+  const harness = editorHarness((kind, id, episode, locale, edits) => ({
+    status: "ok", kind, id, episode, locale, updated: 1, unchanged: 0,
+    lines: [{ jp: edits[0].jp, role: "talk", position: 1, text: edits[0].text, source: "human", revision: 3 }],
+  }));
+  harness.state.selectedKey = translated.key;
+  harness.state.editValue = "  \n";
+  assert.equal(await harness.render().save(), true);
+  assert.deepEqual(harness.calls.map((call) => call[4]), [[{ jp: translated.japanese, text: "", source: "human", expectedRevision: 2 }]]);
+  assert.equal(harness.entries()[1].text, "");
+  assert.equal(harness.state.editValue, "", "the input matches the stored line");
+});
+
 test("picking a source on a never-stored line stores nothing", async () => {
   const harness = editorHarness(() => { throw new Error("no PUT expected"); });
   await harness.render().handleSourceChange(untranslated.key, "human");
