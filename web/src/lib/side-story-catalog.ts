@@ -36,10 +36,10 @@ export interface CardStoryFilter {
   query: string;
 }
 
-/** Filters card stories by unit, character and name/id search, newest first. */
+/** Filters card stories by unit, character and name/id search (`#1473` as shown), newest first. */
 export function filterCardStories(stories: readonly SideStorySummary[], filter: CardStoryFilter): SideStorySummary[] {
   const unit = SIDE_STORY_UNITS.find((candidate) => candidate.id === filter.unit);
-  const q = filter.query.trim().toLowerCase();
+  const q = filter.query.trim().replace(/^#/, "").toLowerCase();
   return stories
     .filter((story) => {
       if (unit && !unit.characterIds.includes(story.characterId)) return false;

@@ -20,18 +20,21 @@ export type SideStoryListRefreshed = (
 
 const EMPTY_LIST: SideStoryListState = { stories: [], loaded: false, loading: false, failed: false };
 const KINDS: readonly SideStoryKind[] = ["card", "area"];
-const REFRESH_DEBOUNCE_MS = 1500;
+const REFRESH_WINDOW_MS = 1500;
 const SYNC_POLL_MS = 15_000;
 
 // Only rounds with changes send sidestory.sync, so a running round or a passed
-// next-round time would otherwise stay on screen.
+// next-round time would otherwise stay on screen. Without a state (a failed
+// first load) the poll retries until one arrives.
 function syncStateMayBeStale(state: SideStoryBackfillState | undefined, now: number): boolean {
-  return Boolean(state?.running) || Date.parse(state?.nextRoundAt ?? "") <= now;
+  return !state || state.running || Date.parse(state.nextRoundAt ?? "") <= now;
 }
 
 /**
  * Side-story lists are large, so each kind loads only once its sidebar group (or one of
- * its stories) is opened; later refreshes are debounced and skip kinds nobody asked for.
+ * its stories) is opened; later refreshes coalesce into one load at most 1.5 s after the
+ * first request and skip kinds nobody asked for. A refresh never supersedes a load still in
+ * flight: that kind loads again once the load settles.
  */
 export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: ShowToast }) {
   const listLocale = sideStoryLocale(locale);
@@ -46,14 +49,21 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
   const syncStateRef = useRef<SideStoryBackfillState | undefined>(undefined);
   const syncPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingRef = useRef(new Set<SideStoryKind>());
-  const pendingCallbacksRef = useRef(new Set<SideStoryListRefreshed>());
+  const inFlightRef = useRef<Record<SideStoryKind, boolean>>({ card: false, area: false });
+  // Callback -> number of its latest registration.
+  const callbacksRef = useRef<Record<SideStoryKind, Map<SideStoryListRefreshed, number>>>({ card: new Map(), area: new Map() });
+  const registrationRef = useRef(0);
   const loadedRef = useRef<Record<SideStoryKind, SideStorySummary[] | null>>({ card: null, area: null });
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showRef = useRef(show);
   showRef.current = show;
 
-  const loadList = useCallback(async (kind: SideStoryKind, onLoaded: readonly SideStoryListRefreshed[] = []) => {
+  const loadList = useCallback(async (kind: SideStoryKind) => {
     const request = ++requestRef.current[kind];
+    // Only an adopted load consumes callbacks, and only those registered before it started;
+    // the rest go to the next load, whose before is then the last adopted list.
+    const callbacks = [...callbacksRef.current[kind]];
+    inFlightRef.current[kind] = true;
     setLists((prev) => ({ ...prev, [kind]: { ...prev[kind], loading: true } }));
     try {
       const list = await getSideStories(kind, listLocale);
@@ -62,11 +72,23 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
       const before = loadedRef.current[kind];
       loadedRef.current[kind] = stories;
       setLists((prev) => ({ ...prev, [kind]: { stories, loaded: true, loading: false, failed: false } }));
-      onLoaded.forEach((callback) => callback(kind, before, stories));
+      callbacks.forEach(([callback, registration]) => {
+        if (callbacksRef.current[kind].get(callback) === registration) callbacksRef.current[kind].delete(callback);
+        callback(kind, before, stories);
+      });
     } catch (error) {
       if (requestRef.current[kind] !== request) return;
       setLists((prev) => ({ ...prev, [kind]: { ...prev[kind], loading: false, failed: true } }));
       showRef.current(sideStoryErrorMessage(error, "剧情列表载入失败"), "err");
+    } finally {
+      if (requestRef.current[kind] === request) {
+        inFlightRef.current[kind] = false;
+        // A refresh window that fired during this load left the kind pending; an open window loads it itself.
+        if (pendingRef.current.has(kind) && !timerRef.current) {
+          pendingRef.current.delete(kind);
+          void loadListRef.current(kind);
+        }
+      }
     }
   }, [listLocale]);
 
@@ -100,6 +122,8 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
   useEffect(() => () => {
     if (timerRef.current) clearTimeout(timerRef.current);
     if (syncPollRef.current) clearInterval(syncPollRef.current);
+    // A load settling after unmount (e.g. after logout) must not start its follow-up load.
+    pendingRef.current.clear();
   }, []);
 
   const ensureList = useCallback((kind: SideStoryKind) => {
@@ -123,21 +147,24 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
     }, SYNC_POLL_MS);
   }, [loadSyncStatus]);
 
+  // Later requests join the first one's window, so continuous saves cannot postpone the load.
   const refreshLists = useCallback((kind?: SideStoryKind, onRefreshed?: SideStoryListRefreshed) => {
     (kind ? [kind] : KINDS).forEach((candidate) => {
-      if (wantedRef.current.has(candidate)) pendingRef.current.add(candidate);
+      if (!wantedRef.current.has(candidate)) return;
+      pendingRef.current.add(candidate);
+      if (onRefreshed) callbacksRef.current[candidate].set(onRefreshed, ++registrationRef.current);
     });
-    if (onRefreshed) pendingCallbacksRef.current.add(onRefreshed);
-    if (timerRef.current) clearTimeout(timerRef.current);
+    if (timerRef.current) return;
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
-      const kinds = [...pendingRef.current];
-      const callbacks = [...pendingCallbacksRef.current];
-      pendingRef.current.clear();
-      pendingCallbacksRef.current.clear();
-      kinds.forEach((candidate) => { void loadListRef.current(candidate, callbacks); });
+      [...pendingRef.current].forEach((candidate) => {
+        // Superseding a slow load would discard every list while saves keep arriving.
+        if (inFlightRef.current[candidate]) return;
+        pendingRef.current.delete(candidate);
+        void loadListRef.current(candidate);
+      });
       if (syncWantedRef.current) void loadSyncStatus();
-    }, REFRESH_DEBOUNCE_MS);
+    }, REFRESH_WINDOW_MS);
   }, [loadSyncStatus]);
 
   const reloadList = useCallback((kind: SideStoryKind) => {

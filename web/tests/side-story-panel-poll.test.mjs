@@ -124,6 +124,32 @@ test("failed polls keep polling without a toast; the first load and 刷新进度
   runtime.unmount();
 });
 
+test("after a failed first load the poll retries silently until a state arrives", async (t) => {
+  let down = true;
+  const { catalog, calls, toasts, runtime } = mountCatalog(t, () => {
+    if (down) throw new Error("测试网关超时");
+    return { running: false, nextRoundAt: "2026-01-01T01:00:00Z" };
+  });
+  catalog.watchSyncStatus(true);
+  await flush();
+  assert.deepEqual(toasts, [["err", "测试网关超时"]]);
+  t.mock.timers.tick(15_000);
+  await flush();
+  assert.equal(calls.status, 2, "a missing state counts as possibly stale");
+  t.mock.timers.tick(15_000);
+  await flush();
+  assert.equal(calls.status, 3);
+  assert.deepEqual(toasts, [["err", "测试网关超时"]], "the retries are silent");
+  down = false;
+  t.mock.timers.tick(15_000);
+  await flush();
+  assert.equal(calls.status, 4);
+  t.mock.timers.tick(60_000);
+  assert.equal(calls.status, 4, "an idle state before the next round ends the retries");
+  catalog.watchSyncStatus(false);
+  runtime.unmount();
+});
+
 test("the panel watches while expanded and stops watching when collapsed or unmounted", () => {
   const runtime = createHookRuntime();
   const { SideStoryBackfillPanel } = loadSourceModule("components/console/SideStoryBackfillPanel.tsx", { react: runtime.react });
