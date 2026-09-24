@@ -333,3 +333,82 @@ func TestSetManyValidatesDailyHourAndKnownKeysAtomically(t *testing.T) {
 		}
 	}
 }
+
+func TestSetManyStoresTrimmedValues(t *testing.T) {
+	database := openTestDB(t)
+	configuration, err := New(database, "trim-master-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configuration.SetMany(map[string]string{
+		KeyOpenAIBaseURL:    "   ",
+		KeyBackupS3Endpoint: " https://storage.example ",
+		KeyGeminiModel:      "\tgemini-model\n",
+		KeyOpenAIAPIKey:     " sk-trimmed\n",
+		KeyBackupGitRepoURL: " https://token@git.example/owner/repo.git ",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		KeyOpenAIBaseURL:    "",
+		KeyBackupS3Endpoint: "https://storage.example",
+		KeyGeminiModel:      "gemini-model",
+		KeyOpenAIAPIKey:     "sk-trimmed",
+		KeyBackupGitRepoURL: "https://token@git.example/owner/repo.git",
+	}
+	reopened, err := New(database, "trim-master-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range want {
+		if got := configuration.Get(key); got != value {
+			t.Fatalf("cached %s = %q, want %q", key, got, value)
+		}
+		if got := reopened.Get(key); got != value {
+			t.Fatalf("persisted %s = %q, want %q", key, got, value)
+		}
+	}
+	if got := configuration.GetOr(KeyOpenAIBaseURL, "https://default.example/v1"); got != "https://default.example/v1" {
+		t.Fatalf("whitespace-only base URL shadowed the default: %q", got)
+	}
+}
+
+func TestSetManyIfAbsentStoresTrimmedValues(t *testing.T) {
+	database := openTestDB(t)
+	configuration, err := New(database, "trim-master-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := configuration.SetManyIfAbsent(map[string]string{
+		KeyOpenAIBaseURL:    " https://llm.example/v1 ",
+		KeyGeminiModel:      "\tgemini-model\n",
+		KeyOpenAIAPIKey:     " sk-seeded\n",
+		KeyUpstreamRepo:     "owner/repo ",
+		KeyBackupS3Endpoint: "   ",
+	})
+	if err != nil || changed != 4 {
+		t.Fatalf("seed changed=%d err=%v", changed, err)
+	}
+	want := map[string]string{
+		KeyOpenAIBaseURL: "https://llm.example/v1",
+		KeyGeminiModel:   "gemini-model",
+		KeyOpenAIAPIKey:  "sk-seeded",
+		KeyUpstreamRepo:  "owner/repo",
+	}
+	reopened, err := New(database, "trim-master-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range want {
+		if got := configuration.Get(key); got != value {
+			t.Fatalf("cached %s = %q, want %q", key, got, value)
+		}
+		if got := reopened.Get(key); got != value {
+			t.Fatalf("persisted %s = %q, want %q", key, got, value)
+		}
+	}
+	seeded, err := configuration.SetIfAbsent(KeyBackupS3Endpoint, "https://storage.example")
+	if err != nil || !seeded {
+		t.Fatalf("whitespace-only seed blocked a later seed: seeded=%v err=%v", seeded, err)
+	}
+}

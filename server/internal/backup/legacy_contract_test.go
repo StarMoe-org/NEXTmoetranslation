@@ -355,6 +355,46 @@ func TestLegacyGitBackupCommitsOnlyEncryptedArtifact(t *testing.T) {
 	}
 }
 
+func TestUnencryptedGitBackupSucceedsWithoutCommitWhenContentIsUnchanged(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git executable unavailable")
+	}
+	h := setupLegacyBackup(t)
+	t.Setenv(backupEncryptionKeyEnv, "")
+	remote := filepath.Join(t.TempDir(), "unchanged-remote.git")
+	cmd := exec.Command("git", "init", "--bare", "--initial-branch=unchanged-backup", remote)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare: %v: %s", err, out)
+	}
+	if err := h.cfg.Set(config.KeyBackupGitRepoURL, "file://"+remote); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cfg.Set(config.KeyBackupGitBranch, "unchanged-backup"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.manager.backupGit(); err != nil {
+		t.Fatal(err)
+	}
+	first := gitOutput(t, remote, "rev-parse", "refs/heads/unchanged-backup")
+	if err := h.manager.backupGit(); err != nil {
+		t.Fatalf("unchanged unencrypted Git backup failed: %v", err)
+	}
+	if second := gitOutput(t, remote, "rev-parse", "refs/heads/unchanged-backup"); second != first {
+		t.Fatalf("unchanged backup moved the branch from %s to %s", first, second)
+	}
+	if _, err := h.store.ImportCategory("cards", model.Category{
+		"prefix": {"さようなら": {Text: "再见", Source: model.SourceHuman}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.manager.backupGit(); err != nil {
+		t.Fatal(err)
+	}
+	if third := gitOutput(t, remote, "rev-parse", "refs/heads/unchanged-backup"); third == first {
+		t.Fatal("changed content did not produce a new Git backup commit")
+	}
+}
+
 func TestBackupMaterializesPublishedLyricsWithoutChangingLegacyGenerator(t *testing.T) {
 	h := setupLegacyBackup(t)
 	if err := h.store.UpsertMusicCatalog([]store.MusicCatalogRecord{{

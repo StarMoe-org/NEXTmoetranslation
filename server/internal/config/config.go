@@ -286,6 +286,13 @@ func (c *Config) SetMany(values map[string]string) (int, error) {
 	}
 	encoded := make([]encodedSetting, 0, len(values))
 	for key, value := range values {
+		// Some validators trim internally, so the submitted value is validated
+		// as given but stored trimmed; a whitespace-only value then clears the
+		// setting instead of shadowing its default.
+		if err := validateSettingValue(key, value); err != nil {
+			return 0, err
+		}
+		value = strings.TrimSpace(value)
 		stored, encrypted, err := c.encodeSetting(key, value)
 		if err != nil {
 			return 0, err
@@ -462,14 +469,20 @@ func (c *Config) SetManyIfAbsent(values map[string]string) (int, error) {
 	}
 	encoded := make([]encodedSetting, 0, len(values))
 	for key, value := range values {
-		if value == "" {
+		// Validated as given and stored trimmed, as in SetMany; a value that
+		// trims to empty seeds nothing, so a later seed can still fill it.
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
 			continue
 		}
-		stored, encrypted, err := c.encodeSetting(key, value)
+		if err := validateSettingValue(key, value); err != nil {
+			return 0, err
+		}
+		stored, encrypted, err := c.encodeSetting(key, trimmed)
 		if err != nil {
 			return 0, err
 		}
-		encoded = append(encoded, encodedSetting{key: key, value: value, stored: stored, encrypted: encrypted})
+		encoded = append(encoded, encodedSetting{key: key, value: trimmed, stored: stored, encrypted: encrypted})
 	}
 	tx, err := c.db.Begin()
 	if err != nil {

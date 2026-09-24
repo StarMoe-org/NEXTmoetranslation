@@ -149,14 +149,7 @@ func (m *Manager) publishGitBackupUnencryptedContext(ctx context.Context, repoDi
 			return err
 		}
 	}
-	if err := gitContext(ctx, repoDir, "add", "--all"); err != nil {
-		return err
-	}
-	msg := fmt.Sprintf("chore: backup translations %s", time.Now().UTC().Format("2006-01-02 15:04:05 UTC"))
-	if err := gitContext(ctx, repoDir, "commit", "-m", msg); err != nil {
-		return err
-	}
-	return gitRemoteContext(ctx, repoDir, repoURL, "push", "origin", branch)
+	return commitAndPushGitBackupContext(ctx, repoDir, repoURL, branch)
 }
 
 func (m *Manager) publishGitBackupArtifactContext(ctx context.Context, repoDir, repoURL, branch string, artifact []byte) error {
@@ -192,7 +185,21 @@ func (m *Manager) publishGitBackupArtifactContext(ctx context.Context, repoDir, 
 		_ = os.Remove(temporaryPath)
 		return err
 	}
+	return commitAndPushGitBackupContext(ctx, repoDir, repoURL, branch)
+}
+
+// commitAndPushGitBackupContext treats an unchanged payload as a successful
+// backup: git commit would otherwise fail with "nothing to commit".
+func commitAndPushGitBackupContext(ctx context.Context, repoDir, repoURL, branch string) error {
 	if err := gitContext(ctx, repoDir, "add", "--all"); err != nil {
+		return err
+	}
+	err := gitContext(ctx, repoDir, "diff", "--cached", "--quiet")
+	if err == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
 		return err
 	}
 	msg := fmt.Sprintf("chore: backup translations %s", time.Now().UTC().Format("2006-01-02 15:04:05 UTC"))
@@ -473,9 +480,9 @@ func runGitContext(parent context.Context, dir string, sanitize func(string) str
 		}
 		message := sanitize(strings.TrimSpace(string(out)))
 		if message == "" {
-			return fmt.Errorf("git %s: %v", sanitize(strings.Join(args, " ")), err)
+			return fmt.Errorf("git %s: %w", sanitize(strings.Join(args, " ")), err)
 		}
-		return fmt.Errorf("git %s: %v: %s", sanitize(strings.Join(args, " ")), err, message)
+		return fmt.Errorf("git %s: %w: %s", sanitize(strings.Join(args, " ")), err, message)
 	}
 	return nil
 }
