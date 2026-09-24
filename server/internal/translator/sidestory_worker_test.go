@@ -471,6 +471,31 @@ func TestSideStoryBackfillRetriesOnlyTheCatalogKindThatFailed(t *testing.T) {
 	}
 }
 
+func TestSideStoryBackfillRetriesAKindWhoseRequestedRefreshFailed(t *testing.T) {
+	h := newSideStoryHarness(t)
+	h.round(t)
+	h.upstream.remove("/en-master/actionSets.json")
+	h.advance(time.Minute)
+	if !h.worker.TriggerSideStoryBackfill(true) {
+		t.Fatal("trigger rejected while enabled")
+	}
+	<-h.worker.wake
+	if state := h.round(t); !strings.Contains(state.LastRoundError, "area catalog") {
+		t.Fatalf("state after the requested refresh = %+v", state)
+	}
+	h.upstream.set("/en-master/actionSets.json", []any{})
+	h.advance(sideStoryCatalogRetryDelay + time.Second)
+	if state := h.round(t); state.LastRoundError != "" {
+		t.Fatalf("state after the retry delay = %+v", state)
+	}
+	if got := h.upstream.count("/jp-master/actionSets.json"); got != 3 {
+		t.Fatalf("area catalog fetched %d times, want 3", got)
+	}
+	if got := h.upstream.count("/jp-master/cards.json"); got != 2 {
+		t.Fatalf("card catalog fetched %d times, want 2", got)
+	}
+}
+
 func TestSideStoryBackfillHonoursTheRequestDelay(t *testing.T) {
 	h := newSideStoryHarness(t)
 	const delay = 60 * time.Millisecond

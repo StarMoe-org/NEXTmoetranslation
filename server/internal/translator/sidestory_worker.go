@@ -381,10 +381,12 @@ func (w *SideStoryBackfill) catalogDue(force bool) []string {
 	for _, kind := range sideStoryCatalogKinds {
 		state := w.catalogs[kind]
 		if !force {
-			if !state.failedAt.IsZero() && now.Sub(state.failedAt) < sideStoryCatalogRetryDelay {
-				continue
-			}
-			if !state.refreshedAt.IsZero() && now.Sub(state.refreshedAt) < sideStoryCatalogMaxAge && version == state.version {
+			// failedAt is set only while the last attempt failed.
+			if !state.failedAt.IsZero() {
+				if now.Sub(state.failedAt) < sideStoryCatalogRetryDelay {
+					continue
+				}
+			} else if !state.refreshedAt.IsZero() && now.Sub(state.refreshedAt) < sideStoryCatalogMaxAge && version == state.version {
 				continue
 			}
 		}
