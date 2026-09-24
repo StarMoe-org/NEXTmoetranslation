@@ -769,9 +769,9 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 	// An incremental publication or withdrawal that landed after this rebuild
 	// started reading is newer than the bytes generated above, so the key keeps
 	// its current state: a side-story file first published during the rebuild
-	// stays, one withdrawn during it stays withdrawn. The write behind it also
-	// bumped the requested generation, so the loop still runs the reconciling
-	// rebuild.
+	// stays, one withdrawn during it stays withdrawn. It was generated after its
+	// write committed, so it needs no reconciling rebuild: an editor write
+	// still requests one, a backfill round's per-story publication does not.
 	for key, epoch := range svc.incremental {
 		if epoch <= startEpoch {
 			delete(svc.incremental, key)
