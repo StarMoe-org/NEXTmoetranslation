@@ -103,6 +103,40 @@ func TestUpdateSideStoryLinesIsAllOrNothing(t *testing.T) {
 	}
 }
 
+func TestUpdateSideStoryLinesStoresWhitespaceOnlyTextAsAnEmptyLine(t *testing.T) {
+	s := newSideStoryTestStore(t)
+	seedSideStoryEpisode(t, s, "230")
+	ctx := context.Background()
+	mustUpdateSideStory(t, s, "card", "230", "1", "zh-CN",
+		SideStoryLineEdit{JP: "テスト台詞一", Text: "测试台词一"}, SideStoryLineEdit{JP: "テスト台詞二", Text: "测试台词二", Source: "llm"})
+	result := mustUpdateSideStory(t, s, "card", "230", "1", "zh-CN",
+		SideStoryLineEdit{JP: "テスト台詞一", Text: " \n"}, SideStoryLineEdit{JP: "テスト台詞二", Text: "\u3000"},
+		SideStoryLineEdit{JP: "テスト台詞三", Text: " 测试台词三 "})
+	if result.Updated != 3 || result.Lines[0].Text != "" || result.Lines[1].Text != "" || result.Lines[2].Text != " 测试台词三 " {
+		t.Fatalf("whitespace update %+v", result)
+	}
+	for jp, want := range map[string]sideStoryTestRow{
+		"テスト台詞一": {text: "", source: "human", updatedBy: "test-editor", revision: 2},
+		"テスト台詞二": {text: "", source: "human", updatedBy: "test-editor", revision: 2},
+		"テスト台詞三": {text: " 测试台词三 ", source: "human", updatedBy: "test-editor", revision: 1},
+	} {
+		if row, _ := sideStoryRow(t, s, "card", "230", "1", jp, "zh-CN"); row != want {
+			t.Errorf("%s row %+v want %+v", jp, row, want)
+		}
+	}
+	if again := mustUpdateSideStory(t, s, "card", "230", "1", "zh-CN", SideStoryLineEdit{JP: "テスト台詞一", Text: "\t"}); again.Unchanged != 1 {
+		t.Fatalf("whitespace over an empty human line %+v", again)
+	}
+	detail, err := s.SideStoryDetailContext(ctx, "card", "230", "zh-CN")
+	if err != nil || detail.Episodes[0].TranslatedCount != 1 || detail.Episodes[0].UntranslatedCount != 4 {
+		t.Fatalf("whitespace counted as translated: %+v err=%v", detail.Episodes[0], err)
+	}
+	_, file, ok, err := s.SideStoryPublicFileForStoryContext(ctx, "card", "230", "zh-CN")
+	if err != nil || !ok || len(file.Episodes[0].Talk) != 1 || file.Episodes[0].Talk[0].JP != "テスト台詞三" {
+		t.Fatalf("public file with whitespace lines ok=%v err=%v %+v", ok, err, file)
+	}
+}
+
 func TestUpdateSideStoryLinesValidatesInput(t *testing.T) {
 	s := newSideStoryTestStore(t)
 	seedSideStoryEpisode(t, s, "210")

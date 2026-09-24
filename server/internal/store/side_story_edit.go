@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -45,7 +46,7 @@ func loadSideStoryEpisodeLinesTx(ctx context.Context, tx *sql.Tx, kind, storyID,
 }
 
 // UpdateSideStoryLinesContext writes editor edits of one episode and locale
-// all or nothing.
+// all or nothing. Whitespace-only text is stored as the empty line.
 func (s *Store) UpdateSideStoryLinesContext(ctx context.Context, kind, storyID, episodeKey, locale, actor string, edits []SideStoryLineEdit, now time.Time) (SideStoryUpdateResult, error) {
 	if err := validSideStoryRequest(kind, storyID, locale); err != nil {
 		return SideStoryUpdateResult{}, err
@@ -111,7 +112,11 @@ func (s *Store) UpdateSideStoryLinesContext(ctx context.Context, kind, storyID, 
 		if source == "" {
 			source = SideStorySourceHuman
 		}
-		if line.hasRow && line.Text == edit.Text && line.Source == source {
+		text := edit.Text
+		if strings.TrimSpace(text) == "" {
+			text = ""
+		}
+		if line.hasRow && line.Text == text && line.Source == source {
 			result.Unchanged++
 			result.Lines = append(result.Lines, line.SideStoryLineState)
 			continue
@@ -120,10 +125,10 @@ func (s *Store) UpdateSideStoryLinesContext(ctx context.Context, kind, storyID, 
 			(kind,story_id,episode_key,jp_key,locale,text,source,revision,updated_by,updated_at) VALUES (?,?,?,?,?,?,?,1,?,?)
 			ON CONFLICT(kind,story_id,episode_key,jp_key,locale) DO UPDATE SET text=excluded.text,source=excluded.source,
 				revision=revision+1,updated_by=excluded.updated_by,updated_at=excluded.updated_at`,
-			kind, storyID, episodeKey, edit.JP, locale, edit.Text, source, actor, stamp); err != nil {
+			kind, storyID, episodeKey, edit.JP, locale, text, source, actor, stamp); err != nil {
 			return SideStoryUpdateResult{}, err
 		}
-		line.hasRow, line.Text, line.Source, line.Revision, line.UpdatedBy, line.UpdatedAt = true, edit.Text, source, line.Revision+1, actor, stamp
+		line.hasRow, line.Text, line.Source, line.Revision, line.UpdatedBy, line.UpdatedAt = true, text, source, line.Revision+1, actor, stamp
 		result.Updated++
 		result.Lines = append(result.Lines, line.SideStoryLineState)
 	}
