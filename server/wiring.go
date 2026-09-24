@@ -101,6 +101,9 @@ func buildServices(env startupEnv, settings runtimeSettings, database *db.DB) *s
 		fatal("side story backfill configuration", err)
 	}
 	sideStory := translator.NewSideStoryBackfill(tr, sideStoryOptions)
+	// Background rounds publish the stories they wrote incrementally rather
+	// than scheduling a full rebuild, which also restarts the search index wait.
+	sideStory.SetPublisher(fileService.RebuildSideStoryContext)
 
 	watcher := newUpstreamWatcher(cfg, tr, env.dataDir)
 	// Backup manager: daily + manual backup/restore to S3 and/or GitHub.

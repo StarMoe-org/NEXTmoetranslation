@@ -1,6 +1,7 @@
 package translator
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"log"
@@ -190,6 +191,55 @@ func TestSideStoryBackfillBacksOffTransientErrors(t *testing.T) {
 	area = episodeDetail(t, h.detail(t, store.SideStoryKindArea, testAreaScenario, model.LocaleChinese), "1")
 	if area.CNState != store.SideStoryStateImported {
 		t.Fatalf("CN retry left the area episode %+v", area)
+	}
+}
+
+func TestSideStoryBackfillPublishesEpisodeWritesPerStoryAndRebuildsOnlyForTheCatalog(t *testing.T) {
+	h := newSideStoryHarness(t)
+	var published []string
+	h.worker.SetPublisher(func(ctx context.Context, kind, storyID string) error {
+		// The round has released its share of the content lock.
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		release, err := h.store.LockContentExclusiveContext(ctx)
+		if err != nil {
+			return err
+		}
+		release()
+		published = append(published, kind+"/"+storyID)
+		return nil
+	})
+	unavailable := func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+	}
+	h.upstream.handle(testJPCardPath2, unavailable)
+	h.upstream.handle(testCNAreaPath, unavailable)
+	stories := []string{"area/" + testAreaScenario, "card/" + testCardID}
+	h.round(t)
+	slices.Sort(published)
+	if h.changes != 1 || !slices.Equal(published, stories) {
+		t.Fatalf("round with a catalog change: changes=%d published=%v", h.changes, published)
+	}
+
+	published = nil
+	h.upstream.handle(testJPCardPath2, nil)
+	h.upstream.handle(testCNAreaPath, nil)
+	h.advance(sideStoryCatalogRetryDelay + time.Second)
+	if state := h.round(t); state.LastRound.Fetched != 2 || state.CatalogRefreshedAt == "" {
+		t.Fatalf("episode-only round = %+v", state)
+	}
+	slices.Sort(published)
+	if h.changes != 1 || !slices.Equal(published, stories) {
+		t.Fatalf("episode-only round: changes=%d published=%v", h.changes, published)
+	}
+	syncs := 0
+	for _, stage := range h.stages() {
+		if stage == "sidestory.sync" {
+			syncs++
+		}
+	}
+	if syncs != 2 {
+		t.Fatalf("%d sidestory.sync events after two changing rounds, want 2", syncs)
 	}
 }
 
