@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -24,6 +25,15 @@ const (
 	maxLLMResponseBytes = 8 << 20
 
 	gameContextPromptEnglish = "You are a professional game translator for Project SEKAI COLORFUL STAGE! feat. Hatsune Miku.\nTranslate the following Japanese texts in XML format into natural English, using the official English names of Project SEKAI characters, units and places.\nReturn only <translations>...</translations>, with each item as <t id=\"N\">text</t>.\nKeep every line break of each source text at the same position in its translation.\n"
+)
+
+var (
+	// ErrLLMFailed is wrapped by the error of an LLM call that used up its
+	// attempts; the last attempt's error is wrapped too.
+	ErrLLMFailed = errors.New("llm failed")
+	// ErrLLMKeyMissing is wrapped, after the key name, when the provider's API
+	// key is empty.
+	ErrLLMKeyMissing = errors.New("is not configured")
 )
 
 // llmPromptForLocale returns the instructions for translating Japanese into
@@ -119,12 +129,12 @@ func (t *Translator) callLLMUsingPrompt(provider, instructions string, texts []s
 	}
 	log.Printf("[llm] %s gave up after %d attempts (texts=%d): %v", provider, attempts, len(texts), lastErr)
 	t.recordLLMFailure(lastErr)
-	return nil, fmt.Errorf("llm failed after %d attempts (provider=%s, texts=%d): %w", attempts, provider, len(texts), lastErr)
+	return nil, fmt.Errorf("%w after %d attempts (provider=%s, texts=%d): %w", ErrLLMFailed, attempts, provider, len(texts), lastErr)
 }
 
 func (t *Translator) callGemini(ctx context.Context, prompt string, cfg llmConfig) (string, error) {
 	if strings.TrimSpace(cfg.GeminiAPIKey) == "" {
-		return "", fmt.Errorf("GEMINI_API_KEY is not configured")
+		return "", fmt.Errorf("GEMINI_API_KEY %w", ErrLLMKeyMissing)
 	}
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", cfg.GeminiModel)
 	payload := map[string]any{
@@ -175,7 +185,7 @@ func (t *Translator) callGemini(ctx context.Context, prompt string, cfg llmConfi
 
 func (t *Translator) callOpenAI(ctx context.Context, prompt string, cfg llmConfig) (string, error) {
 	if strings.TrimSpace(cfg.OpenAIAPIKey) == "" {
-		return "", fmt.Errorf("OPENAI_API_KEY is not configured")
+		return "", fmt.Errorf("OPENAI_API_KEY %w", ErrLLMKeyMissing)
 	}
 	url := strings.TrimRight(cfg.OpenAIBaseURL, "/") + "/chat/completions"
 	payload := map[string]any{

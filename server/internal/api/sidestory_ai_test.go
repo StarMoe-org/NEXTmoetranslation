@@ -73,7 +73,35 @@ func TestSideStoryAIMapsLLMFailuresToUpstreamUnavailable(t *testing.T) {
 		t.Fatalf("unparsable details = %q", failed.Details)
 	}
 
-	runner := &fakeSideStoryRunner{aiErr: fmt.Errorf("card 501 batch 1/1 failed after saving 0/1: llm failed after 1 attempts (provider=openai, texts=1): %w", context.Canceled)}
+	runner := &fakeSideStoryRunner{aiErr: fmt.Errorf("card 501 batch 1/1 failed after saving 0/1: %w after 1 attempts (provider=openai, texts=1): %w", translator.ErrLLMFailed, context.Canceled)}
 	h.api.SetSideStoryRunner(runner)
 	h.expectError(t, http.MethodPost, path, h.token, body, http.StatusInternalServerError, "internal_error")
+}
+
+// The status follows the translator's typed errors, not the message: a gateway
+// reply naming an unconfigured key is still an upstream failure, and a wrapped
+// ErrLLMFailed counts whatever text surrounds it.
+func TestSideStoryAIClassifiesLLMFailuresByType(t *testing.T) {
+	h := setupSideStoryAPI(t)
+	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "test gateway: UPSTREAM_API_KEY is not configured", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(llm.Close)
+	for key, value := range map[string]string{
+		config.KeyOpenAIAPIKey: "test-key", config.KeyOpenAIBaseURL: llm.URL, config.KeyBatchSize: "1", config.KeyRateDelayMS: "0", config.KeyLLMMaxRetries: "0",
+	} {
+		if err := h.api.cfg.Set(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.api.SetSideStoryRunner(translator.NewSideStoryBackfill(h.api.translator, translator.SideStoryBackfillOptions{}))
+	path, body := "/api/editor/v1/story/card/501/ai", map[string]any{"episode": "1", "provider": "openai"}
+
+	failed := h.expectError(t, http.MethodPost, path, h.token, body, http.StatusBadGateway, "upstream_unavailable")
+	if got := strings.Join(failed.Details, "\n"); !strings.Contains(got, "openai http 503: test gateway: UPSTREAM_API_KEY is not configured") {
+		t.Fatalf("gateway details = %q", failed.Details)
+	}
+
+	h.api.SetSideStoryRunner(&fakeSideStoryRunner{aiErr: fmt.Errorf("card 501 batch 1/1: %w", translator.ErrLLMFailed)})
+	h.expectError(t, http.MethodPost, path, h.token, body, http.StatusBadGateway, "upstream_unavailable")
 }

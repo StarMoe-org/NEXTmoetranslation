@@ -259,8 +259,7 @@ func (s *Server) handleSideStoryAI(w http.ResponseWriter, r *http.Request) {
 // stays internal_error as on the event-story AI route, and so does a
 // cancelled run.
 func sideStoryLLMUnavailable(err error) bool {
-	message := err.Error()
-	return strings.Contains(message, "llm failed after ") && !strings.Contains(message, "_API_KEY is not configured") &&
+	return errors.Is(err, translator.ErrLLMFailed) && !errors.Is(err, translator.ErrLLMKeyMissing) &&
 		!errors.Is(err, context.Canceled)
 }
 
