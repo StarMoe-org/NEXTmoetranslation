@@ -19,6 +19,8 @@ type recordingFileService struct {
 
 func (f *recordingFileService) RebuildEvent(int) error { return nil }
 
+func (f *recordingFileService) RebuildSideStory(string, string) error { return nil }
+
 func (f *recordingFileService) RebuildCategory(string) error {
 	f.categories.Add(1)
 	return nil

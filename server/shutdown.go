@@ -68,6 +68,7 @@ func (s *services) cancel(httpServer *http.Server) {
 		s.lyricsDiscovery.Cancel()
 	}
 	s.translator.Cancel()
+	s.sideStory.Stop()
 	s.backup.Cancel()
 	s.upstream.Stop()
 	s.search.Stop()
@@ -91,5 +92,6 @@ func (s *services) wait() {
 	s.upstream.Wait()
 	s.backup.Wait()
 	s.translator.Wait()
+	s.sideStory.Wait()
 	s.lifecycle.Wait()
 }

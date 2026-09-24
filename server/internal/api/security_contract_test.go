@@ -43,6 +43,9 @@ func TestEditorsCannotTriggerAdministrativeOperations(t *testing.T) {
 		{http.MethodPost, "/api/admin/lyrics-source-reviews/import"},
 		{http.MethodPut, "/api/admin/lyrics-source-reviews/decision"},
 		{http.MethodPut, "/api/admin/lyrics-source-reviews/candidate-selection"},
+		{http.MethodPost, "/api/editor/v1/stories/sync"},
+		{http.MethodPost, "/api/editor/v1/story/card/1/ai"},
+		{http.MethodPost, "/api/editor/v1/story/area/areatalk_01/refresh"},
 	} {
 		response := doJSON(t, operation.method, h.server.URL+operation.path, token, map[string]any{})
 		response.Body.Close()
@@ -103,6 +106,8 @@ func TestQueryTokenAuthenticationIsRejectedEverywhere(t *testing.T) {
 		{name: "admin API", method: http.MethodGet, path: "/api/admin/users"},
 		{name: "review API", method: http.MethodPut, path: "/api/admin/lyrics-source-reviews/decision"},
 		{name: "strict API", method: http.MethodPut, path: "/api/editor/v1/entry"},
+		{name: "side story API", method: http.MethodGet, path: "/api/editor/v1/stories?kind=card"},
+		{name: "side story mutation", method: http.MethodPut, path: "/api/editor/v1/story/card/1/1"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request, err := http.NewRequest(test.method, h.server.URL+test.path+"?token="+h.token, nil)

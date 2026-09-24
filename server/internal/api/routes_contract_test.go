@@ -182,3 +182,43 @@ func TestReadOnlyRoutesRejectWriteMethods(t *testing.T) {
 		}
 	}
 }
+
+// The side-story routes are method-scoped patterns: their own method reaches
+// the handler, any other method falls through to the JSON API catch-all.
+func TestSideStoryRoutesAreMethodScoped(t *testing.T) {
+	h := setupLegacyAPI(t)
+	caughtAll := func(method, path string) (bool, []byte) {
+		t.Helper()
+		var body any
+		if method != http.MethodGet {
+			body = map[string]any{}
+		}
+		response := authorizedRequest(t, h, method, path, body)
+		data, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded map[string]any
+		return response.StatusCode == http.StatusNotFound && json.Unmarshal(data, &decoded) == nil && decoded["error"] == "not found", data
+	}
+	for _, route := range []struct {
+		method, path, wrongMethod string
+	}{
+		{http.MethodGet, "/api/editor/v1/stories?kind=card", http.MethodPost},
+		{http.MethodGet, "/api/editor/v1/stories/sync", http.MethodPut},
+		{http.MethodPost, "/api/editor/v1/stories/sync", http.MethodDelete},
+		{http.MethodGet, "/api/editor/v1/story/card/1", http.MethodPut},
+		{http.MethodPut, "/api/editor/v1/story/card/1/1", http.MethodGet},
+		{http.MethodPost, "/api/editor/v1/story/card/1/ai", http.MethodGet},
+		{http.MethodPost, "/api/editor/v1/story/area/areatalk_01/refresh", http.MethodDelete},
+		{http.MethodGet, "/api/editor/v1/story/card/1/1/snapshot?locale=zh-CN", http.MethodPost},
+	} {
+		if missed, data := caughtAll(route.method, route.path); missed {
+			t.Fatalf("%s %s did not reach its handler: %s", route.method, route.path, data)
+		}
+		if routed, data := caughtAll(route.wrongMethod, route.path); !routed {
+			t.Fatalf("%s %s = %s, want the JSON catch-all", route.wrongMethod, route.path, data)
+		}
+	}
+}

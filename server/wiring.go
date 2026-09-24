@@ -3,8 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"moesekai/server/internal/api"
@@ -36,6 +40,7 @@ type services struct {
 	lifecycle       *lifecycle.State
 	editorGate      *editorgate.Gate
 	translator      *translator.Translator
+	sideStory       *translator.SideStoryBackfill
 	upstream        *upstream.Watcher
 	backup          *backup.Manager
 	collab          *collab.Service
@@ -91,6 +96,11 @@ func buildServices(env startupEnv, settings runtimeSettings, database *db.DB) *s
 	tr.SetProgress(func(stage, detail string, cur, total int) {
 		hub.Broadcast(stage, map[string]any{"detail": detail, "current": cur, "total": total})
 	})
+	sideStoryOptions, err := sideStoryBackfillOptionsFromEnv()
+	if err != nil {
+		fatal("side story backfill configuration", err)
+	}
+	sideStory := translator.NewSideStoryBackfill(tr, sideStoryOptions)
 
 	watcher := newUpstreamWatcher(cfg, tr, env.dataDir)
 	// Backup manager: daily + manual backup/restore to S3 and/or GitHub.
@@ -99,25 +109,60 @@ func buildServices(env startupEnv, settings runtimeSettings, database *db.DB) *s
 	if err != nil {
 		fatal("init lyrics collaboration", err)
 	}
-	backupMgr.SetAfterRestore(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := collabService.RetireAll(ctx); err != nil {
-			log.Printf("[collab] post-restore retirement failed: %v", err)
-		}
-	})
+	backupMgr.SetAfterRestore(afterContentRestore(collabService, sideStory))
 
 	apiServer := api.NewServer(st, es, authSvc, cfg, hub, tr, watcher, backupMgr, editorGate)
 	apiServer.SetCollab(collabService)
 	apiServer.SetFileService(fileService)
 	apiServer.SetSearchStatus(idx)
+	apiServer.SetSideStoryRunner(sideStory)
 
 	return &services{
 		database: database, auth: authSvc, cfg: cfg, hub: hub, lifecycle: appLifecycle,
-		editorGate: editorGate, translator: tr, upstream: watcher, backup: backupMgr, collab: collabService,
+		editorGate: editorGate, translator: tr, sideStory: sideStory, upstream: watcher, backup: backupMgr, collab: collabService,
 		files: fileService, search: idx, api: apiServer,
 		lyricsDiscovery: lyricsDiscoveryWorker, lyricsFetch: lyricsFetchRevisionWorker,
 	}
+}
+
+// afterContentRestore retires the realtime sessions that predate a restore and
+// asks the side-story backfill for a catalog refresh, which it otherwise
+// makes only every 6 h, so restored side-story tables are resynced promptly.
+func afterContentRestore(collabService *collab.Service, sideStory *translator.SideStoryBackfill) func() {
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := collabService.RetireAll(ctx); err != nil {
+			log.Printf("[collab] post-restore retirement failed: %v", err)
+		}
+		sideStory.TriggerSideStoryBackfill(true)
+	}
+}
+
+// sideStoryBackfillOptionsFromEnv reads the card and area story backfill env;
+// the worker still runs only while the translate scheduler is enabled.
+func sideStoryBackfillOptionsFromEnv() (translator.SideStoryBackfillOptions, error) {
+	enabled := true
+	if raw := strings.TrimSpace(os.Getenv("SIDE_STORY_BACKFILL_ENABLED")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return translator.SideStoryBackfillOptions{}, errors.New("SIDE_STORY_BACKFILL_ENABLED must be true or false")
+		}
+		enabled = value
+	}
+	interval, err := durationEnvMs("SIDE_STORY_BACKFILL_INTERVAL_MS", time.Minute, time.Second, 24*time.Hour)
+	if err != nil {
+		return translator.SideStoryBackfillOptions{}, fmt.Errorf("SIDE_STORY_BACKFILL_INTERVAL_MS %w", err)
+	}
+	batch, err := boundedIntEnv("SIDE_STORY_BACKFILL_BATCH", 30, 1, 500)
+	if err != nil {
+		return translator.SideStoryBackfillOptions{}, err
+	}
+	delay, err := durationEnvMs("SIDE_STORY_BACKFILL_REQUEST_DELAY_MS", time.Second, 100*time.Millisecond, time.Minute)
+	if err != nil {
+		return translator.SideStoryBackfillOptions{}, fmt.Errorf("SIDE_STORY_BACKFILL_REQUEST_DELAY_MS %w", err)
+	}
+	return translator.SideStoryBackfillOptions{Enabled: enabled, Interval: interval, Batch: batch, RequestDelay: delay}, nil
 }
 
 func newLyricsWorkers(st *store.Store, cfg *config.Config) (*lyricsdiscovery.Worker, *lyricsdiscovery.FetchWorker) {
@@ -239,6 +284,7 @@ func (s *services) startWorkers() {
 	s.search.Start()
 	s.upstream.Start()
 	s.backup.StartScheduler()
+	s.sideStory.Start()
 	if s.lyricsFetch != nil {
 		if err := s.lyricsFetch.Start(context.Background()); err != nil {
 			fatal("start lyrics source fetch worker", err)

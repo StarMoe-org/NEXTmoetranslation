@@ -50,17 +50,23 @@ type Server struct {
 	projection              interface {
 		Status() filesvc.ProjectionStatus
 	}
-	fileService interface {
-		RebuildEvent(eventID int) error
-		RebuildCategory(category string) error
-		PublishNow()
-		Status() filesvc.ProjectionStatus
-		SongProvenance(musicID int) (filesvc.SongProvenance, bool)
-	}
-	search interface {
+	fileService publicFileService
+	search      interface {
 		Status() searchindex.Status
 	}
-	collab *collab.Service
+	collab      *collab.Service
+	sideStories SideStoryRunner
+}
+
+// publicFileService publishes single-entity changes to the public files ahead
+// of the debounced full rebuild.
+type publicFileService interface {
+	RebuildEvent(eventID int) error
+	RebuildCategory(category string) error
+	RebuildSideStory(kind, storyID string) error
+	PublishNow()
+	Status() filesvc.ProjectionStatus
+	SongProvenance(musicID int) (filesvc.SongProvenance, bool)
 }
 
 func (s *Server) SetCollab(service *collab.Service) {
@@ -79,32 +85,34 @@ func (s *Server) SetProjectionStatus(provider interface {
 	Status() filesvc.ProjectionStatus
 }) {
 	s.projection = provider
-	if fs, ok := provider.(interface {
-		RebuildEvent(eventID int) error
-		RebuildCategory(category string) error
-		PublishNow()
-		Status() filesvc.ProjectionStatus
-		SongProvenance(musicID int) (filesvc.SongProvenance, bool)
-	}); ok {
+	if fs, ok := provider.(publicFileService); ok {
 		s.fileService = fs
 	}
 }
 
-func (s *Server) SetFileService(fs interface {
-	RebuildEvent(eventID int) error
-	RebuildCategory(category string) error
-	PublishNow()
-	Status() filesvc.ProjectionStatus
-	SongProvenance(musicID int) (filesvc.SongProvenance, bool)
-}) {
+func (s *Server) SetFileService(fs publicFileService) {
 	s.fileService = fs
 	s.projection = fs
+}
+
+// SetSideStoryRunner connects the card-story and area-talk routes that fetch
+// upstream scripts or run AI; without one they answer 503.
+func (s *Server) SetSideStoryRunner(runner SideStoryRunner) {
+	s.sideStories = runner
 }
 
 func (s *Server) rebuildEventAsset(eventID int) {
 	if s.fileService != nil {
 		if err := s.fileService.RebuildEvent(eventID); err != nil {
 			log.Printf("[filesvc] rebuild event %d failed: %v", eventID, err)
+		}
+	}
+}
+
+func (s *Server) rebuildSideStoryAsset(kind, storyID string) {
+	if s.fileService != nil {
+		if err := s.fileService.RebuildSideStory(kind, storyID); err != nil {
+			log.Printf("[filesvc] rebuild side story %s/%s failed: %v", kind, storyID, err)
 		}
 	}
 }

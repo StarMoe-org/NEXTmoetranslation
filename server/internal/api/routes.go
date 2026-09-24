@@ -94,6 +94,18 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		mux.Handle("/yjs/lyrics/{musicId}", s.collab)
 	}
 	mux.HandleFunc("/api/editor/v1/backup/push", s.auth.RequireAdmin(s.strictEditorMutation(s.handleBackupPush)))
+
+	// Card stories and area talk. Refresh and AI take their own locks in the
+	// runner, so they are not content mutations here.
+	mux.HandleFunc("GET /api/editor/v1/stories", s.auth.RequireAuth(s.handleSideStories))
+	mux.HandleFunc("GET /api/editor/v1/stories/sync", s.auth.RequireAuth(s.handleSideStorySyncStatus))
+	mux.HandleFunc("POST /api/editor/v1/stories/sync", s.auth.RequireAdmin(s.handleSideStorySync))
+	mux.HandleFunc("GET /api/editor/v1/story/{kind}/{id}", s.auth.RequireAuth(s.handleSideStory))
+	mux.HandleFunc("PUT /api/editor/v1/story/{kind}/{id}/{episode}", s.auth.RequireAuth(s.strictContentMutation(s.handleUpdateSideStory)))
+	mux.HandleFunc("POST /api/editor/v1/story/{kind}/{id}/ai", s.auth.RequireAdmin(s.handleSideStoryAI))
+	mux.HandleFunc("POST /api/editor/v1/story/{kind}/{id}/refresh", s.auth.RequireAdmin(s.handleRefreshSideStory))
+	mux.HandleFunc("GET /api/editor/v1/story/{kind}/{id}/{episode}/snapshot", s.auth.RequireAuth(s.handleSideStorySnapshot))
+
 	// Agent tooling still posts to these pre-v1 paths; they share the v1 twin's
 	// wrapper, which admits requests without the producer-state header.
 	mux.HandleFunc("/api/entry", s.auth.RequireAuth(s.strictContentMutation(s.handleUpdateEntry)))
