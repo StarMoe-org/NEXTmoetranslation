@@ -183,7 +183,9 @@ export function useEntryEditor({
         const episodeKey = saveEntry?.episodeNo ?? "";
         if (!saveEntry || !episodeKey) return false;
         const saveText = sideStoryLineText(saveValue);
-        if (sideStoryLineSaveIsNoop(saveEntry, saveValue)) {
+        // An empty line left to AI or official fill (README 8.3 hand-back) stays theirs.
+        const handedBackStaysEmpty = saveText === "" && saveEntry.text === "" && saveEntry.source !== "human";
+        if (sideStoryLineSaveIsNoop(saveEntry, saveValue) || handedBackStaysEmpty) {
           if (saveValue !== saveEntry.text) setEditValue(saveEntry.text);
         } else {
           const result = await updateSideStoryLines(sideStoryKind, saveField, episodeKey, sideStoryLocale(saveLocale),
@@ -237,7 +239,9 @@ export function useEntryEditor({
       if (advance) {
         const idx = filtered.findIndex((e) => e.key === saveKey);
         if (idx >= 0 && idx < filtered.length - 1) {
-          const next = filtered[idx + 1];
+          // A collaborator's edit that arrived during the save is only in the latest entries.
+          const nextKey = filtered[idx + 1].key;
+          const next = entriesRef.current.find((e) => e.key === nextKey) ?? filtered[idx + 1];
           setSelectedKey(next.key); setEditValue(next.text);
           setTimeout(() => keepTranslationEntryVisible(next.key), 40);
         } else {

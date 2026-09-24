@@ -84,7 +84,7 @@ test("only an unchanged or blank value on a never-stored line skips the side-sto
   assert.equal(sideStoryLineSaveIsNoop({ text: "", revision: 3 }, ""), false, "clearing a stored line is a real edit");
 });
 
-function editorHarness(respond) {
+function editorHarness(respond, initialEntries = [untranslated, translated]) {
   const renderer = createRenderer();
   const calls = [];
   const reconciles = [];
@@ -96,7 +96,7 @@ function editorHarness(respond) {
   };
   const { useEntryEditor } = loadSourceModule("components/console/useEntryEditor.ts", { react: renderer.react, "@/lib/api": api });
   const state = { selectedKey: null, editValue: "", remoteConflict: null, saving: [] };
-  const entriesRef = { current: [untranslated, translated] };
+  const entriesRef = { current: initialEntries };
   const savingRef = { current: false };
   const render = () => {
     const selectedEntry = entriesRef.current.find((entry) => entry.key === state.selectedKey) ?? null;
@@ -114,7 +114,8 @@ function editorHarness(respond) {
       contextGenerationRef: { current: 1 }, onSideStorySaved() {},
     });
   };
-  return { render, calls, reconciles, state, savingRef, entries: () => entriesRef.current };
+  const setEntries = (next) => { entriesRef.current = next(entriesRef.current); };
+  return { render, calls, reconciles, state, savingRef, setEntries, entries: () => entriesRef.current };
 }
 
 test("save-and-next on an untranslated line advances without storing an empty human line", async () => {
@@ -140,6 +141,72 @@ test("whitespace-only text on a stored line is saved as an empty line", async ()
   assert.deepEqual(harness.calls.map((call) => call[4]), [[{ jp: translated.japanese, text: "", source: "human", expectedRevision: 2 }]]);
   assert.equal(harness.entries()[1].text, "");
   assert.equal(harness.state.editValue, "", "the input matches the stored line");
+});
+
+test("save-and-next shows a collaborator's edit to the next line that arrived during the save", async () => {
+  const response = deferred();
+  const harness = editorHarness(() => response.promise);
+  harness.state.selectedKey = untranslated.key;
+  harness.state.editValue = "测试译文一";
+  const pending = harness.render().save();
+  harness.setEntries((prev) => prev.map((entry) => entry.key === translated.key ? { ...entry, text: "测试协作者译文", revision: 3 } : entry));
+  harness.render();
+  response.resolve({
+    status: "ok", kind: "card", id: "101", episode: "1", locale: "zh-CN", updated: 1, unchanged: 0,
+    lines: [{ jp: untranslated.japanese, role: "talk", position: 1, text: "测试译文一", source: "human", revision: 1 }],
+  });
+  assert.equal(await pending, true);
+  assert.equal(harness.state.selectedKey, translated.key);
+  assert.equal(harness.state.editValue, "测试协作者译文", "the input holds the stored next line, not a stale draft");
+});
+
+const handedBack = { key: "1|テスト台詞三", episodeNo: "1", japanese: "テスト台詞三", text: "", source: "llm", revision: 4 };
+const storeEdit = (kind, id, episode, locale, edits) => ({
+  status: "ok", kind, id, episode, locale, updated: 1, unchanged: 0,
+  lines: [{ jp: edits[0].jp, role: "talk", position: 1, text: edits[0].text, source: edits[0].source, revision: 5 }],
+});
+
+test("saving an empty input on a line handed back to AI leaves it for AI fill", async () => {
+  const harness = editorHarness(storeEdit, [handedBack, translated]);
+  harness.state.selectedKey = handedBack.key;
+  harness.state.editValue = "";
+  const advanced = await harness.render().save();
+  assert.deepEqual(harness.calls.map((call) => call[4]), [], "save-and-next only advances");
+  assert.equal(advanced, true);
+  assert.equal(harness.state.selectedKey, translated.key);
+  assert.equal(harness.state.editValue, "测试旧译");
+
+  harness.state.selectedKey = handedBack.key;
+  harness.state.editValue = "  ";
+  const saved = await harness.render().save(undefined, false);
+  assert.deepEqual(harness.calls.map((call) => call[4]), [], "先保存 writes nothing either");
+  assert.equal(saved, true, "the pending action goes on");
+  assert.equal(harness.state.selectedKey, handedBack.key);
+  assert.equal(harness.state.editValue, "");
+  assert.equal(harness.entries()[0].source, "llm");
+});
+
+test("clearing a stored AI line saves an empty human line", async () => {
+  const aiLine = { key: "1|テスト台詞四", episodeNo: "1", japanese: "テスト台詞四", text: "测试AI译文", source: "llm", revision: 4 };
+  for (const [editValue, advance] of [["", true], ["  \n", true], ["", false], ["  \n", false]]) {
+    const label = `input ${JSON.stringify(editValue)}, advance ${advance}`;
+    const harness = editorHarness(storeEdit, [aiLine, translated]);
+    harness.state.selectedKey = aiLine.key;
+    harness.state.editValue = editValue;
+    assert.equal(await harness.render().save(undefined, advance), true, label);
+    assert.deepEqual(harness.calls.map((call) => call[4]), [[{ jp: aiLine.japanese, text: "", source: "human", expectedRevision: 4 }]], label);
+    assert.deepEqual([harness.entries()[0].text, harness.entries()[0].source], ["", "human"], label);
+    assert.equal(harness.state.selectedKey, advance ? translated.key : aiLine.key, label);
+    assert.equal(harness.state.editValue, advance ? "测试旧译" : "", label);
+  }
+});
+
+test("the source menu still stores a handed-back empty line as human", async () => {
+  const harness = editorHarness(storeEdit, [handedBack, translated]);
+  harness.state.selectedKey = handedBack.key;
+  await harness.render().handleSourceChange(handedBack.key, "human");
+  assert.deepEqual(harness.calls.map((call) => call[4]), [[{ jp: handedBack.japanese, text: "", source: "human", expectedRevision: 4 }]]);
+  assert.equal(harness.entries()[0].source, "human");
 });
 
 test("picking a source on a never-stored line stores nothing", async () => {
