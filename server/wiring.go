@@ -140,7 +140,8 @@ func afterContentRestore(collabService *collab.Service, sideStory *translator.Si
 }
 
 // sideStoryBackfillOptionsFromEnv reads the card and area story backfill env;
-// the worker still runs only while the translate scheduler is enabled.
+// each round also needs the side_story_backfill.enabled setting not false. The
+// translate scheduler does not gate it.
 func sideStoryBackfillOptionsFromEnv() (translator.SideStoryBackfillOptions, error) {
 	enabled := true
 	if raw := strings.TrimSpace(os.Getenv("SIDE_STORY_BACKFILL_ENABLED")); raw != "" {

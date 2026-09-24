@@ -30,9 +30,10 @@ type SideStoryBackfillOptions struct {
 }
 
 // SideStoryBackfill imports card and area scripts and their official CN/EN
-// text in rate-limited background rounds. It runs only while the translate
-// scheduler is enabled, never claims the translator's job lock and never
-// calls an LLM. The embedded Translator serves the on-demand runner methods.
+// text in rate-limited background rounds. It runs while enabled() allows it,
+// independent of the translate scheduler, never claims the translator's job
+// lock and never calls an LLM. The embedded Translator serves the on-demand
+// runner methods.
 type SideStoryBackfill struct {
 	*Translator
 	opts SideStoryBackfillOptions
@@ -71,7 +72,8 @@ func NewSideStoryBackfill(t *Translator, opts SideStoryBackfillOptions) *SideSto
 }
 
 // Start launches the round loop unless the backfill is disabled by env. The
-// first round runs immediately; the scheduler setting is checked every round.
+// first round runs immediately; the side_story_backfill.enabled setting is
+// checked every round.
 func (w *SideStoryBackfill) Start() {
 	w.startOnce.Do(func() {
 		if !w.opts.Enabled || w.ctx.Err() != nil {
@@ -288,8 +290,9 @@ func sideStoryEpisodeFailed(episode store.SideStoryEpisodeApply) bool {
 }
 
 // catalogDue reports a refresh at the first round, after sideStoryCatalogMaxAge,
-// when the watcher recorded a new upstream data version, or on request. A
-// failed refresh is retried after sideStoryCatalogRetryDelay unless requested.
+// when the upstream watcher recorded a new data version (only while the watcher
+// runs, which needs scheduler.enabled), or on request. A failed refresh is
+// retried after sideStoryCatalogRetryDelay unless requested.
 func (w *SideStoryBackfill) catalogDue(force bool) bool {
 	version := w.cfg.Get(config.KeyUpstreamLastDataVersion)
 	now := w.now()
