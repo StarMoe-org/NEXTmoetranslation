@@ -12,6 +12,7 @@ import (
 	"moesekai/server/internal/config"
 	"moesekai/server/internal/httpx"
 	"moesekai/server/internal/lifecycle"
+	"moesekai/server/internal/translator"
 	"moesekai/server/internal/workspaceverify"
 )
 
@@ -29,13 +30,14 @@ type startupEnv struct {
 }
 
 // runtimeSettings are the process settings read after a verify-only run has
-// already exited.
+// already exited, and before the database is opened (and migrated).
 type runtimeSettings struct {
 	port        string
 	masterKey   string
 	jwtSecret   string
 	allowOrigin string
 	shutdown    lifecycle.ShutdownConfig
+	sideStory   translator.SideStoryBackfillOptions
 }
 
 func resolveEnvironment() startupEnv {
@@ -124,6 +126,14 @@ func resolveRuntimeSettings(production bool) runtimeSettings {
 	if err := httpx.ValidateUpstreamEnvironment(production); err != nil {
 		fatal("upstream network configuration", err)
 	}
+	sideStoryOptions, err := sideStoryBackfillOptionsFromEnv()
+	if err != nil {
+		fatal("side story backfill configuration", err)
+	}
+	settings.sideStory = sideStoryOptions
+	if err := validateSideStorySourceEnv(); err != nil {
+		fatal("side story source configuration", err)
+	}
 	if err := validateConsoleOrigin(production, settings.allowOrigin); err != nil {
 		fatal("CONSOLE_ORIGIN", err)
 	}
@@ -135,6 +145,30 @@ func resolveRuntimeSettings(production bool) runtimeSettings {
 		os.Exit(1)
 	}
 	return settings
+}
+
+// sideStorySourceEnv are the source URL env seedConfigFromEnv gained with side
+// stories. They get the upstream URL check seeding applies here, so a typo
+// fails before db.Open migrates the database.
+var sideStorySourceEnv = []string{
+	"UPSTREAM_EN_MASTERDATA_URL", "UPSTREAM_EN_MASTERDATA_FALLBACK_URL",
+	"UPSTREAM_JP_SCRIPTS_URL", "UPSTREAM_JP_SCRIPTS_FALLBACK_URL",
+	"UPSTREAM_CN_SCRIPTS_URL", "UPSTREAM_EN_SCRIPTS_URL",
+}
+
+func validateSideStorySourceEnv() error {
+	policy := httpx.UpstreamPolicyFromEnvironment()
+	templates := strings.NewReplacer("{repo}", "owner/repo", "{branch}", "main")
+	for _, name := range sideStorySourceEnv {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			continue
+		}
+		if err := httpx.ValidateUpstreamURL(templates.Replace(value), policy); err != nil {
+			return fmt.Errorf("%s contains an unsafe upstream URL: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func logStartupBanner(env startupEnv, settings runtimeSettings, cfg *config.Config, serveWeb bool) {

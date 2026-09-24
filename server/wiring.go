@@ -96,11 +96,7 @@ func buildServices(env startupEnv, settings runtimeSettings, database *db.DB) *s
 	tr.SetProgress(func(stage, detail string, cur, total int) {
 		hub.Broadcast(stage, map[string]any{"detail": detail, "current": cur, "total": total})
 	})
-	sideStoryOptions, err := sideStoryBackfillOptionsFromEnv()
-	if err != nil {
-		fatal("side story backfill configuration", err)
-	}
-	sideStory := translator.NewSideStoryBackfill(tr, sideStoryOptions)
+	sideStory := translator.NewSideStoryBackfill(tr, settings.sideStory)
 	// Background rounds publish the stories they wrote incrementally rather
 	// than scheduling a full rebuild, which also restarts the search index wait.
 	sideStory.SetPublisher(fileService.RebuildSideStoryContext)

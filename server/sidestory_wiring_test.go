@@ -1,8 +1,11 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -87,6 +90,17 @@ func TestSideStoryBackfillConfigurationDefaultsAndIsStrict(t *testing.T) {
 	}
 }
 
+// sideStoryTestSettings resolves the side-story env the way
+// resolveRuntimeSettings does.
+func sideStoryTestSettings(t *testing.T) runtimeSettings {
+	t.Helper()
+	options, err := sideStoryBackfillOptionsFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtimeSettings{jwtSecret: "side-story-wiring-secret-at-least-32-bytes", sideStory: options}
+}
+
 func TestServicesConnectTheSideStoryRunnerAndStopItOnShutdown(t *testing.T) {
 	clearSideStoryBackfillEnv(t)
 	t.Setenv("TRANSLATE_SCHEDULER_ENABLED", "false")
@@ -98,8 +112,7 @@ func TestServicesConnectTheSideStoryRunnerAndStopItOnShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	svc := buildServices(startupEnv{dataDir: t.TempDir()},
-		runtimeSettings{jwtSecret: "side-story-wiring-secret-at-least-32-bytes"}, database)
+	svc := buildServices(startupEnv{dataDir: t.TempDir()}, sideStoryTestSettings(t), database)
 	if svc.sideStory == nil || svc.sideStory.Translator != svc.translator {
 		t.Fatalf("side story backfill is not built on the process translator: %+v", svc.sideStory)
 	}
@@ -166,8 +179,7 @@ func TestAfterContentRestoreRefreshesTheSideStoryCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	svc := buildServices(startupEnv{dataDir: t.TempDir()},
-		runtimeSettings{jwtSecret: "side-story-wiring-secret-at-least-32-bytes"}, database)
+	svc := buildServices(startupEnv{dataDir: t.TempDir()}, sideStoryTestSettings(t), database)
 	sources := map[string]string{}
 	for _, key := range []string{config.KeyUpstreamJPMasterdataURL, config.KeyUpstreamJPMasterdataFallbackURL} {
 		sources[key] = upstream.URL + "/jp-master"
@@ -221,4 +233,39 @@ func TestAfterContentRestoreRefreshesTheSideStoryCatalog(t *testing.T) {
 	})
 	release()
 	waitUntil("a catalog refresh after the restore", func() bool { return requests() >= 2*first })
+}
+
+const sideStoryEnvFailureHelperEnv = "MOESEKAI_SIDE_STORY_ENV_FAILURE_HELPER"
+
+func TestInvalidSideStoryEnvFailsBeforeTheDatabaseIsOpened(t *testing.T) {
+	if os.Getenv(sideStoryEnvFailureHelperEnv) == "1" {
+		os.Args = []string{"moesekai-server"}
+		main()
+		return
+	}
+	for _, test := range []struct{ name, env, want string }{
+		{"backfill switch", "SIDE_STORY_BACKFILL_ENABLED=off", "SIDE_STORY_BACKFILL_ENABLED must be true or false"},
+		{"backfill batch", "SIDE_STORY_BACKFILL_BATCH=0", "SIDE_STORY_BACKFILL_BATCH must be"},
+		{"script source", "UPSTREAM_JP_SCRIPTS_URL=http://scripts.example.test/assets", "UPSTREAM_JP_SCRIPTS_URL"},
+		{"masterdata source", "UPSTREAM_EN_MASTERDATA_FALLBACK_URL=https://user@en.example.test/master", "UPSTREAM_EN_MASTERDATA_FALLBACK_URL"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			databasePath := filepath.Join(t.TempDir(), "must-not-exist", "database.db")
+			command := exec.Command(os.Args[0], "-test.run=^TestInvalidSideStoryEnvFailsBeforeTheDatabaseIsOpened$")
+			command.Env = []string{
+				sideStoryEnvFailureHelperEnv + "=1",
+				"MOESEKAI_PRODUCTION=false",
+				"DB_PATH=" + databasePath,
+				"JWT_SECRET=side-story-env-secret-at-least-32-bytes",
+				test.env,
+			}
+			output, err := command.CombinedOutput()
+			if err == nil || !strings.Contains(string(output), test.want) {
+				t.Fatalf("%s: err=%v output=%q", test.env, err, output)
+			}
+			if _, err := os.Stat(filepath.Dir(databasePath)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s touched the database directory before failing: %v", test.env, err)
+			}
+		})
+	}
 }
