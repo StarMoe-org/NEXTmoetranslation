@@ -746,7 +746,7 @@ takeover 先检查公开站是否提供这首歌，再按同样的顺序检查�
 | `area`（区域对话） | scenarioId，匹配 `^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$` | 只有 `1` |
 
 - **语言**：`locale` 只接受 `zh-CN`、`en-US`，两种语言的译文各自独立；日文原文只读。列表、详情、PUT 和 AI 省略 `locale` 时按 `zh-CN` 处理，snapshot 必须带。
-- **行**：每话有一个标题行（`role:"title"`，`position:-1`）。TalkData 第 i 条的正文是 `role:"talk"`、`position` 为 2i 的行，说话人是 `role:"speaker"`、`position` 为 2i+1 的行。行键 `jp` 是去掉首尾空白的日文原文，在一话内唯一：同一句出现多次时只有一行，`position` 取第一次出现的位置。talk 行的 `speaker` 是它的说话人行的 `jp`。
+- **行**：卡牌剧情每话有一个标题行（`role:"title"`，`position:-1`）；区域对话的话没有标题，也就没有标题行。TalkData 第 i 条的正文是 `role:"talk"`、`position` 为 2i 的行，说话人是 `role:"speaker"`、`position` 为 2i+1 的行。行键 `jp` 是去掉首尾空白的日文原文，在一话内唯一：同一句出现多次时只有一行，`position` 取第一次出现的位置。talk 行的 `speaker` 是它的说话人行的 `jp`。
 - **来源**：`official`（后台回填写入的官方 CN/EN 文本）、`llm`（AI）、`human`（人工）。没有译文的行为 `text:""`、`source:""`、`revision:0`，每写一次 `revision` 加 1。
 
 | 请求 | 权限 | 作用 |
@@ -772,7 +772,7 @@ curl -sS "$BASE/api/editor/v1/stories?kind=card&locale=zh-CN&status=untranslated
 ```
 
 - `kind` 必填。`status` 可选，取 `pending`（还没抓到任何一话的日文脚本）、`untranslated`、`partial`、`translated`，其他值返回 400。
-- 计数包含标题行。`primarySource` 是已译行里最多的来源，并列时 human > official > llm，没有已译行时为 `""`。`releasedAt` 是 Unix 毫秒，`updatedAt` 是最近一次写译文的 Unix 秒。area 故事另带 `areaId`、`areaCategory`（如 `grade1`）和 `actionSetId`。
+- 卡牌剧情的计数包含标题行。`primarySource` 是已译行里最多的来源，并列时 human > official > llm，没有已译行时为 `""`。`releasedAt` 是 Unix 毫秒，`updatedAt` 是这个语言最近一次写译文的 Unix 秒；还没有任何该语言译文时，取目录写入或更新这个故事的时间，所以刚入目录、尚无译文的故事也有 `updatedAt`。area 故事另带 `areaId`、`areaCategory`（如 `grade1`）和 `actionSetId`。
 
 ### 8.2 详情：`GET /api/editor/v1/story/{kind}/{id}`
 
@@ -787,15 +787,15 @@ curl -sS "$BASE/api/editor/v1/story/card/501?locale=zh-CN" -H "Authorization: Be
 #    "lines":[{"jp":"テスト話2","role":"title","position":-1,"text":"","source":"","revision":0}],"translatedCount":0,"untranslatedCount":1}]}
 ```
 
-- `fetched:false` 表示日文脚本还没抓到，这一话只有标题行。有译文的行另带 `updatedBy` 和 `updatedAt`（Unix 秒）。
-- `cnState` / `enState` 是官方 CN / EN 文本的导入状态：`pending`（等待导入；官方脚本返回 404 或返回的仍是日文时也是 `pending`，见 8.8）、`imported`、`absent`（该服务器的 masterdata 没有这一话的脚本路径）、`mismatch`（官方脚本的 TalkData 条数与日文不同，见 8.8）、`error`。最近一次失败记在 `lastError`。
+- `fetched:false` 表示日文脚本还没抓到：卡牌剧情的这一话只有标题行，区域对话的这一话 `lines` 为 `[]`。有译文的行另带 `updatedBy` 和 `updatedAt`（Unix 秒）。
+- `cnState` / `enState` 是官方 CN / EN 文本的导入状态：`pending`（等待导入；官方脚本返回 404 或返回的仍是日文时也是 `pending`，见 8.8）、`imported`、`absent`（该服务器的 masterdata 没有这一话的脚本路径）、`mismatch`（官方脚本的 TalkData 条数与日文不同，见 8.8）、`error`。最近一次失败记在 `lastError`，按语言分段（`zh-CN: …; en-US: …`）；处于 `mismatch` 或 `error` 的语言，在另一种语言重试或日文抓取失败时仍保留自己那一段。
 
 ### 8.3 写行：`PUT /api/editor/v1/story/{kind}/{id}/{episode}`
 
 请求体 `{locale?, lines:[{jp, text, source?, expectedRevision?}], clientId?}`：
 
 - `lines` 1–2000 条，同一 `jp` 只能出现一次，且必须是这一话的行键（取自 8.2 或 8.4）。
-- `text` 是最多 16384 字节、不含 NUL 的 UTF-8。空串也是合法的人工译文：这一行仍算未翻译，回填和 AI 都不会再填它。
+- `text` 是最多 16384 字节、不含 NUL 的 UTF-8；只含空白的文本按 `""` 存。空串也是合法的人工译文：这一行仍算未翻译，回填和 AI 都不会再填它。要把这样的行交还给官方导入和 AI，提交 `{"jp":"…","text":"","source":"llm","expectedRevision":<当前 revision>}`，把它改成空的 `llm` 行：AI（8.5）会再填它，官方写入也会覆盖它（8.8）。该语言已经是 `imported` 时回填不会再抓官方脚本，还要由管理员用 8.6 重抓一次。
 - `source` 省略或写 `human` 时存为 `human`，也可以写 `llm`；`official` 只由回填写入，请求里出现返回 400。
 - `expectedRevision` 填读取时的 `revision`，没有译文的行填 0。省略时不做检查、直接覆盖，所以 agent 每行都要带。
 - `clientId` 最多 128 字节，原样放进 SSE 事件，发起方用它认出自己的保存。
@@ -848,8 +848,8 @@ curl -sS -X POST "$BASE/api/editor/v1/story/card/501/ai" -H "Authorization: Bear
 
 - 请求体 `{locale?, episode?, provider?, clientId?}` 的字段都可以省：`{}` 表示 `zh-CN`、全部话、设置 `llm.type` 里的 provider（默认 `openai`）。`provider` 只接受 `gemini`、`openai`。
 - 只填没有译文行的行，以及文本为空且来源不是 `human` 的行，写成 `source:"llm"`；列出目标之后被改过的行不会被覆盖。后台回填和 refresh 都不调用 LLM。
-- 请求同步执行，作为 producer 任务 `ai-side-story` 运行，期间 PUT 按第 2 节返回 409。`translated` 是写入的行数，`remaining` 是结束后仍可由 AI 填的行数。完成后重建公开文件，并广播 `sidestory.updated`（`action:"ai"`，不带 `lines`）。
-- 错误：`409 already_running`（已有翻译任务或 producer 在运行）、`503 draining`（服务正在关闭）、`404 not_found`、`400 invalid_request`（`ja-JP`、不存在的话号、过长的 `clientId`）、`500 internal_error`（LLM 调用失败或 provider 不受支持，原因在 `details`）。
+- 请求同步执行，作为 producer 任务 `ai-side-story` 运行，期间 PUT 按第 2 节返回 409。`translated` 是写入的行数，`remaining` 是结束后仍可由 AI 填的行数。写入了行（`translated` 大于 0）时，响应前重建公开文件并广播 `sidestory.updated`（`action:"ai"`，不带 `lines`）；一行都没写时既不重建也不广播。每批单独提交：后面某批失败时，前面各批已经保存，同样立即发布并广播，错误的 `details` 末尾是 `translated lines saved before the failure: N`，再调用一次只会补剩下的行。
+- 错误：`409 already_running`（已有翻译任务或 producer 在运行）、`503 draining`（服务正在关闭）、`404 not_found`、`400 invalid_request`（`ja-JP`、不存在的话号、过长的 `clientId`）、`502 upstream_unavailable`（LLM 服务商重试后仍失败，如 `openai http 429` 或回复无法解析，原因在 `details`）、`500 internal_error`（缺少 API key、provider 不受支持或请求被取消，原因在 `details`）。
 
 ### 8.6 立即重抓：`POST /api/editor/v1/story/{kind}/{id}/refresh`（仅管理员）
 
@@ -863,7 +863,9 @@ curl -sS -X POST "$BASE/api/editor/v1/story/card/501/refresh" -H "Authorization:
 
 - 不等后台回填，立即抓这个故事每一话的日文、CN、EN 脚本并按 8.8 的规则导入。`scriptChanged:true` 表示日文脚本和上次不同，这一话的行集按新脚本替换：仍然存在的行保留译文，消失的行连同译文删除，`droppedHumanLines` 是其中人工译文的条数。`officialWritten` 是写入的官方译文条数；`error` 带语言前缀，如 `ja-JP: …`、`zh-CN: …`。
 - 成功后重建公开文件，并广播 `sidestory.updated`（`action:"refresh"`，`episode` 与 `locale` 为 `""`）。
-- 错误：`404 not_found`、`409 already_running`（producer 正在运行）、`503 draining`、`502 upstream_unavailable`（没有一话抓到日文脚本；失败仍记进各话的 `lastError`）。
+- 每一话的日文脚本都返回 404 时也返回 `200`，这些话是 `fetched:false`、`error:"ja-JP: not found"`，所以要逐话检查 `fetched` 和 `error`，不能只看状态码。日文失败只在后台回填还会再抓这一话时（还没有脚本、等待重抓日文，或 CN/EN 仍是 `pending`）记进 `lastError` 并安排重试；已有脚本、也没有待导入语言的话保持原样，失败只出现在响应里。`cnState` / `enState` 为 `imported` 却带该语言的 `error`，表示这次重抓遇到 404 或镜像返回日文，之前导入的官方译文保留（8.8）。
+- 重抓不受回填的请求间隔限制，立即连续请求上游；8.4 的快照也一样。
+- 错误：`404 not_found`、`409 already_running`（producer 正在运行）、`503 draining`、`502 upstream_unavailable`（没有一话抓到日文脚本，且至少一话的失败不是 404）。
 
 ### 8.7 回填状态与触发：`GET` / `POST /api/editor/v1/stories/sync`
 
@@ -877,18 +879,18 @@ curl -sS -X POST "$BASE/api/editor/v1/stories/sync" -H "Authorization: Bearer $T
 # 202 {"started":true,"state":{…}}
 ```
 
-- `enabled` 要求环境变量 `SIDE_STORY_BACKFILL_ENABLED` 不为 false，且设置 `side_story_backfill.enabled` 不为 false（未设置即为开，每轮都读取）；它与 `scheduler.enabled` 无关。时间是 RFC 3339 UTC，未知时省略；上一轮出错时带 `lastRoundError`，producer 运行时它是 `a producer job is running; retrying next round`。`totals.<kind>.errors` 是记着日文抓取错误、仍待抓取的话数。`lastRound.errors` 是上一轮日文没抓到、或某语言变成 `error`/`mismatch` 的话数；`lastRound.retrying` 是其余带 `lastError` 的话数，即某语言因 404、镜像仍返回日文或暂时性错误而保持 `pending`、等待自动重试。
-- POST 立即唤醒一轮，正在跑的一轮结束后接着跑；`refreshCatalog:true` 让这一轮先重建目录。回填被禁用时返回 `409 backfill_disabled`（`details` 为 `the side-story backfill is disabled`）。
+- `enabled` 要求环境变量 `SIDE_STORY_BACKFILL_ENABLED` 不为 false，且设置 `side_story_backfill.enabled` 不为 false（未设置即为开，每轮都读取）；它与 `scheduler.enabled` 无关。时间是 RFC 3339 UTC，未知时省略；`catalogRefreshedAt` 是卡牌和区域两个目录中较早的那次成功刷新时间，两个目录都刷新成功之前省略。上一轮出错时带 `lastRoundError`，producer 运行时它是 `a producer job is running; retrying next round`，推迟的这一轮最迟 5 秒后重试。`totals.<kind>.errors` 是记着日文抓取错误、仍待抓取的话数。`lastRound.errors` 是上一轮日文没抓到、或某语言变成 `error`/`mismatch` 的话数；`lastRound.retrying` 是其余带 `lastError` 的话数，即某语言因 404、镜像仍返回日文或暂时性错误而保持 `pending`、等待自动重试。
+- POST 立即唤醒一轮，正在跑的一轮结束后接着跑；`refreshCatalog:true` 让这一轮先重建目录。回填被禁用时返回 `409 backfill_disabled`（`details` 为 `the side-story backfill is disabled`）；这时 `refreshCatalog:true` 仍会记下，重新启用后的第一轮先重建目录。
 - 每轮写入了内容时广播 SSE `sidestory.sync`，负载为 `{detail,current,total}`，`current` 是抓到的话数，`total` 是本轮处理的话数。
 
 ### 8.8 回填导入什么、从不覆盖什么
 
-- **节奏**：每 `SIDE_STORY_BACKFILL_INTERVAL_MS`（默认 60000）跑一轮，每轮最多 `SIDE_STORY_BACKFILL_BATCH`（默认 30）话，每两次上游请求之间至少间隔 `SIDE_STORY_BACKFILL_REQUEST_DELAY_MS`（默认 1000）。producer 运行时整轮推迟到下一轮。
-- **目录**：首轮、距上次满 6 小时、上游数据版本变化、`refreshCatalog:true` 时，以及内容备份恢复之后，从 JP 的 `cards.json`、`cardEpisodes.json`、`actionSets.json`、`areas.json`，CN 的 `cards.json`、`cardEpisodes.json`、`actionSets.json`，以及 EN 的 `cardEpisodes.json`、`actionSets.json` 重建。新故事和新话入队；后来从 masterdata 消失的故事保留。CN/EN 的脚本路径变化时重新排队导入，并清零这一话的重试计时，新路径下一轮就抓，不等旧路径的 404 重试；路径变空标为 `absent`；JP 路径变化时重抓日文。目录刷新失败 10 分钟后再试。官方话标题也在这一步按下面的官方写入规则写入。JP 话标题变了时，旧标题行连同它的全部译文一起删除，人工译文也不例外；删掉了人工译文时，服务器日志记一行 `[side-story] <kind> catalog: changed JP episode titles deleted <N> human title translation(s)`。
-- **每话**：先抓日文脚本，成功后再抓该服务器有、且状态为 `pending` 的 CN / EN 脚本。日文抓取的临时错误按 10 分钟起翻倍、最长 24 小时退避；日文 404 在 24 小时后重试；日文失败时这一话不导入 CN/EN。CN / EN 脚本返回 404（镜像还没同步）时，该语言保持 `pending`，`lastError` 为 `zh-CN: not found` 或 `en-US: not found`，24 小时后重试，不计入重试次数；CN / EN 的临时错误同样保持 `pending`，按上面的退避重试，两种情况同时出现时以较早的时间为准。已导入过的日文脚本变化时，这次没抓的 CN / EN 回到 `pending`，下一轮就抓，另一种语言这次 404 也不必等 24 小时；另一种语言的临时错误仍按它的退避。
+- **节奏**：每 `SIDE_STORY_BACKFILL_INTERVAL_MS`（默认 60000）跑一轮，每轮最多 `SIDE_STORY_BACKFILL_BATCH`（默认 30）话，每两次上游请求之间至少间隔 `SIDE_STORY_BACKFILL_REQUEST_DELAY_MS`（默认 1000），跨轮也算。这个间隔只约束后台回填，8.6 的重抓和 8.4 的快照不受它限制。producer 运行时整轮推迟，最迟 5 秒后再试（`SIDE_STORY_BACKFILL_INTERVAL_MS` 更短时按它）。
+- **目录**：卡牌和区域两个目录各自在首轮、距它上次刷新满 6 小时、`refreshCatalog:true`（控制台回填面板的「刷新目录」）、内容备份恢复之后，以及上游数据版本变化时，从 JP 的 `cards.json`、`cardEpisodes.json`、`actionSets.json`、`areas.json`，CN 的 `cards.json`、`cardEpisodes.json`、`actionSets.json`，以及 EN 的 `cardEpisodes.json`、`actionSets.json` 重建。新故事和新话入队；后来从 masterdata 消失的故事保留。CN/EN 的脚本路径变化时重新排队导入，并清零这一话的重试计时，新路径下一轮就抓，不等旧路径的 404 重试；路径变空标为 `absent`；JP 路径变化时重抓日文。数据版本只由 upstream watcher 记录，watcher 只在 `scheduler.enabled` 为 true 时运行；生产环境关着它，所以生产上只按 6 小时周期或手动「刷新目录」刷新，新上架的故事最多要等 6 小时才进目录，在此之前列表里没有它，8.6 对它返回 `404 not_found`。哪个目录刷新失败，就只有它 10 分钟后再试，另一个不重抓；某个 masterdata 文件在所有源上都遇到暂时性错误（5xx、429、超时、连接错误）时，隔 500 ms 再试一次。官方话标题也在这一步按下面的官方写入规则写入。JP 话标题变了时，旧标题行连同它的全部译文一起删除，人工译文也不例外；删掉了人工译文时，服务器日志记一行 `[side-story] <kind> catalog: changed JP episode titles deleted <N> human title translation(s)`。
+- **每话**：先抓日文脚本，成功后再抓该服务器有、且状态为 `pending` 的 CN / EN 脚本。日文抓取的临时错误按 10 分钟起翻倍、最长 24 小时退避；日文 404 在 24 小时后重试；日文失败时这一话不导入 CN/EN。CN / EN 脚本返回 404（镜像还没同步）时，该语言保持 `pending`，`lastError` 为 `zh-CN: not found` 或 `en-US: not found`，24 小时后重试，不计入重试次数；CN / EN 的临时错误同样保持 `pending`，按上面的退避重试，两种情况同时出现时以较早的时间为准。已导入过的日文脚本变化时，这次没抓的 CN / EN 回到 `pending`，下一轮就抓，另一种语言这次 404 也不必等 24 小时；另一种语言的临时错误仍按它的退避。日文脚本没变时，已 `imported` 的语言后来遇到 404 或镜像返回日文，仍保持 `imported`，不安排重试，这条消息只返回给调用方，不写进 `lastError`。日文脚本变化删掉了人工译文时，服务器日志记一行 `[side-story] <kind> <id> episode <key>: changed JP script deleted <N> human line translation(s)`。
 - **配对**：脚本按资源路径识别，脚本内的 `ScenarioId` 字段只是标签，日文和官方脚本都不比较它（真实脚本里有 `016048_rui01 のコピー` 这样的值）。官方脚本 TalkData 第 i 条对应日文第 i 条，正文取 `Body`，说话人取 `WindowDisplayName`。官方文本为空，或与含假名的日文行键完全相同，就跳过这一行。TalkData 条数不同（`TalkData length mismatch (a != b)`）时，这一话该语言标为 `mismatch`，一行都不写，也不按时间重试；可以用 8.6 立即重抓。超过一半的含假名正文与日文相同时（`official script repeats the Japanese text`，镜像站还在提供新上架脚本的日文占位），同样一行都不写，但该语言保持 `pending`，像 404 一样 24 小时后重试。
-- **官方写入规则**：没有译文行时插入 `source:"official"`、`revision:1`、`updatedBy:"sync"`；已有 `official` 或 `llm` 行且文本不同时覆盖，`revision` 加 1；**`human` 行从不改动**，包括文本为空的人工行。
-- 回填写入后（目录刷新新增了故事或话、重新排队了官方导入、写了官方标题或替换了标题也算）请求一次去抖的全量重建，公开文件稍后更新，按第 7 节的 `GET /api/projection/status` 确认。去抖窗口是服务器的 `FILES_REBUILD_DEBOUNCE_MS`（默认 300000 ms），每次改动重新计时，但从开始等待算起最多两个窗口，所以回填持续写入时，默认最迟 10 分钟也会开始重建。
+- **官方写入规则**：没有译文行时插入 `source:"official"`、`revision:1`、`updatedBy:"sync"`；已有 `official` 行且文本不同时覆盖，已有 `llm` 行时一律接管（文本相同也改成 `official`、`updatedBy:"sync"`），这两种情况 `revision` 都加 1；**`human` 行从不改动**，包括文本为空的人工行。
+- 每轮释放写入锁之后，逐个重建本轮写过剧集的故事的公开文件，所以回填写入的行在这一轮结束时就进入公开文件。目录刷新有变化（新增了故事或话、重新排队了官方导入、写了官方标题或替换了标题）或某个故事发布失败时，改为请求一次去抖的全量重建，公开文件稍后更新，按第 7 节的 `GET /api/projection/status` 确认。去抖窗口是服务器的 `FILES_REBUILD_DEBOUNCE_MS`（默认 300000 ms），每次改动重新计时，但从开始等待算起最多两个窗口，所以回填持续写入时，默认最迟 10 分钟也会开始重建。
 
 ### 8.9 公开文件
 
@@ -897,7 +899,7 @@ curl -sS -X POST "$BASE/api/editor/v1/stories/sync" -H "Authorization: Bearer $T
 | `zh-CN` | `$BASE/files/translation/cardStory/card_<cardId>.json` | `$BASE/files/translation/areaTalk/group_<n>.json` |
 | `en-US` | `$BASE/files/v2/en-US/translation/cardStory/card_<cardId>.json` | `$BASE/files/v2/en-US/translation/areaTalk/group_<n>.json` |
 
-`n` 是 JP actionSet ID 整除 100。`/translation/…` 也可以代替 `/files/translation/…`。没有其他语言的镜像。只有至少一条正文或说话人行有非空译文时才有文件，否则返回 `404`。缓存头是 `Cache-Control: public, max-age=300, stale-while-revalidate=3600`，带强 `ETag`。
+`n` 是 JP actionSet ID 整除 100。`/translation/…` 也可以代替 `/files/translation/…`。没有其他语言的镜像。卡牌文件只在这张卡至少一条正文或说话人行有非空译文时存在，否则返回 `404`。区域文件按组，组内任何一个区域对话有译文时就存在并返回 `200`；没有译文的区域对话只是不在 `episodes` 里。缓存头是 `Cache-Control: public, max-age=300, stale-while-revalidate=3600`，带强 `ETag`。
 
 ```json
 {"meta": {"source": "human", "version": "1", "last_updated": 1790003600},
@@ -907,5 +909,5 @@ curl -sS -X POST "$BASE/api/editor/v1/stories/sync" -H "Authorization: Bearer $T
    "2": {"scenarioId": "test_card_700_02", "title": "", "source": "human", "talkData": {"テスト台詞三": "测试台词三"}}}}
 ```
 
-- 实际文件用两空格缩进、不做 HTML 转义（`TestSideStoryFilesJSONBytes`）。卡牌文件的 `episodes` 键是 `"1"`、`"2"`；区域文件的键是 scenarioId，按 actionSet ID 排序。`talkData` 按位置顺序把有译文的正文和说话人行键映射到译文；`title` 是译后标题，没有时为 `""`。
+- 实际文件用两空格缩进、不做 HTML 转义（`TestSideStoryFilesJSONBytes`）。卡牌文件的 `episodes` 键是 `"1"`、`"2"`；区域文件的键是 scenarioId，按 actionSet ID 排序。`talkData` 按位置顺序把有译文的正文和说话人行键映射到译文；`title` 是译后标题，没有时为 `""`；区域对话没有标题，`title` 总是 `""`。
 - `source`（每话）和 `meta.source`（整个文件）：已译行（含标题）全部来自官方时为 `official_cn` 或 `official_en`，有任何人工行时为 `human`，否则为 `llm`。`meta.last_updated` 是最近一次写入的 Unix 秒。
