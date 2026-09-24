@@ -336,6 +336,26 @@ func TestSideStoryBackfillRebuildsOnCatalogTitleChangesAndLogsDroppedHumanTitles
 	}
 }
 
+func TestSideStoryBackfillLogsHumanLinesDeletedByAJPScriptChange(t *testing.T) {
+	h := newSideStoryHarness(t)
+	h.upstream.remove(testCNCardPath1)
+	h.round(t)
+	if _, err := h.store.UpdateSideStoryLinesContext(t.Context(), store.SideStoryKindCard, testCardID, "1", model.LocaleChinese, "tester",
+		[]store.SideStoryLineEdit{{JP: testJPLine2, Text: "测试人工译文"}}, h.worker.now()); err != nil {
+		t.Fatal(err)
+	}
+	h.upstream.set(testJPCardPath1, testScript(testCardScenario1, [2]string{testJPSpeaker, testJPLine1}))
+	h.advance(24*time.Hour + time.Second)
+	logs := captureSideStoryLog(t)
+	if state := h.round(t); state.LastRound.Fetched != 1 {
+		t.Fatalf("retry round = %+v", state.LastRound)
+	}
+	const line = "[side-story] card " + testCardID + " episode 1: changed JP script deleted 1 human line translation(s)"
+	if got := logs.String(); strings.Count(got, line) != 1 {
+		t.Fatalf("log after a JP script change dropped a human line = %q", got)
+	}
+}
+
 func TestSideStoryBackfillRetriesAFailedCatalogAfterADelay(t *testing.T) {
 	h := newSideStoryHarness(t)
 	h.upstream.remove("/en-master/actionSets.json")

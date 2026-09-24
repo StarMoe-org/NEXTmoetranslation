@@ -252,6 +252,10 @@ func (w *SideStoryBackfill) round(ctx context.Context, forceCatalog bool) (summa
 				}
 			}
 			summary.OfficialWritten += episode.OfficialWritten
+			if episode.DroppedHumanLines > 0 {
+				log.Printf("[side-story] %s %s episode %s: changed JP script deleted %d human line translation(s)",
+					episode.Kind, episode.StoryID, episode.EpisodeKey, episode.DroppedHumanLines)
+			}
 		}
 		return nil
 	}
