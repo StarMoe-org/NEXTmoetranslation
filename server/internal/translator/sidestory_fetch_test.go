@@ -1,10 +1,13 @@
 package translator
 
 import (
+	"encoding/json"
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"moesekai/server/internal/config"
 	"moesekai/server/internal/store"
@@ -117,5 +120,44 @@ func TestFetchSideStoryScriptClassifiesFailuresAndTriesTheNextBase(t *testing.T)
 	}
 	if upstream.count("/jp-fallback/"+area+".json") != 0 {
 		t.Fatal("area fetch used the card-only JP fallback")
+	}
+}
+
+func TestSideStoryMasterdataRetriesATransientFailureOnce(t *testing.T) {
+	h := newSideStoryHarness(t)
+	cards := h.upstream.files["/jp-master/cards.json"]
+	var mu sync.Mutex
+	calls := 0
+	h.upstream.handle("/jp-master/cards.json", func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		calls++
+		first := calls == 1
+		mu.Unlock()
+		if first {
+			http.Error(w, "origin handshake failed", 525)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(cards)
+	})
+	h.upstream.remove("/en-master/actionSets.json")
+	state := h.round(t)
+	if strings.Contains(state.LastRoundError, "card catalog") || !strings.Contains(state.LastRoundError, "area catalog") {
+		t.Fatalf("round error after a transient card masterdata failure = %q", state.LastRoundError)
+	}
+	var attempts []sideStoryRequest
+	for _, request := range h.upstream.requested() {
+		if request.path == "/jp-master/cards.json" {
+			attempts = append(attempts, request)
+		}
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("cards.json requested %d times, want 2", len(attempts))
+	}
+	if gap := attempts[1].at.Sub(attempts[0].at); gap < 450*time.Millisecond {
+		t.Fatalf("retry followed the failure after %s, want about 500ms", gap)
+	}
+	if got := h.upstream.count("/en-master/actionSets.json"); got != 1 {
+		t.Fatalf("a 404 masterdata file was requested %d times, want once", got)
 	}
 }

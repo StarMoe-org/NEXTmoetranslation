@@ -144,26 +144,54 @@ func (t *Translator) fetchSideStoryEpisodeContext(ctx context.Context, pacer *si
 }
 
 // fetchSideStoryMasterdata decodes one masterdata array from the server's
-// bases in order, keeping only the fields of T.
+// bases in order, keeping only the fields of T. When every base fails, the
+// bases that failed transiently are tried once more after 500 ms, as
+// fetchJSONURLsContext does.
 func fetchSideStoryMasterdata[T any](ctx context.Context, t *Translator, pacer *sideStoryPacer, server, filename string) ([]T, error) {
+	fetch := func(url string) ([]T, error) {
+		raw, _, err := t.getSideStoryUpstream(ctx, pacer, url)
+		if err != nil {
+			return nil, err
+		}
+		var records []T
+		if err = json.Unmarshal(raw, &records); err == nil && len(records) > maxMasterdataRecords {
+			err = fmt.Errorf("too many records: %d", len(records))
+		}
+		if err != nil {
+			return nil, fmt.Errorf("GET %s: decode: %w", url, err)
+		}
+		return records, nil
+	}
 	failures := []sourceFailure{}
+	var retryable []string
 	for _, base := range t.masterdataBases(server) {
 		url := joinSourceURL(base, filename)
-		raw, _, err := t.getSideStoryUpstream(ctx, pacer, url)
+		records, err := fetch(url)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
 		if err == nil {
-			var records []T
-			if err = json.Unmarshal(raw, &records); err == nil && len(records) > maxMasterdataRecords {
-				err = fmt.Errorf("too many records: %d", len(records))
+			return records, nil
+		}
+		failures = append(failures, sourceFailure{url: url, err: err})
+		if isTransientErr(err) {
+			retryable = append(retryable, url)
+		}
+	}
+	if len(retryable) > 0 {
+		if err := waitContext(ctx, 500*time.Millisecond); err != nil {
+			return nil, err
+		}
+		for _, url := range retryable {
+			records, err := fetch(url)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
 			}
 			if err == nil {
 				return records, nil
 			}
-			err = fmt.Errorf("GET %s: decode: %w", url, err)
+			failures = append(failures, sourceFailure{url: url, err: fmt.Errorf("retry: %w", err)})
 		}
-		failures = append(failures, sourceFailure{url: url, err: err})
 	}
 	return nil, fmt.Errorf("%s %s: %w", server, filename, joinSourceFailures(failures))
 }
