@@ -158,9 +158,14 @@ function normalizeImportedEventText(speaker, text) {
   if (speaker === "场景" || speaker === "左上场景" || speaker === "") {
     return text.split("\n").map((part) => part.trim()).join("\n");
   }
-  let normalized = text.split("\n", 1)[0].trim();
+  const normalized = text.split("\n", 1)[0].trim();
   if (speaker === "选项") return normalized.includes("/") ? normalized : `${normalized}/`;
-  return normalized
+  return normalized;
+}
+
+// SekaiText's Simplified Chinese dialogue punctuation; other locales keep the TXT as written.
+function chineseDialoguePunctuation(text) {
+  return text
     .replaceAll("…", "...")
     .replaceAll("(", "（")
     .replaceAll(")", "）")
@@ -222,7 +227,7 @@ export function parseEventTxtContent(rawContent) {
   return talks;
 }
 
-function importedRows(talks) {
+function importedRows(talks, locale) {
   const rows = [];
   for (const talk of talks) {
     if (!Number.isSafeInteger(talk?.idx) || talk.idx <= 0 || typeof talk.speaker !== "string" || typeof talk.text !== "string") {
@@ -242,6 +247,9 @@ function importedRows(talks) {
           ? "scene"
           : "dialogue";
     rows.push({ line: talk.idx, speaker: talk.speaker, text: talk.text, kind });
+  }
+  if (locale === "zh-CN") {
+    for (const row of rows) if (row.kind === "dialogue") row.text = chineseDialoguePunctuation(row.text);
   }
   return rows;
 }
@@ -386,7 +394,7 @@ export function sideStoryTxtImportEdits(preview, selectedRowIDs) {
 
 function txtImportPreview(snapshot, state, talks, rowID, repeatsJapanese) {
   const source = sourceRows(state);
-  const imported = importedRows(talks);
+  const imported = importedRows(talks, snapshot.locale);
   if (source.length > 2000 || imported.length > 2000 || source.length * imported.length > 1000000) {
     throw new Error("event TXT alignment is too large for a local preview");
   }

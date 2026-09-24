@@ -54,12 +54,23 @@ async function snapshotFixture() {
   };
 }
 
-test("parses SekaiText TXT grammar and normalizes dialogue punctuation", () => {
+test("parses SekaiText TXT grammar", () => {
   assert.deepEqual(parseEventTxtContent("#SekaiText v1\r\n初音ミク：你好!\r\n\r\n教室\r\n"), [
-    { idx: 1, speaker: "初音ミク", text: "你好！", start: true, end: true, checked: true, save: true, dstidx: 0 },
+    { idx: 1, speaker: "初音ミク", text: "你好!", start: true, end: true, checked: true, save: true, dstidx: 0 },
     { idx: 2, speaker: "", text: "", start: true, end: true, checked: true, save: true, dstidx: 1 },
     { idx: 3, speaker: "场景", text: "教室", start: true, end: true, checked: true, save: true, dstidx: 2 },
   ]);
+});
+
+test("only a zh-CN preview converts dialogue punctuation to Chinese", async () => {
+  const snapshot = await snapshotFixture();
+  const talks = parseEventTxtContent("初音ミク：Test, line?! (a~b)…\n教室\n\n鏡音リン：欸, 测试!");
+  const imported = (locale) => {
+    const rows = eventEpisodeTxtImportPreview({ ...snapshot, locale }, talks).rows;
+    return ["body-0:body", "body-1:body"].map((id) => rows.find((row) => row.id === id)?.imported);
+  };
+  assert.deepEqual(imported("zh-CN"), ["Test， line？！ （a～b）...", "诶， 测试！"]);
+  assert.deepEqual(imported("en-US"), ["Test, line?! (a~b)…", "欸, 测试!"]);
 });
 
 test("validates snapshot SHA and previews safe defaults versus explicit conflicts", async () => {

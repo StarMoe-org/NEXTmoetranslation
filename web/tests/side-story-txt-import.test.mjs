@@ -112,6 +112,16 @@ test("the side-story preview keys rows by position and saves a repeated Japanese
   assert.equal(preview.revision, "test-snapshot-revision");
 });
 
+test("an en-US side-story preview keeps the TXT punctuation and zh-CN converts it", async () => {
+  const english = "Test speaker: Wait, really?!\nTest speaker: Test line two\nTest speaker: (test)~\n";
+  const imported = async (locale) => {
+    const rows = sideStoryEpisodeTxtImportPreview(await sideSnapshot({ locale }), parseEventTxtContent(english)).rows;
+    return ["0:body", "4:body"].map((id) => rows.find((row) => row.id === id).imported);
+  };
+  assert.deepEqual(await imported("en-US"), ["Wait, really?!", "(test)~"]);
+  assert.deepEqual(await imported("zh-CN"), ["Wait， really？！", "（test）～"]);
+});
+
 // Synthetic script: the first and third speakers are kana-free like names Chinese shares with Japanese.
 function kanaFreeSpeakerSnapshot() {
   const talkData = [["試験", "テスト台詞一"], ["テスト話者", "テスト台詞二"], ["検査", "テスト台詞三"]];
