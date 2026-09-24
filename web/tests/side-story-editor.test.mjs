@@ -87,6 +87,7 @@ test("only an unchanged or blank value on a never-stored line skips the side-sto
 function editorHarness(respond) {
   const renderer = createRenderer();
   const calls = [];
+  const reconciles = [];
   const api = {
     APIError: TestAPIError,
     updateSideStoryLines: (...args) => { calls.push(args); return respond(...args); },
@@ -107,13 +108,13 @@ function editorHarness(respond) {
       selectedEntry, selectedEpisode: "all", editValue: state.editValue, setEditValue: (value) => { state.editValue = value; },
       entryDirty: selectedEntry != null && state.editValue !== selectedEntry.text,
       eventTxtDraft: null, setEventTxtDraft() {}, eventTxtDraftDirty: false, keepTranslationEntryVisible() {},
-      reloadSidebar: async () => true, reconcileContentRef: { current: async () => true },
+      reloadSidebar: async () => true, reconcileContentRef: { current: async (...args) => { reconciles.push(args); return true; } },
       writeFenceRef: { current: false }, savingRef, setSaving: (saving) => { state.saving.push(saving); },
       remoteConflictRef: { current: null }, setRemoteConflict: (next) => { state.remoteConflict = next; },
       contextGenerationRef: { current: 1 }, onSideStorySaved() {},
     });
   };
-  return { render, calls, state, savingRef, entries: () => entriesRef.current };
+  return { render, calls, reconciles, state, savingRef, entries: () => entriesRef.current };
 }
 
 test("save-and-next on an untranslated line advances without storing an empty human line", async () => {
@@ -229,6 +230,17 @@ test("the conflict banner offers keeping the local text only when there is a dra
   const draft = withInput("测试草稿");
   assert.match(draft, /你的草稿仍保留在输入框中/);
   assert.match(draft, />保留本地并允许覆盖</);
+});
+
+test("an ambiguous source-change failure lets reconciliation capture a draft on another line", async () => {
+  const harness = editorHarness(async () => { throw new TestAPIError(503, { error: "side_story_unavailable" }); });
+  harness.state.selectedKey = untranslated.key;
+  harness.state.editValue = "测试草稿";
+  await harness.render().handleSourceChange(translated.key, "llm");
+  assert.equal(harness.reconciles.length, 1);
+  const [reason, draft] = harness.reconciles[0];
+  assert.equal(reason, "remote");
+  assert.equal(draft, undefined, "an explicit draft would skip capturing the unsaved draft");
 });
 
 test("a debounced list refresh scheduled before a locale switch loads the new locale", async (t) => {

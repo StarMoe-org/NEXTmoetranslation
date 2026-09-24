@@ -346,7 +346,8 @@ export function useEntryEditor({
         return;
       }
       if (sideStoryKind && sideStoryMutationResultIsAmbiguous(err)) {
-        void reconcileContentRef.current("remote", null, "剧情来源修改结果无法确认，正在重新载入权威 revision。");
+        // An undefined draft lets reconciliation freeze an unsaved draft on any line.
+        void reconcileContentRef.current("remote", undefined, "剧情来源修改结果无法确认，正在重新载入权威 revision。");
       }
       if (isEventStory && eventStoryMutationResultIsAmbiguous(err)) {
         const preservedDraft = JSON.stringify({
