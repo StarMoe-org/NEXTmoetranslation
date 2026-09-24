@@ -145,6 +145,46 @@ func TestSyncSideStoryCatalogMarksAChangedJPPathForRefetch(t *testing.T) {
 	}
 }
 
+func TestSyncSideStoryCatalogKeepsTheReasonOfALocaleLeftInMismatch(t *testing.T) {
+	s := newSideStoryTestStore(t)
+	story := sideStoryTestCard("40", 1, "", "en/40")
+	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, story)
+	jp := sideStoryTestScript(t, "test_card_40_01", sideStoryTestTalk{"テスト話者", "テスト台詞一"})
+	en := sideStoryTestScript(t, "test_card_40_01", sideStoryTestTalk{"Tester", "Test line one"}, sideStoryTestTalk{"Tester", "Test line two"})
+	cn := sideStoryTestScript(t, "test_card_40_01", sideStoryTestTalk{"测试说话人", "测试台词一"})
+	reason := "en-US: TalkData length mismatch (1 != 2)"
+	mustApplySideStory(t, s, sideStoryTestNow, SideStoryEpisodeFetch{Kind: "card", StoryID: "40", EpisodeKey: "1", JP: fetchedJP(jp), EN: fetchedJP(en)})
+	check := func(step string, applied *SideStoryEpisodeApply) {
+		t.Helper()
+		if state := sideStoryEpisodeState(t, s, "card", "40", "1"); state.lastError != reason || state.attempts != 0 || state.nextAttemptAt != 0 {
+			t.Fatalf("%s stored %+v", step, state)
+		}
+		if applied != nil && (applied.Error != reason || applied.ENState != "mismatch") {
+			t.Fatalf("%s result %+v", step, applied)
+		}
+	}
+	check("EN mismatch", nil)
+
+	// A later CN path requeues CN only; the backfill then fetches JP and CN.
+	story = sideStoryTestCard("40", 1, "cn/40", "en/40")
+	if result := mustSyncSideStoryCatalog(t, s, SideStoryKindCard, story); result.OfficialRequeued != 2 {
+		t.Fatalf("new CN paths %+v", result)
+	}
+	check("new CN path", nil)
+	applied := mustApplySideStory(t, s, sideStoryTestNow, SideStoryEpisodeFetch{Kind: "card", StoryID: "40", EpisodeKey: "1",
+		JP: fetchedJP(jp), CN: fetchedJP(cn)}).Episodes[0]
+	if applied.CNState != "imported" {
+		t.Fatalf("CN import %+v", applied)
+	}
+	check("CN import", &applied)
+
+	story.Episodes[0].JPAssetPath += "_v2"
+	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, story)
+	check("new JP path", nil)
+	applied = mustApplySideStory(t, s, sideStoryTestNow, SideStoryEpisodeFetch{Kind: "card", StoryID: "40", EpisodeKey: "1", JP: fetchedJP(jp)}).Episodes[0]
+	check("unchanged JP refetch", &applied)
+}
+
 func TestSyncSideStoryCatalogWritesOfficialTitlesUnderTheOfficialWriteRule(t *testing.T) {
 	s := newSideStoryTestStore(t)
 	story := sideStoryTestCard("40", 1, "", "")
