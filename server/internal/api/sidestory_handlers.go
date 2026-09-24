@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -235,13 +236,17 @@ func (s *Server) handleSideStoryAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := runner.AITranslateSideStoryContext(r.Context(), kind, id, locale, episode, req.Provider)
+	// A failed run keeps the batches it committed before the failure.
+	if result.Translated > 0 {
+		s.publishSideStory(sideStoryUpdatedEvent{
+			Kind: kind, ID: id, Episode: episode, Locale: locale, Action: "ai", User: currentUser(r), ClientID: req.ClientID,
+		})
+	}
 	if err != nil {
-		writeSideStoryRunnerError(w, err, http.StatusInternalServerError, "internal_error")
+		writeSideStoryRunnerError(w, err, http.StatusInternalServerError, "internal_error",
+			fmt.Sprintf("translated lines saved before the failure: %d", result.Translated))
 		return
 	}
-	s.publishSideStory(sideStoryUpdatedEvent{
-		Kind: kind, ID: id, Episode: episode, Locale: locale, Action: "ai", User: currentUser(r), ClientID: req.ClientID,
-	})
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -477,8 +482,8 @@ func writeSideStoryStoreError(w http.ResponseWriter, err error) {
 }
 
 // writeSideStoryRunnerError maps runner failures; anything unrecognised gets
-// the route's fallback status and code.
-func writeSideStoryRunnerError(w http.ResponseWriter, err error, status int, code string) {
+// the route's fallback status and code, with extra appended to its details.
+func writeSideStoryRunnerError(w http.ResponseWriter, err error, status int, code string, extra ...string) {
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		writeContractError(w, http.StatusNotFound, "not_found", nil, nil)
@@ -490,6 +495,6 @@ func writeSideStoryRunnerError(w http.ResponseWriter, err error, status int, cod
 		writeContractError(w, http.StatusConflict, "already_running", []string{err.Error()}, nil)
 	default:
 		log.Printf("[api] side story runner failed: %v", err)
-		writeContractError(w, status, code, []string{err.Error()}, nil)
+		writeContractError(w, status, code, append([]string{err.Error()}, extra...), nil)
 	}
 }

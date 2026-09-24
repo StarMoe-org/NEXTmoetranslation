@@ -589,6 +589,7 @@ func TestSideStoryAITranslatesThroughTheRunner(t *testing.T) {
 		t.Fatalf("ai rebuilds=%v changes=%d", rebuilds, h.changes.Load())
 	}
 
+	h.runner.ai = store.SideStoryAIResult{}
 	for _, failure := range []struct {
 		err    error
 		status int
@@ -609,6 +610,39 @@ func TestSideStoryAITranslatesThroughTheRunner(t *testing.T) {
 	}
 	if rebuilds := h.files.taken(); len(rebuilds) != 0 {
 		t.Fatalf("failed ai requests rebuilt %v", rebuilds)
+	}
+}
+
+// A run that fails after committing batches publishes them; a run that saved
+// nothing publishes nothing.
+func TestSideStoryAIPublishesExactlyWhenItSavedLines(t *testing.T) {
+	h := setupSideStoryAPI(t)
+	events := sideStoryEvents(t, h.legacyAPIHarness)
+	h.runner.ai = store.SideStoryAIResult{Remaining: 3}
+	var result store.SideStoryAIResult
+	if code := h.call(t, http.MethodPost, "/api/editor/v1/story/area/areatalk_test_01/ai", h.token,
+		map[string]any{"clientId": "test-client"}, &result); code != http.StatusOK || result != h.runner.ai {
+		t.Fatalf("empty ai = %d %+v", code, result)
+	}
+	if rebuilds := h.files.taken(); len(rebuilds) != 0 || h.changes.Load() != 0 {
+		t.Fatalf("empty ai rebuilds=%v changes=%d", rebuilds, h.changes.Load())
+	}
+
+	h.runner.ai = store.SideStoryAIResult{Translated: 2, Remaining: 1}
+	h.runner.aiErr = errors.New("card 501 batch 2/2 failed after saving 2/3: test provider failed")
+	failed := h.expectError(t, http.MethodPost, "/api/editor/v1/story/card/501/ai", h.token,
+		map[string]any{"clientId": "test-client"}, http.StatusInternalServerError, "internal_error")
+	if want := []string{h.runner.aiErr.Error(), "translated lines saved before the failure: 2"}; !reflect.DeepEqual(failed.Details, want) {
+		t.Fatalf("failed ai details = %q, want %q", failed.Details, want)
+	}
+	// The empty run broadcast nothing, so the first event is the failed run's.
+	if event := nextSideStoryEvent(t, events); !reflect.DeepEqual(event, map[string]any{
+		"kind": "card", "id": "501", "episode": "", "locale": "zh-CN", "action": "ai", "user": "alice", "clientId": "test-client",
+	}) {
+		t.Fatalf("failed ai event = %#v", event)
+	}
+	if rebuilds := h.files.taken(); !reflect.DeepEqual(rebuilds, []string{"card/501"}) || h.changes.Load() != 1 {
+		t.Fatalf("failed ai rebuilds=%v changes=%d", rebuilds, h.changes.Load())
 	}
 }
 
