@@ -50,6 +50,12 @@ const (
 	KeyUpstreamJPAssetsFallbackURL     = "upstream.jp_assets_fallback_url"
 	KeyUpstreamCNAssetsURL             = "upstream.cn_assets_url"
 	KeyUpstreamCNAssetsFallbackURL     = "upstream.cn_assets_fallback_url"
+	KeyUpstreamENMasterdataURL         = "upstream.en_masterdata_url"
+	KeyUpstreamENMasterdataFallbackURL = "upstream.en_masterdata_fallback_url"
+	KeyUpstreamJPScriptsURL            = "upstream.jp_scripts_url"
+	KeyUpstreamJPScriptsFallbackURL    = "upstream.jp_scripts_fallback_url"
+	KeyUpstreamCNScriptsURL            = "upstream.cn_scripts_url"
+	KeyUpstreamENScriptsURL            = "upstream.en_scripts_url"
 	KeyUpstreamFetchConcurrency        = "upstream.fetch_concurrency"
 	KeyMusicAliasesURL                 = "upstream.music_aliases_url"
 	KeySchedulerOn                     = "scheduler.enabled"
@@ -91,7 +97,9 @@ var settingKeys = map[string]bool{
 	KeyUpstreamJPMasterdataFallbackURL: true, KeyUpstreamCNMasterdataURL: true,
 	KeyUpstreamCNMasterdataFallbackURL: true, KeyUpstreamJPAssetsURL: true,
 	KeyUpstreamJPAssetsFallbackURL: true, KeyUpstreamCNAssetsURL: true,
-	KeyUpstreamCNAssetsFallbackURL: true, KeyUpstreamFetchConcurrency: true, KeyMusicAliasesURL: true,
+	KeyUpstreamCNAssetsFallbackURL: true, KeyUpstreamENMasterdataURL: true, KeyUpstreamENMasterdataFallbackURL: true,
+	KeyUpstreamJPScriptsURL: true, KeyUpstreamJPScriptsFallbackURL: true, KeyUpstreamCNScriptsURL: true,
+	KeyUpstreamENScriptsURL: true, KeyUpstreamFetchConcurrency: true, KeyMusicAliasesURL: true,
 	KeySchedulerOn: true, KeyLyricsDiscoveryOn: true, KeyLyricsFetchRevisionOn: true, KeyUpstreamLastDataVersion: true, KeyUpstreamPendingDataVersion: true,
 	KeyBackupS3Enabled: true, KeyBackupS3Endpoint: true, KeyBackupS3Region: true,
 	KeyBackupS3Bucket: true, KeyBackupS3Prefix: true, KeyBackupS3AccessKey: true,
@@ -372,7 +380,10 @@ func validateSettingValue(key, value string) error {
 		KeyUpstreamJPMasterdataURL, KeyUpstreamJPMasterdataFallbackURL,
 		KeyUpstreamCNMasterdataURL, KeyUpstreamCNMasterdataFallbackURL,
 		KeyUpstreamJPAssetsURL, KeyUpstreamJPAssetsFallbackURL,
-		KeyUpstreamCNAssetsURL, KeyUpstreamCNAssetsFallbackURL, KeyMusicAliasesURL:
+		KeyUpstreamCNAssetsURL, KeyUpstreamCNAssetsFallbackURL,
+		KeyUpstreamENMasterdataURL, KeyUpstreamENMasterdataFallbackURL,
+		KeyUpstreamJPScriptsURL, KeyUpstreamJPScriptsFallbackURL,
+		KeyUpstreamCNScriptsURL, KeyUpstreamENScriptsURL, KeyMusicAliasesURL:
 		return validateUpstreamURLSetting(key, value)
 	case KeyLLMRequestTimeoutMS:
 		return canonicalInt(1, 300000)

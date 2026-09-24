@@ -1,0 +1,349 @@
+package translator
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"moesekai/server/internal/config"
+	"moesekai/server/internal/editorgate"
+	"moesekai/server/internal/store"
+)
+
+const (
+	sideStoryCatalogMaxAge     = 6 * time.Hour
+	sideStoryCatalogRetryDelay = 10 * time.Minute
+	sideStoryApplyBatch        = 5
+)
+
+var errSideStoryDeferred = errors.New("a producer job is running; retrying next round")
+
+// SideStoryBackfillOptions configures the card and area story backfill.
+type SideStoryBackfillOptions struct {
+	Enabled      bool          // SIDE_STORY_BACKFILL_ENABLED is not "false"
+	Interval     time.Duration // between rounds
+	Batch        int           // episodes per round
+	RequestDelay time.Duration // between upstream requests
+}
+
+// SideStoryBackfill imports card and area scripts and their official CN/EN
+// text in rate-limited background rounds. It runs only while the translate
+// scheduler is enabled, never claims the translator's job lock and never
+// calls an LLM. The embedded Translator serves the on-demand runner methods.
+type SideStoryBackfill struct {
+	*Translator
+	opts SideStoryBackfillOptions
+	now  func() time.Time
+
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wake      chan struct{}
+	wg        sync.WaitGroup
+	startOnce sync.Once
+
+	mu                 sync.Mutex
+	running            bool
+	forceCatalog       bool
+	nextRoundAt        time.Time
+	lastRoundAt        time.Time
+	lastRoundError     string
+	lastRound          store.SideStoryRoundSummary
+	catalogRefreshedAt time.Time
+	catalogVersion     string
+	catalogFailedAt    time.Time
+}
+
+func NewSideStoryBackfill(t *Translator, opts SideStoryBackfillOptions) *SideStoryBackfill {
+	if opts.Interval <= 0 {
+		opts.Interval = time.Minute
+	}
+	if opts.Batch < 1 {
+		opts.Batch = 30
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &SideStoryBackfill{
+		Translator: t, opts: opts, now: time.Now,
+		ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1),
+	}
+}
+
+// Start launches the round loop unless the backfill is disabled by env. The
+// first round runs immediately; the scheduler setting is checked every round.
+func (w *SideStoryBackfill) Start() {
+	w.startOnce.Do(func() {
+		if !w.opts.Enabled || w.ctx.Err() != nil {
+			return
+		}
+		w.mu.Lock()
+		w.nextRoundAt = w.now()
+		w.mu.Unlock()
+		w.wg.Add(1)
+		go w.loop()
+	})
+}
+
+// Stop cancels the running round's requests and writes; Wait joins the loop.
+func (w *SideStoryBackfill) Stop() { w.cancel() }
+
+func (w *SideStoryBackfill) Wait() { w.wg.Wait() }
+
+func (w *SideStoryBackfill) enabled() bool {
+	return w.opts.Enabled && w.ctx.Err() == nil && w.cfg.GetBool(config.KeySchedulerOn, false)
+}
+
+// TriggerSideStoryBackfill wakes the worker for an immediate round, after the
+// running one if any. It reports false when the backfill is disabled.
+func (w *SideStoryBackfill) TriggerSideStoryBackfill(refreshCatalog bool) bool {
+	if !w.enabled() {
+		return false
+	}
+	if refreshCatalog {
+		w.mu.Lock()
+		w.forceCatalog = true
+		w.mu.Unlock()
+	}
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+func (w *SideStoryBackfill) SideStoryBackfillState() store.SideStoryBackfillState {
+	enabled := w.enabled()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	state := store.SideStoryBackfillState{
+		Enabled: enabled, Running: w.running,
+		LastRoundAt: sideStoryTime(w.lastRoundAt), CatalogRefreshedAt: sideStoryTime(w.catalogRefreshedAt),
+		LastRoundError: w.lastRoundError, LastRound: w.lastRound,
+	}
+	if state.Enabled {
+		state.NextRoundAt = sideStoryTime(w.nextRoundAt)
+	}
+	return state
+}
+
+func sideStoryTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
+func (w *SideStoryBackfill) loop() {
+	defer w.wg.Done()
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-timer.C:
+		case <-w.wake:
+		}
+		if w.enabled() {
+			w.runRound(w.ctx)
+		}
+		if w.ctx.Err() != nil {
+			return
+		}
+		w.mu.Lock()
+		w.nextRoundAt = w.now().Add(w.opts.Interval)
+		w.mu.Unlock()
+		timer.Reset(w.opts.Interval)
+	}
+}
+
+func (w *SideStoryBackfill) runRound(ctx context.Context) {
+	started := w.now()
+	w.mu.Lock()
+	w.running = true
+	force := w.forceCatalog
+	w.forceCatalog = false
+	w.mu.Unlock()
+
+	summary, changed, err := w.round(ctx, force)
+	message := ""
+	if err != nil {
+		message = truncateStatusDetail(err.Error(), 600)
+		log.Printf("[side-story] round: %s", message)
+	}
+	w.mu.Lock()
+	w.running = false
+	w.lastRoundAt = started
+	w.lastRound = summary
+	w.lastRoundError = message
+	w.mu.Unlock()
+	if changed {
+		w.store.NotifyChange()
+		w.emit("sidestory.sync", fmt.Sprintf("卡牌剧情与区域对话已同步：获取 %d 话，写入 %d 条官方译文", summary.Fetched, summary.OfficialWritten),
+			summary.Fetched, summary.Episodes)
+	}
+}
+
+func (w *SideStoryBackfill) producerRunning() bool {
+	w.Translator.mu.Lock()
+	gate := w.editorGate
+	w.Translator.mu.Unlock()
+	return gate != nil && gate.Status().Running
+}
+
+// round refreshes the catalog when due, then fetches the due episodes with the
+// request delay between upstream requests and applies them in small batches.
+func (w *SideStoryBackfill) round(ctx context.Context, forceCatalog bool) (summary store.SideStoryRoundSummary, changed bool, err error) {
+	if w.producerRunning() {
+		if forceCatalog {
+			w.mu.Lock()
+			w.forceCatalog = true
+			w.mu.Unlock()
+		}
+		return summary, false, errSideStoryDeferred
+	}
+	pacer := &sideStoryPacer{delay: w.opts.RequestDelay}
+	defer func() { summary.Requests = pacer.requests }()
+	var problems []error
+	if w.catalogDue(forceCatalog) {
+		changed, err = w.refreshCatalog(ctx, pacer)
+		if errors.Is(err, errSideStoryDeferred) || ctx.Err() != nil {
+			return summary, changed, err
+		}
+		if err != nil {
+			problems = append(problems, err)
+		}
+	}
+	items, err := w.store.SideStoryWorkQueueContext(ctx, w.opts.Batch, w.now())
+	if err != nil {
+		return summary, changed, errors.Join(append(problems, err)...)
+	}
+	summary.Episodes = len(items)
+	batch := make([]store.SideStoryEpisodeFetch, 0, sideStoryApplyBatch)
+	apply := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		result, err := w.applySideStoryFetchesContext(ctx, batch, w.now())
+		batch = batch[:0]
+		if errors.Is(err, editorgate.ErrProducerRunning) {
+			return errSideStoryDeferred
+		}
+		if err != nil {
+			return err
+		}
+		changed = changed || result.Changed
+		for _, episode := range result.Episodes {
+			if episode.Fetched {
+				summary.Fetched++
+			}
+			if episode.Error != "" {
+				if sideStoryEpisodeFailed(episode) {
+					summary.Errors++
+				} else {
+					summary.Retrying++
+				}
+			}
+			summary.OfficialWritten += episode.OfficialWritten
+		}
+		return nil
+	}
+	for _, item := range items {
+		fetch, err := w.fetchSideStoryEpisodeContext(ctx, pacer, item,
+			item.CNState == store.SideStoryStatePending, item.ENState == store.SideStoryStatePending)
+		if err != nil {
+			return summary, changed, err
+		}
+		batch = append(batch, fetch)
+		if len(batch) < sideStoryApplyBatch {
+			continue
+		}
+		if err := apply(); err != nil {
+			return summary, changed, errors.Join(append(problems, err)...)
+		}
+	}
+	if err := apply(); err != nil {
+		problems = append(problems, err)
+	}
+	return summary, changed, errors.Join(problems...)
+}
+
+// sideStoryEpisodeFailed separates an episode that needs attention from one
+// whose lastError only notes a locale waiting for its automatic retry.
+func sideStoryEpisodeFailed(episode store.SideStoryEpisodeApply) bool {
+	if !episode.Fetched {
+		return true
+	}
+	for _, state := range []string{episode.CNState, episode.ENState} {
+		if state == store.SideStoryStateError || state == store.SideStoryStateMismatch {
+			return true
+		}
+	}
+	return false
+}
+
+// catalogDue reports a refresh at the first round, after sideStoryCatalogMaxAge,
+// when the watcher recorded a new upstream data version, or on request. A
+// failed refresh is retried after sideStoryCatalogRetryDelay unless requested.
+func (w *SideStoryBackfill) catalogDue(force bool) bool {
+	version := w.cfg.Get(config.KeyUpstreamLastDataVersion)
+	now := w.now()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if force {
+		return true
+	}
+	if !w.catalogFailedAt.IsZero() && now.Sub(w.catalogFailedAt) < sideStoryCatalogRetryDelay {
+		return false
+	}
+	return w.catalogRefreshedAt.IsZero() || now.Sub(w.catalogRefreshedAt) >= sideStoryCatalogMaxAge || version != w.catalogVersion
+}
+
+// refreshCatalog fetches and writes the card and area catalogs. It reports
+// whether stories or episodes were added, official text requeued or title
+// translations written or deleted.
+func (w *SideStoryBackfill) refreshCatalog(ctx context.Context, pacer *sideStoryPacer) (bool, error) {
+	version := w.cfg.Get(config.KeyUpstreamLastDataVersion)
+	attemptAt := w.now()
+	changed := false
+	var errs []error
+	for _, kind := range []string{store.SideStoryKindCard, store.SideStoryKindArea} {
+		stories, err := w.fetchSideStoryCatalogContext(ctx, pacer, kind)
+		if ctx.Err() != nil {
+			return changed, ctx.Err()
+		}
+		if err == nil {
+			var release func()
+			if release, err = w.beginSideStoryWrite(ctx); err == nil {
+				var result store.SideStoryCatalogResult
+				result, err = w.store.SyncSideStoryCatalogContext(ctx, kind, stories, w.now())
+				release()
+				changed = changed || result.NewStories > 0 || result.NewEpisodes > 0 || result.OfficialRequeued > 0 ||
+					result.OfficialTitlesWritten > 0 || result.TitlesReplaced > 0
+				if result.DroppedHumanTitles > 0 {
+					log.Printf("[side-story] %s catalog: changed JP episode titles deleted %d human title translation(s)", kind, result.DroppedHumanTitles)
+				}
+			}
+		}
+		if errors.Is(err, editorgate.ErrProducerRunning) {
+			w.mu.Lock()
+			w.forceCatalog = true
+			w.mu.Unlock()
+			return changed, errSideStoryDeferred
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s catalog: %w", kind, err))
+		}
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(errs) > 0 {
+		w.catalogFailedAt = attemptAt
+		return changed, errors.Join(errs...)
+	}
+	w.catalogFailedAt = time.Time{}
+	w.catalogRefreshedAt = attemptAt
+	w.catalogVersion = version
+	return changed, nil
+}

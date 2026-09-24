@@ -245,7 +245,10 @@ func TestUpstreamURLSettingsFailClosedInProduction(t *testing.T) {
 		KeyUpstreamJPMasterdataURL, KeyUpstreamJPMasterdataFallbackURL,
 		KeyUpstreamCNMasterdataURL, KeyUpstreamCNMasterdataFallbackURL,
 		KeyUpstreamJPAssetsURL, KeyUpstreamJPAssetsFallbackURL,
-		KeyUpstreamCNAssetsURL, KeyUpstreamCNAssetsFallbackURL, KeyMusicAliasesURL,
+		KeyUpstreamCNAssetsURL, KeyUpstreamCNAssetsFallbackURL,
+		KeyUpstreamENMasterdataURL, KeyUpstreamENMasterdataFallbackURL,
+		KeyUpstreamJPScriptsURL, KeyUpstreamJPScriptsFallbackURL,
+		KeyUpstreamCNScriptsURL, KeyUpstreamENScriptsURL, KeyMusicAliasesURL,
 	}
 	unsafe := []string{
 		"http://127.0.0.1:8080/data",

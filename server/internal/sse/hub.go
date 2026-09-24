@@ -24,6 +24,8 @@ const (
 	EventStoryUpdated       = "eventstory.updated"
 	EventStoryLocaleUpdated = "eventstory.locale.updated"
 	EventLyricsUpdated      = "lyrics.updated"
+	EventSideStoryUpdated   = "sidestory.updated"
+	EventSideStorySync      = "sidestory.sync"
 	EventSyncProgress       = "sync.progress"
 	EventTranslateProgress  = "translate.progress"
 	EventContentRestored    = "content.restored"

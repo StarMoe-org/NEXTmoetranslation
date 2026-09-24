@@ -16,12 +16,24 @@ import (
 	"unicode/utf8"
 
 	"moesekai/server/internal/httpx"
+	"moesekai/server/internal/model"
 )
 
 const (
 	gameContextPrompt   = "你是一个专业的游戏翻译器，专门翻译《世界计划 彩色舞台 feat. 初音未来》(Project SEKAI) 游戏内容。\n请将以下XML格式的日文文本翻译成简体中文。\n请只返回<translations>...</translations>，每条使用 <t id=\"N\">文本</t>。\n每条原文中的换行须在译文对应位置原样保留。\n"
 	maxLLMResponseBytes = 8 << 20
+
+	gameContextPromptEnglish = "You are a professional game translator for Project SEKAI COLORFUL STAGE! feat. Hatsune Miku.\nTranslate the following Japanese texts in XML format into natural English, using the official English names of Project SEKAI characters, units and places.\nReturn only <translations>...</translations>, with each item as <t id=\"N\">text</t>.\nKeep every line break of each source text at the same position in its translation.\n"
 )
+
+// llmPromptForLocale returns the instructions for translating Japanese into
+// locale; every locale other than en-US gets the simplified Chinese prompt.
+func llmPromptForLocale(locale string) string {
+	if locale == model.LocaleEnglish {
+		return gameContextPromptEnglish
+	}
+	return gameContextPrompt
+}
 
 // callLLM translates a batch of JP texts via the given provider. Returns a
 // slice aligned to texts (empty string where unparsed).
@@ -48,11 +60,15 @@ func (t *Translator) callAutomaticLLM(provider string, texts []string, onAttempt
 }
 
 func (t *Translator) callLLMUsingConfig(provider string, texts []string, cfg llmConfig, onAttempt func(attempt, total int)) ([]string, error) {
+	return t.callLLMUsingPrompt(provider, gameContextPrompt, texts, cfg, onAttempt)
+}
+
+func (t *Translator) callLLMUsingPrompt(provider, instructions string, texts []string, cfg llmConfig, onAttempt func(attempt, total int)) ([]string, error) {
 	if len(texts) == 0 {
 		return []string{}, nil
 	}
 	attempts := cfg.MaxRetries + 1
-	prompt := gameContextPrompt + buildXMLInput(texts)
+	prompt := instructions + buildXMLInput(texts)
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
 		if onAttempt != nil {

@@ -18,6 +18,7 @@ import (
 
 	"moesekai/server/internal/config"
 	"moesekai/server/internal/httpx"
+	"moesekai/server/internal/store"
 )
 
 const (
@@ -36,6 +37,15 @@ const (
 	maxMasterdataWireBytes     = 64 << 20
 	maxMasterdataDecodedBytes  = 128 << 20
 	maxMasterdataRecords       = 500_000
+
+	defaultENMasterdataURL         = "https://metadata.pjsk.moe/en/master"
+	defaultENMasterdataFallbackURL = "https://raw.githubusercontent.com/Team-Haruki/haruki-sekai-en-master/main/master"
+	// Card and area scripts live under startapp, not ondemand. The JP fallback
+	// serves card scripts only; area paths 404 there.
+	defaultJPScriptsURL         = "https://storage.exmeaning.com/sekai-jp-assets"
+	defaultJPScriptsFallbackURL = "https://assets.unipjsk.com/startapp"
+	defaultCNScriptsURL         = "https://sekai-assets-bdf29c81.seiunx.net/cn-assets/startapp"
+	defaultENScriptsURL         = "https://storage.exmeaning.com/sekai-en-assets"
 )
 
 type sourceFailure struct {
@@ -78,10 +88,16 @@ func (t *Translator) fetchMasterdataDocumentContext(ctx context.Context, filenam
 }
 
 func (t *Translator) masterdataBases(server string) []string {
-	if server == "cn" {
+	switch server {
+	case "cn":
 		return t.sourceURLs(
 			config.KeyUpstreamCNMasterdataURL, defaultCNMasterdataURL,
 			config.KeyUpstreamCNMasterdataFallbackURL, defaultCNMasterdataFallbackURL,
+		)
+	case "en":
+		return t.sourceURLs(
+			config.KeyUpstreamENMasterdataURL, defaultENMasterdataURL,
+			config.KeyUpstreamENMasterdataFallbackURL, defaultENMasterdataFallbackURL,
 		)
 	}
 	return t.sourceURLs(
@@ -101,6 +117,23 @@ func (t *Translator) cnAssetBases() []string {
 	return t.sourceURLs(
 		config.KeyUpstreamCNAssetsURL, defaultCNAssetsURL,
 		config.KeyUpstreamCNAssetsFallbackURL, defaultCNAssetsFallbackURL,
+	)
+}
+
+// sideStoryScriptBases lists the card or area script bases of one server.
+func (t *Translator) sideStoryScriptBases(server, kind string) []string {
+	switch server {
+	case "cn":
+		return t.sourceURLs(config.KeyUpstreamCNScriptsURL, defaultCNScriptsURL, "", "")
+	case "en":
+		return t.sourceURLs(config.KeyUpstreamENScriptsURL, defaultENScriptsURL, "", "")
+	}
+	if kind != store.SideStoryKindCard {
+		return t.sourceURLs(config.KeyUpstreamJPScriptsURL, defaultJPScriptsURL, "", "")
+	}
+	return t.sourceURLs(
+		config.KeyUpstreamJPScriptsURL, defaultJPScriptsURL,
+		config.KeyUpstreamJPScriptsFallbackURL, defaultJPScriptsFallbackURL,
 	)
 }
 

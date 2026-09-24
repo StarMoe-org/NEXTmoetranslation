@@ -242,3 +242,10 @@ func TestHandlerWritesInitialEventsOnConnect(t *testing.T) {
 		t.Fatalf("initial frame = %q %q", event, data)
 	}
 }
+
+// The console matches the side-story event names literally.
+func TestSideStoryEventNamesMatchTheConsoleVocabulary(t *testing.T) {
+	if EventSideStoryUpdated != "sidestory.updated" || EventSideStorySync != "sidestory.sync" {
+		t.Fatalf("side-story events = %q, %q", EventSideStoryUpdated, EventSideStorySync)
+	}
+}
