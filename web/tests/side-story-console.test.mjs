@@ -199,7 +199,7 @@ test("error messages append the contract details and map the runner codes", () =
   assert.equal(message(400, { error: "something_else", details: ["测试原因"] }), "something_else：测试原因");
   assert.equal(message(500, { error: "internal_error" }), "服务器内部错误");
   assert.equal(message(409, { error: "script_changed", details: ["the Japanese script changed upstream; refresh the story before importing"] }),
-    "上游剧本已变化，请先重新获取剧本后再导入", "an English restatement of the mapped message is dropped");
+    "上游剧本已变化，请先由管理员重新获取剧本后再导入", "an English restatement of the mapped message is dropped");
   assert.match(message(409, { error: "backfill_disabled", details: ["the side-story backfill is disabled"] }), /卡牌剧情\/区域对话后台回填.*SIDE_STORY_BACKFILL_ENABLED=false$/);
   assert.equal(model.sideStoryErrorMessage({ code: "internal_error", details: [3, ""] }, "兜底"), "服务器内部错误");
   assert.equal(model.sideStoryErrorMessage(new Error("测试网络错误"), "兜底"), "测试网络错误");

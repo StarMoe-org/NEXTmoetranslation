@@ -157,7 +157,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   backfill_disabled: "后台回填未启用：管理设置中的“卡牌剧情/区域对话后台回填”为 false，或设置了 SIDE_STORY_BACKFILL_ENABLED=false",
   upstream_unavailable: "上游剧本暂时无法获取，请稍后重试",
   script_not_fetched: "该话剧本尚未获取，请先由管理员重新获取剧本",
-  script_changed: "上游剧本已变化，请先重新获取剧本后再导入",
+  script_changed: "上游剧本已变化，请先由管理员重新获取剧本后再导入",
   not_found: "剧情不存在",
   revision_conflict: "保存被拒绝：服务器上的译文已更新",
   unknown_lines: "剧本已变化，提交的部分行已不存在，请重新载入",
