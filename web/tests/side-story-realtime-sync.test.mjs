@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createHookRuntime, loadSourceModule } from "./source-module-harness.mjs";
+import { read } from "./source-surfaces.mjs";
 
 const model = loadSourceModule("lib/side-story-console.ts");
 
@@ -111,4 +112,11 @@ test("sidestory.sync reloads a changed open story, or shows the notice over a dr
   assert.equal(dirty.calls.loadEntries, 0, "the draft is not reloaded away");
   assert.deepEqual(dirty.calls.remoteConflict, [{ key: "1|テスト台詞", user: "后台回填" }]);
   assert.match(dirty.calls.toasts.at(-1)[1], /保存或放弃本地草稿后将自动重新载入/);
+});
+
+test("the console hands setSelectedKey to the realtime hook so a sync reload keeps the line", async () => {
+  const source = await read("src/components/Console.tsx");
+  const start = source.indexOf("useConsoleRealtime({");
+  const call = source.slice(start, source.indexOf("});", start));
+  assert.match(call, /\bsetSelectedKey\b/);
 });

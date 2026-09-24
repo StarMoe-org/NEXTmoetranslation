@@ -43,7 +43,7 @@ export interface ConsoleRealtimeOptions {
   setEntries: Dispatch<SetStateAction<TranslationEntry[]>>;
   selectedKey: string | null;
   // Reselects the line after a backfill sync reloaded the open story.
-  setSelectedKey?: (key: string) => void;
+  setSelectedKey: (key: string) => void;
   selectedEntry: TranslationEntry | null;
   entryDirty: boolean;
   editValue: string;
@@ -407,7 +407,7 @@ export function useConsoleRealtime({
     syncReselectRef.current = null;
     if (reselect.kind !== sideStoryKind || reselect.id !== field || reselect.locale !== locale) return;
     const entry = entries.find((candidate) => candidate.key === reselect.key);
-    if (entry && setSelectedKey) {
+    if (entry) {
       setSelectedKey(entry.key);
       setEditValue(entry.text);
     }

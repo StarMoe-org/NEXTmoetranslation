@@ -129,7 +129,7 @@ export function Console({ onLogout }: { onLogout: () => void }) {
   } = useConsoleRealtime({
     username, clientID, locale, show, category, field,
     isEventStory, sideStoryKind, isLyrics, isLyricsSourceReview,
-    entries, setEntries, selectedKey, selectedEntry, entryDirty,
+    entries, setEntries, selectedKey, setSelectedKey, selectedEntry, entryDirty,
     editValue, setEditValue, eventTxtDraft, setEventTxtDraft, eventTxtDraftDirty,
     lyricsDirty, lyricsEditorRef, lyricsSourceReviewRef,
     setRemoteConflict, contextGenerationRef, invalidatePendingAction,
