@@ -397,12 +397,19 @@ func (svc *Service) waitForRetry(delay time.Duration) bool {
 	}
 }
 
+// debounceMaxWaitFactor caps one debounced wait at this many windows. Writes
+// that keep arriving less than a window apart, such as the side-story
+// backfill's rounds, would otherwise hold every publication back.
+const debounceMaxWaitFactor = 2
+
 func (svc *Service) waitForDebounce() bool {
 	if svc.debounce <= 0 {
 		return svc.ctx.Err() == nil
 	}
 	timer := time.NewTimer(svc.debounce)
 	defer timer.Stop()
+	deadline := time.NewTimer(debounceMaxWaitFactor * svc.debounce)
+	defer deadline.Stop()
 	for {
 		select {
 		case <-svc.ctx.Done():
@@ -418,6 +425,8 @@ func (svc *Service) waitForDebounce() bool {
 			}
 			timer.Reset(svc.debounce)
 		case <-timer.C:
+			return true
+		case <-deadline.C:
 			return true
 		}
 	}
@@ -542,12 +551,17 @@ func (svc *Service) RebuildCategoryContext(ctx context.Context, category string)
 
 // applyIncremental publishes single-entity updates and records the epoch they
 // were published at, so a full rebuild that started reading earlier cannot
-// swap them back to its older bytes.
-func (svc *Service) applyIncremental(updates map[string]asset) {
+// swap them back to its older bytes. removed keys are withdrawn in the same
+// step and recorded the same way, so that rebuild cannot restore them either.
+func (svc *Service) applyIncremental(updates map[string]asset, removed ...string) {
 	svc.mu.Lock()
 	svc.assetEpoch++
 	for key, value := range updates {
 		svc.assets[key] = value
+		svc.incremental[key] = svc.assetEpoch
+	}
+	for _, key := range removed {
+		delete(svc.assets, key)
 		svc.incremental[key] = svc.assetEpoch
 	}
 	svc.mu.Unlock()
@@ -691,6 +705,9 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 			next[key] = makeAsset(b, "application/json; charset=utf-8", now)
 		}
 	}
+	if err := svc.addSideStoryAssets(ctx, next, now); err != nil {
+		return err
+	}
 	// The accepted recovery-v3 projection is public, immutable release content
 	// and remains the reviewed base for every rebuild. Database publications
 	// overlay it: newer or bundle-absent database songs replace/add their index
@@ -749,20 +766,21 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 			next[k] = v
 		}
 	}
-	// An incremental publication that landed after this rebuild started reading
-	// is newer than the bytes generated above, so it keeps its slot. The write
-	// behind it also bumped the requested generation, so the loop still runs the
-	// reconciling rebuild. Keys this rebuild dropped stay dropped.
+	// An incremental publication or withdrawal that landed after this rebuild
+	// started reading is newer than the bytes generated above, so the key keeps
+	// its current state: a side-story file first published during the rebuild
+	// stays, one withdrawn during it stays withdrawn. The write behind it also
+	// bumped the requested generation, so the loop still runs the reconciling
+	// rebuild.
 	for key, epoch := range svc.incremental {
 		if epoch <= startEpoch {
 			delete(svc.incremental, key)
 			continue
 		}
-		if _, ok := next[key]; !ok {
-			continue
-		}
 		if published, ok := svc.assets[key]; ok {
 			next[key] = published
+		} else {
+			delete(next, key)
 		}
 	}
 	svc.assets = next

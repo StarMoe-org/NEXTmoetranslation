@@ -162,6 +162,67 @@ func (g *Generator) EventStoryLocaleJSON(eventID int, locale string) ([]byte, er
 	return marshalIndentNoEscape(detail)
 }
 
+// SideStoryFilesJSON returns every public card-story and area-talk file of
+// locale, keyed relative to the translation root ("cardStory/card_<id>.json",
+// "areaTalk/group_<n>.json").
+func (g *Generator) SideStoryFilesJSON(ctx context.Context, locale string) (map[string][]byte, error) {
+	projected, err := g.store.SideStoryPublicFilesContext(ctx, locale)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]byte, len(projected))
+	for key, file := range projected {
+		body, err := sideStoryJSON(file)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", key, err)
+		}
+		out[key] = body
+	}
+	return out, nil
+}
+
+// SideStoryFileForStoryJSON returns the public file holding one story. key is
+// set even when ok is false (the file no longer qualifies), so the caller can
+// withdraw it.
+func (g *Generator) SideStoryFileForStoryJSON(ctx context.Context, kind, storyID, locale string) (string, []byte, bool, error) {
+	key, file, ok, err := g.store.SideStoryPublicFileForStoryContext(ctx, kind, storyID, locale)
+	if err != nil || !ok {
+		return key, nil, false, err
+	}
+	body, err := sideStoryJSON(file)
+	if err != nil {
+		return key, nil, false, err
+	}
+	return key, body, true, nil
+}
+
+// sideStoryJSON encodes a side-story file in the event-story file layout plus
+// per-episode source: meta, then episodes in file order with talkData in story
+// order, without HTML escaping.
+func sideStoryJSON(file store.SideStoryPublicFile) ([]byte, error) {
+	root := newOrderedMap()
+	meta := newOrderedMap()
+	meta.set("source", file.Source)
+	meta.set("version", "1")
+	meta.set("last_updated", file.LastUpdated)
+	root.set("meta", meta)
+	episodes := newOrderedMap()
+	for _, episode := range file.Episodes {
+		object := newOrderedMap()
+		object.set("scenarioId", episode.ScenarioID)
+		object.set("title", episode.Title)
+		object.set("source", episode.Source)
+		talk := newOrderedMap()
+		for _, line := range episode.Talk {
+			talk.set(line.JP, line.Text)
+		}
+		object.set("talkData", talk)
+		episodes.set(episode.Key, object)
+	}
+	root.set("episodes", episodes)
+	return marshalIndentNoEscape(root)
+}
+
 // PublishedLyricsJSON builds the complete published lyrics asset set. Callers
 // swap the returned map atomically so a malformed publication cannot expose a
 // partially rebuilt index/detail set.
