@@ -335,12 +335,13 @@ func TestSideStoriesContentFileHasItsOwnSizeLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "translation-content", "side-stories.json")
-	// About the indented size at production scale (contract §3).
-	const productionScaleBytes = 160 << 20
+	// The indented size once every line of the 2026-09 catalog has both
+	// locales; the limit must also hold a catalog twice that size.
+	const productionScaleBytes = 218 << 20
 	for _, test := range []struct {
 		size int64
 		ok   bool
-	}{{productionScaleBytes, true}, {maxSideStoriesContentFileBytes + 1, false}} {
+	}{{productionScaleBytes, true}, {2 * productionScaleBytes, true}, {maxSideStoriesContentFileBytes + 1, false}} {
 		if err := os.WriteFile(path, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -364,7 +365,8 @@ func TestTranslationContentRecordLimitLeavesRoomForProductionScaleSideStories(t 
 		}
 		return "[" + strings.Repeat("{},", count-1) + "{}]"
 	}
-	const stories, episodes, lines, rows = 4_300, 5_700, 150_000, 300_000
+	// The 2026-09 catalog with both locales of every line.
+	const stories, episodes, lines, rows = 4_300, 5_600, 232_000, 464_000
 	body := []byte(`{"stories":` + array(stories) + `,"episodes":` + array(episodes) +
 		`,"lines":` + array(lines) + `,"localizations":` + array(rows) + `}`)
 	// The other three files keep the 1M records they were allowed before.

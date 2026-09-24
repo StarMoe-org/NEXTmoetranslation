@@ -33,8 +33,10 @@ const (
 	maxEventStoriesContentFileBytes = 512 << 20
 	// side-stories.json measured against the 2026-09 catalog (4.3k stories,
 	// 5.6k episodes, 232k lines): 173-192 MiB with the official CN/EN text,
-	// about 218 MiB once every line has both locales.
-	maxSideStoriesContentFileBytes = 256 << 20
+	// about 218 MiB (±15%) once every line has both locales. One oversize file
+	// fails the whole backup on both targets, so the limit leaves room for the
+	// catalog to double.
+	maxSideStoriesContentFileBytes = 512 << 20
 	maxArchiveExpandedBytes        = 1 << 30
 )
 
