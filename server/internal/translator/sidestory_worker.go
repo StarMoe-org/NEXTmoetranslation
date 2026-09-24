@@ -16,6 +16,7 @@ import (
 const (
 	sideStoryCatalogMaxAge     = 6 * time.Hour
 	sideStoryCatalogRetryDelay = 10 * time.Minute
+	sideStoryDeferredDelay     = 5 * time.Second // at most, after a round deferred to a producer
 	sideStoryApplyBatch        = 5
 )
 
@@ -175,20 +176,23 @@ func (w *SideStoryBackfill) loop() {
 		case <-timer.C:
 		case <-w.wake:
 		}
-		if w.enabled() {
-			w.runRound(w.ctx)
+		delay := w.opts.Interval
+		if w.enabled() && w.runRound(w.ctx) {
+			delay = min(delay, sideStoryDeferredDelay)
 		}
 		if w.ctx.Err() != nil {
 			return
 		}
 		w.mu.Lock()
-		w.nextRoundAt = w.now().Add(w.opts.Interval)
+		w.nextRoundAt = w.now().Add(delay)
 		w.mu.Unlock()
-		timer.Reset(w.opts.Interval)
+		timer.Reset(delay)
 	}
 }
 
-func (w *SideStoryBackfill) runRound(ctx context.Context) {
+// runRound runs one round and reports whether it was deferred to a producer
+// job, which keeps any requested catalog refresh for the retry.
+func (w *SideStoryBackfill) runRound(ctx context.Context) (deferred bool) {
 	started := w.now()
 	w.mu.Lock()
 	w.running = true
@@ -200,7 +204,10 @@ func (w *SideStoryBackfill) runRound(ctx context.Context) {
 	message := ""
 	if err != nil {
 		message = truncateStatusDetail(err.Error(), 600)
-		log.Printf("[side-story] round: %s", message)
+		// A round that deferred before any work retries every few seconds.
+		if err != errSideStoryDeferred {
+			log.Printf("[side-story] round: %s", message)
+		}
 	}
 	w.mu.Lock()
 	w.running = false
@@ -213,6 +220,7 @@ func (w *SideStoryBackfill) runRound(ctx context.Context) {
 		w.emit("sidestory.sync", fmt.Sprintf("卡牌剧情与区域对话已同步：获取 %d 话，写入 %d 条官方译文", summary.Fetched, summary.OfficialWritten),
 			summary.Fetched, summary.Episodes)
 	}
+	return errors.Is(err, errSideStoryDeferred)
 }
 
 func (w *SideStoryBackfill) producerRunning() bool {

@@ -209,6 +209,16 @@ func TestAfterContentRestoreRefreshesTheSideStoryCatalog(t *testing.T) {
 		t.Fatal("the first round fetched no masterdata")
 	}
 
+	// A restore runs its hook while it still holds the producer gate, so the
+	// woken round is deferred and must be retried soon after the gate opens.
+	release, err := svc.editorGate.BeginProducerContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 	afterContentRestore(svc.collab, svc.sideStory)()
+	waitUntil("the woken round to defer to the restore", func() bool {
+		return strings.Contains(svc.sideStory.SideStoryBackfillState().LastRoundError, "producer")
+	})
+	release()
 	waitUntil("a catalog refresh after the restore", func() bool { return requests() >= 2*first })
 }
