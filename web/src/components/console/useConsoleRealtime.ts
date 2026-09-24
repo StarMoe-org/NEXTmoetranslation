@@ -408,8 +408,10 @@ export function useConsoleRealtime({
     const pending = syncReloadPendingRef.current;
     if (!pending || entryDirty) return;
     syncReloadPendingRef.current = null;
+    // No selected line means another load of the story is under way; it brings the backfill's changes.
+    if (!selectedKey) return;
     if (pending.kind === sideStoryKind && pending.id === field && pending.locale === locale) reloadSyncedSideStoryRef.current();
-  }, [entryDirty, field, locale, sideStoryKind]);
+  }, [entryDirty, field, locale, selectedKey, sideStoryKind]);
 
   useEffect(() => {
     const reselect = syncReselectRef.current;

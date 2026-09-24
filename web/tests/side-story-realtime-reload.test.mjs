@@ -145,3 +145,19 @@ for (const [resolution, resolve] of [
     assert.equal(calls.loadEntries, 1, "one reload per sync");
   });
 }
+
+test("another load of the story takes over a sync reload that waited for a draft", (t) => {
+  const { calls, render, sync } = reloadHarness(t);
+  const loaded = [line(1, "测试译文一"), line(2, "测试译文二")];
+  render(loaded, loaded[1].key, "测试草稿");
+  sync(summary({ fetchedEpisodeCount: 2 }));
+  assert.equal(calls.loadEntries, 0, "the draft is not reloaded away");
+
+  // A reconcile or a collaborator's refresh reloads the story and clears the selection first.
+  render([], null, "");
+  assert.equal(calls.loadEntries, 0, "no second load races the one under way");
+  const reloaded = [line(1, "测试译文一"), line(2, "测试官方译文", 2)];
+  render(reloaded, reloaded[0].key, reloaded[0].text);
+  render(reloaded, reloaded[1].key, reloaded[1].text);
+  assert.equal(calls.loadEntries, 0, "the pending sync reload was dropped");
+});
