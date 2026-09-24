@@ -74,8 +74,8 @@ func (t *Translator) getSideStoryUpstream(ctx context.Context, pacer *sideStoryP
 // fetchSideStoryScriptContext fetches one script from the server's bases in
 // order. A response without TalkData or with an invalid script moves on to the
 // next base; every base answering 404 makes the script Missing. The script is
-// parsed under its own ScenarioId so the store can judge the identity. Only
-// context errors are returned as errors.
+// parsed under its own ScenarioId, which is only a label; the asset path
+// identifies it. Only context errors are returned as errors.
 func (t *Translator) fetchSideStoryScriptContext(ctx context.Context, pacer *sideStoryPacer, server, kind, assetPath string) (store.SideStoryFetchOutcome, error) {
 	outcome := store.SideStoryFetchOutcome{Attempted: true}
 	bases := t.sideStoryScriptBases(server, kind)

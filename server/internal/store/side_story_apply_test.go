@@ -195,11 +195,13 @@ func TestApplySideStoryJPFailuresBackOffAndSkipOfficialText(t *testing.T) {
 	if result.Changed || result.Episodes[0].Error != "episode not found" {
 		t.Fatalf("unknown episode %+v", result)
 	}
-	wrong := sideStoryTestScript(t, "test_card_110_02")
-	result = mustApplySideStory(t, s, sideStoryTestNow, SideStoryEpisodeFetch{Kind: "card", StoryID: "110", EpisodeKey: "1", JP: fetchedJP(wrong)})
-	if result.Episodes[0].Fetched || !strings.Contains(result.Episodes[0].Error, "differs") ||
-		len(sideStoryLines(t, s, "card", "110", "1")) != 3 {
-		t.Fatalf("script of another scenario %+v", result.Episodes[0])
+	// Real scripts carry ScenarioId labels such as `016048_rui01 のコピー`; the
+	// asset path identifies the script, so the label is not compared.
+	labelled := sideStoryTestScript(t, "test_card_110_01 のコピー",
+		sideStoryTestTalk{"テスト話者", "テスト台詞です"}, sideStoryTestTalk{"テスト話者", "テスト二行目です"})
+	result = mustApplySideStory(t, s, sideStoryTestNow, SideStoryEpisodeFetch{Kind: "card", StoryID: "110", EpisodeKey: "1", JP: fetchedJP(labelled)})
+	if !result.Episodes[0].Fetched || result.Episodes[0].Error != "" || len(sideStoryLines(t, s, "card", "110", "1")) != 4 {
+		t.Fatalf("script with a ScenarioId label %+v lines=%d", result.Episodes[0], len(sideStoryLines(t, s, "card", "110", "1")))
 	}
 }
 
@@ -316,7 +318,8 @@ func TestApplySideStoryOfficialImportRejectsMismatchedScriptsAndRetriesAMirrored
 		state.nextAttemptAt != sideStoryTestNow.Add(24*time.Hour).Unix() {
 		t.Fatalf("mirrored Japanese retry state %+v", state)
 	}
-	fewIdentical := sideStoryTestScript(t, "test_card_130_01",
+	// The official ScenarioId is only a label, like the JP one.
+	fewIdentical := sideStoryTestScript(t, "test_card_130_01 のコピー",
 		sideStoryTestTalk{"测试说话人", "测试台词一"}, sideStoryTestTalk{"测试对象", "テスト返事だよ"},
 		sideStoryTestTalk{"测试说话人", "测试又一句"}, sideStoryTestTalk{"测试对象", "测试最后"}, sideStoryTestTalk{"测试说话人", "……"})
 	if applied := apply(fewIdentical); applied.CNState != "imported" || applied.OfficialWritten != 6 {

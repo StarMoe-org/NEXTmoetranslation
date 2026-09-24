@@ -73,10 +73,10 @@ func sideStoryBackoff(attempts int) time.Duration {
 }
 
 type sideStoryApplyEpisode struct {
-	scenarioID, scriptSHA256 string
-	cnPath, enPath           string
-	cnState, enState         string
-	attempts                 int
+	scriptSHA256     string
+	cnPath, enPath   string
+	cnState, enState string
+	attempts         int
 }
 
 // ApplySideStoryFetchesContext records fetched scripts in one transaction.
@@ -107,9 +107,9 @@ func (s *Store) ApplySideStoryFetchesContext(ctx context.Context, fetches []Side
 func applySideStoryFetchTx(ctx context.Context, tx *sql.Tx, fetch SideStoryEpisodeFetch, stamp int64) (SideStoryEpisodeApply, bool, error) {
 	out := SideStoryEpisodeApply{Kind: fetch.Kind, StoryID: fetch.StoryID, EpisodeKey: fetch.EpisodeKey}
 	var episode sideStoryApplyEpisode
-	err := tx.QueryRowContext(ctx, `SELECT scenario_id,script_sha256,cn_asset_path,en_asset_path,cn_state,en_state,attempts
+	err := tx.QueryRowContext(ctx, `SELECT script_sha256,cn_asset_path,en_asset_path,cn_state,en_state,attempts
 		FROM side_story_episodes WHERE kind=? AND story_id=? AND episode_key=?`, fetch.Kind, fetch.StoryID, fetch.EpisodeKey).
-		Scan(&episode.scenarioID, &episode.scriptSHA256, &episode.cnPath, &episode.enPath, &episode.cnState, &episode.enState, &episode.attempts)
+		Scan(&episode.scriptSHA256, &episode.cnPath, &episode.enPath, &episode.cnState, &episode.enState, &episode.attempts)
 	if errors.Is(err, sql.ErrNoRows) {
 		out.Error = "episode not found"
 		return out, false, nil
@@ -122,12 +122,12 @@ func applySideStoryFetchTx(ctx context.Context, tx *sql.Tx, fetch SideStoryEpiso
 		return out, false, nil
 	}
 	jp := fetch.JP
-	if jp.Script == nil || jp.Script.ScenarioID != episode.scenarioID {
+	// The asset path identifies the script. Its ScenarioId field is not
+	// compared: real scripts carry labels such as `016048_rui01 のコピー`.
+	if jp.Script == nil {
 		attempts := episode.attempts + 1
 		delay, message := sideStoryBackoffCap, "no fetch result"
 		switch {
-		case jp.Script != nil:
-			message = "script ScenarioId " + jp.Script.ScenarioID + " differs from " + episode.scenarioID
 		case jp.Missing:
 			message = "not found"
 		case jp.Err != "":
@@ -303,8 +303,6 @@ func (o sideStoryOfficialImport) applyTx(ctx context.Context, tx *sql.Tx, state,
 		return SideStoryStateError, 0, outcome.Err, sideStoryNoRetry, nil
 	case outcome.Script == nil:
 		return SideStoryStateError, 0, "no fetch result", sideStoryNoRetry, nil
-	case outcome.Script.ScenarioID != o.jp.ScenarioID:
-		return SideStoryStateMismatch, 0, "script ScenarioId differs from the JP script", sideStoryNoRetry, nil
 	case len(outcome.Script.Talks) != len(o.jp.Talks):
 		return SideStoryStateMismatch, 0, fmt.Sprintf("TalkData length mismatch (%d != %d)", len(o.jp.Talks), len(outcome.Script.Talks)), sideStoryNoRetry, nil
 	}

@@ -93,8 +93,6 @@ func (t *Translator) FetchSideStoryJPScriptContext(ctx context.Context, kind, st
 		return "", "", fmt.Errorf("%w: %s not found", ErrSideStoryUpstreamUnavailable, item.JPAssetPath)
 	case outcome.Script == nil:
 		return "", "", fmt.Errorf("%w: %s", ErrSideStoryUpstreamUnavailable, outcome.Err)
-	case outcome.Script.ScenarioID != item.ScenarioID:
-		return "", "", fmt.Errorf("%w: script ScenarioId %s differs from %s", ErrSideStoryUpstreamUnavailable, outcome.Script.ScenarioID, item.ScenarioID)
 	}
 	return outcome.Script.CanonicalJSON, outcome.Script.SHA256, nil
 }

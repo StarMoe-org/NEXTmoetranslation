@@ -788,7 +788,7 @@ curl -sS "$BASE/api/editor/v1/story/card/501?locale=zh-CN" -H "Authorization: Be
 ```
 
 - `fetched:false` 表示日文脚本还没抓到，这一话只有标题行。有译文的行另带 `updatedBy` 和 `updatedAt`（Unix 秒）。
-- `cnState` / `enState` 是官方 CN / EN 文本的导入状态：`pending`（等待导入；官方脚本返回 404 或返回的仍是日文时也是 `pending`，见 8.8）、`imported`、`absent`（该服务器的 masterdata 没有这一话的脚本路径）、`mismatch`（官方脚本的 ScenarioId 或 TalkData 条数与日文不同，见 8.8）、`error`。最近一次失败记在 `lastError`。
+- `cnState` / `enState` 是官方 CN / EN 文本的导入状态：`pending`（等待导入；官方脚本返回 404 或返回的仍是日文时也是 `pending`，见 8.8）、`imported`、`absent`（该服务器的 masterdata 没有这一话的脚本路径）、`mismatch`（官方脚本的 TalkData 条数与日文不同，见 8.8）、`error`。最近一次失败记在 `lastError`。
 
 ### 8.3 写行：`PUT /api/editor/v1/story/{kind}/{id}/{episode}`
 
@@ -886,7 +886,7 @@ curl -sS -X POST "$BASE/api/editor/v1/stories/sync" -H "Authorization: Bearer $T
 - **节奏**：每 `SIDE_STORY_BACKFILL_INTERVAL_MS`（默认 60000）跑一轮，每轮最多 `SIDE_STORY_BACKFILL_BATCH`（默认 30）话，每两次上游请求之间至少间隔 `SIDE_STORY_BACKFILL_REQUEST_DELAY_MS`（默认 1000）。producer 运行时整轮推迟到下一轮。
 - **目录**：首轮、距上次满 6 小时、上游数据版本变化、`refreshCatalog:true` 时，以及内容备份恢复之后，从 JP 的 `cards.json`、`cardEpisodes.json`、`actionSets.json`、`areas.json`，CN 的 `cards.json`、`cardEpisodes.json`、`actionSets.json`，以及 EN 的 `cardEpisodes.json`、`actionSets.json` 重建。新故事和新话入队；后来从 masterdata 消失的故事保留。CN/EN 的脚本路径变化时重新排队导入，并清零这一话的重试计时，新路径下一轮就抓，不等旧路径的 404 重试；路径变空标为 `absent`；JP 路径变化时重抓日文。目录刷新失败 10 分钟后再试。官方话标题也在这一步按下面的官方写入规则写入。JP 话标题变了时，旧标题行连同它的全部译文一起删除，人工译文也不例外；删掉了人工译文时，服务器日志记一行 `[side-story] <kind> catalog: changed JP episode titles deleted <N> human title translation(s)`。
 - **每话**：先抓日文脚本，成功后再抓该服务器有、且状态为 `pending` 的 CN / EN 脚本。日文抓取的临时错误按 10 分钟起翻倍、最长 24 小时退避；日文 404 在 24 小时后重试；日文失败时这一话不导入 CN/EN。CN / EN 脚本返回 404（镜像还没同步）时，该语言保持 `pending`，`lastError` 为 `zh-CN: not found` 或 `en-US: not found`，24 小时后重试，不计入重试次数；CN / EN 的临时错误同样保持 `pending`，按上面的退避重试，两种情况同时出现时以较早的时间为准。已导入过的日文脚本变化时，这次没抓的 CN / EN 回到 `pending`，下一轮就抓，另一种语言这次 404 也不必等 24 小时；另一种语言的临时错误仍按它的退避。
-- **配对**：官方脚本 TalkData 第 i 条对应日文第 i 条，正文取 `Body`，说话人取 `WindowDisplayName`。官方文本为空，或与含假名的日文行键完全相同，就跳过这一行。ScenarioId 不同（`script ScenarioId differs from the JP script`）或 TalkData 条数不同（`TalkData length mismatch (a != b)`）时，这一话该语言标为 `mismatch`，一行都不写，也不按时间重试；可以用 8.6 立即重抓。超过一半的含假名正文与日文相同时（`official script repeats the Japanese text`，镜像站还在提供新上架脚本的日文占位），同样一行都不写，但该语言保持 `pending`，像 404 一样 24 小时后重试。
+- **配对**：脚本按资源路径识别，脚本内的 `ScenarioId` 字段只是标签，日文和官方脚本都不比较它（真实脚本里有 `016048_rui01 のコピー` 这样的值）。官方脚本 TalkData 第 i 条对应日文第 i 条，正文取 `Body`，说话人取 `WindowDisplayName`。官方文本为空，或与含假名的日文行键完全相同，就跳过这一行。TalkData 条数不同（`TalkData length mismatch (a != b)`）时，这一话该语言标为 `mismatch`，一行都不写，也不按时间重试；可以用 8.6 立即重抓。超过一半的含假名正文与日文相同时（`official script repeats the Japanese text`，镜像站还在提供新上架脚本的日文占位），同样一行都不写，但该语言保持 `pending`，像 404 一样 24 小时后重试。
 - **官方写入规则**：没有译文行时插入 `source:"official"`、`revision:1`、`updatedBy:"sync"`；已有 `official` 或 `llm` 行且文本不同时覆盖，`revision` 加 1；**`human` 行从不改动**，包括文本为空的人工行。
 - 回填写入后（目录刷新新增了故事或话、重新排队了官方导入、写了官方标题或替换了标题也算）请求一次去抖的全量重建，公开文件稍后更新，按第 7 节的 `GET /api/projection/status` 确认。去抖窗口是服务器的 `FILES_REBUILD_DEBOUNCE_MS`（默认 300000 ms），每次改动重新计时，但从开始等待算起最多两个窗口，所以回填持续写入时，默认最迟 10 分钟也会开始重建。
 

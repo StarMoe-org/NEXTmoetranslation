@@ -117,7 +117,7 @@ mysekai 的 `tag` → `flavorText` 镜像是另一条独立规则：同名 jp ke
 
 **路由。** 编辑可用 `GET /api/editor/v1/stories`（列表）、`GET /api/editor/v1/story/{kind}/{id}`（详情）、`GET /api/editor/v1/story/{kind}/{id}/{episode}/snapshot`（TXT 导入快照）、`GET /api/editor/v1/stories/sync`（回填状态）和 `PUT /api/editor/v1/story/{kind}/{id}/{episode}`。PUT 走与其他内容写入相同的门禁，每行带 `expectedRevision`，整批全有或全无：未知行返回 `422 unknown_lines`，修订冲突返回 `409 revision_conflict`。管理员另有 `POST /api/editor/v1/story/{kind}/{id}/ai`（producer 任务 `ai-side-story`，只填空行）、`POST /api/editor/v1/story/{kind}/{id}/refresh`（立即重抓）和 `POST /api/editor/v1/stories/sync`（立即跑一轮回填）。agent 用法和每条路由的示例见 [`contracts/editor-api/README.md`](contracts/editor-api/README.md) 第 8 节，合同见 [`PRODUCTION_CONTRACT.md`](PRODUCTION_CONTRACT.md) 的 Card Stories And Area Talk。
 
-**后台回填。** 设置 `side_story_backfill.enabled` 不为 false（未设置即为开，管理设置里可随时暂停）且 `SIDE_STORY_BACKFILL_ENABLED` 不为 false 时，服务进程按轮抓取日文脚本和官方 CN/EN 脚本。它按 TalkData 下标配对写入官方译文，覆盖 `official` 与 `llm` 行，从不改动 `human` 行，也从不调用 LLM。已列出资源路径的官方脚本返回 404 或返回的仍是日文时，该语言保持 `pending`，24 小时后重试；ScenarioId 或 TalkData 条数与日文不同时标为 `mismatch`；`absent` 只表示该服务器没有这一话的资源路径。内容备份恢复后，回填不等 6 小时就重建目录。以下 env 每次启动都校验，非法值会让启动失败（它们和下面 6 个上游 env 都列在 `.env.example` 里）：
+**后台回填。** 设置 `side_story_backfill.enabled` 不为 false（未设置即为开，管理设置里可随时暂停）且 `SIDE_STORY_BACKFILL_ENABLED` 不为 false 时，服务进程按轮抓取日文脚本和官方 CN/EN 脚本。它按 TalkData 下标配对写入官方译文，覆盖 `official` 与 `llm` 行，从不改动 `human` 行，也从不调用 LLM。已列出资源路径的官方脚本返回 404 或返回的仍是日文时，该语言保持 `pending`，24 小时后重试；TalkData 条数与日文不同时标为 `mismatch`（脚本内的 ScenarioId 只是标签，不做比较）；`absent` 只表示该服务器没有这一话的资源路径。内容备份恢复后，回填不等 6 小时就重建目录。以下 env 每次启动都校验，非法值会让启动失败（它们和下面 6 个上游 env 都列在 `.env.example` 里）：
 
 | env | 默认 | 取值 |
 | --- | --- | --- |
