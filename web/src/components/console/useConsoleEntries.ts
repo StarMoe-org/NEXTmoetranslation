@@ -6,7 +6,7 @@ import {
 import type { EventStoryTxtDraft } from "@/components/EventStoryTxtImport";
 import { buildEventStoryEntries, storyEntrySourceText } from "@/lib/labels";
 import {
-  buildSideStoryEntries, sideStoryEntryUntranslated, sideStoryKindForCategory, sideStoryLocale,
+  buildSideStoryEntries, sideStoryEntryUntranslated, sideStoryErrorMessage, sideStoryKindForCategory, sideStoryLocale,
 } from "@/lib/side-story-console";
 import {
   eventStoryEntryHasCanonicalIdentity, eventStoryEntryType, eventStoryEpisodeNo,
@@ -220,7 +220,9 @@ export function useConsoleEntries({
       if (first) { setSelectedKey(first.key); setEditValue(first.text); }
       return true;
     } catch (e) {
-      if (loadGenerationRef.current === generation) show(e instanceof Error ? e.message : "加载失败", "err");
+      if (loadGenerationRef.current === generation) {
+        show(sideStoryKind ? sideStoryErrorMessage(e, "剧情载入失败") : e instanceof Error ? e.message : "加载失败", "err");
+      }
       return false;
     } finally {
       if (loadGenerationRef.current === generation) setLoading(false);
