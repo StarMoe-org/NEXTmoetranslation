@@ -356,6 +356,28 @@ func TestApplySideStoryOfficialImportRejectsMismatchedScriptsAndRetriesAMirrored
 	}
 }
 
+func TestApplySideStoryImportsAnOfficialScriptRepeatingExactlyHalfTheKanaBodies(t *testing.T) {
+	s := newSideStoryTestStore(t)
+	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, sideStoryTestCard("135", 1, "cn/135", ""))
+	jp := sideStoryTestScript(t, "test_card_135_01",
+		sideStoryTestTalk{"テスト話者", "テスト台詞です"}, sideStoryTestTalk{"テスト相手", "テスト返事だよ"},
+		sideStoryTestTalk{"テスト話者", "テストもう一つ"}, sideStoryTestTalk{"テスト相手", "テスト最後ね"}, sideStoryTestTalk{"テスト話者", "……"})
+	// Two of the four kana bodies repeat the Japanese: not more than half.
+	cn := sideStoryTestScript(t, "test_card_135_01",
+		sideStoryTestTalk{"测试说话人", "テスト台詞です"}, sideStoryTestTalk{"测试对象", "テスト返事だよ"},
+		sideStoryTestTalk{"测试说话人", "测试又一句"}, sideStoryTestTalk{"测试对象", "测试最后"}, sideStoryTestTalk{"测试说话人", "……"})
+	applied := mustApplySideStory(t, s, sideStoryTestNow, SideStoryEpisodeFetch{Kind: "card", StoryID: "135", EpisodeKey: "1",
+		JP: fetchedJP(jp), CN: fetchedJP(cn)}).Episodes[0]
+	if applied.CNState != "imported" || applied.OfficialWritten != 5 || applied.Error != "" {
+		t.Fatalf("half-mirrored translation %+v", applied)
+	}
+	for _, mirrored := range []string{"テスト台詞です", "テスト返事だよ"} {
+		if _, ok := sideStoryRow(t, s, "card", "135", "1", mirrored, "zh-CN"); ok {
+			t.Errorf("mirrored line %s was written", mirrored)
+		}
+	}
+}
+
 func TestApplySideStoryRequeueAndANewAssetPathOutrankAnother404(t *testing.T) {
 	s := newSideStoryTestStore(t)
 	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, sideStoryTestCard("150", 1, "cn/150", "en/150"))

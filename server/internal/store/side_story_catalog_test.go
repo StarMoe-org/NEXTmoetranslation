@@ -153,9 +153,10 @@ func TestSyncSideStoryCatalogWritesOfficialTitlesUnderTheOfficialWriteRule(t *te
 	titleCounts := func(want SideStoryCatalogResult) {
 		t.Helper()
 		result := mustSyncSideStoryCatalog(t, s, SideStoryKindCard, story)
-		if result.OfficialTitlesWritten != want.OfficialTitlesWritten || result.DroppedHumanTitles != want.DroppedHumanTitles {
-			t.Fatalf("title sync %+v want %d official titles written, %d human titles dropped",
-				result, want.OfficialTitlesWritten, want.DroppedHumanTitles)
+		if result.OfficialTitlesWritten != want.OfficialTitlesWritten || result.DroppedHumanTitles != want.DroppedHumanTitles ||
+			result.TitlesReplaced != want.TitlesReplaced {
+			t.Fatalf("title sync %+v want %d official titles written, %d human titles dropped, %d titles replaced",
+				result, want.OfficialTitlesWritten, want.DroppedHumanTitles, want.TitlesReplaced)
 		}
 	}
 	titleCounts(SideStoryCatalogResult{OfficialTitlesWritten: 3})
@@ -187,7 +188,7 @@ func TestSyncSideStoryCatalogWritesOfficialTitlesUnderTheOfficialWriteRule(t *te
 	}
 
 	story.Episodes[0].TitleJP = "テスト新題"
-	titleCounts(SideStoryCatalogResult{OfficialTitlesWritten: 2})
+	titleCounts(SideStoryCatalogResult{OfficialTitlesWritten: 2, TitlesReplaced: 1})
 	var titles []string
 	rows, err := s.db.Query(`SELECT jp_key FROM side_story_lines WHERE kind='card' AND story_id='40' AND episode_key='1' AND role='title'`)
 	if err != nil {
@@ -213,7 +214,7 @@ func TestSyncSideStoryCatalogWritesOfficialTitlesUnderTheOfficialWriteRule(t *te
 
 	mustUpdateSideStory(t, s, "card", "40", "2", "en-US", SideStoryLineEdit{JP: "テスト話40-2", Text: "Test human title"})
 	story.Episodes[1].TitleJP, story.Episodes[1].ENTitle = "テスト新題二", ""
-	titleCounts(SideStoryCatalogResult{OfficialTitlesWritten: 1, DroppedHumanTitles: 2})
+	titleCounts(SideStoryCatalogResult{OfficialTitlesWritten: 1, DroppedHumanTitles: 2, TitlesReplaced: 1})
 	if row, _ := sideStoryRow(t, s, "card", "40", "2", "テスト新題二", "zh-CN"); row.text != "测试标题二改" || row.source != "official" {
 		t.Fatalf("title row after the human titles were dropped %+v", row)
 	}
