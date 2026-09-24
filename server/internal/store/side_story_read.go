@@ -73,7 +73,7 @@ func (s *Store) ListSideStoriesContext(ctx context.Context, kind, locale string)
 		}
 		summaries = append(summaries, summary)
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	index := make(map[string]*SideStorySummary, len(summaries))
@@ -97,7 +97,7 @@ func (s *Store) ListSideStoriesContext(ctx context.Context, kind, locale string)
 			summary.EpisodeCount, summary.FetchedEpisodeCount = episodes, fetched
 		}
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -116,7 +116,7 @@ func (s *Store) ListSideStoriesContext(ctx context.Context, kind, locale string)
 			summary.LineCount = lines
 		}
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -140,7 +140,7 @@ func (s *Store) ListSideStoriesContext(ctx context.Context, kind, locale string)
 			latestWrite[id] = max(latestWrite[id], updated)
 		}
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -204,7 +204,7 @@ func (s *Store) SideStoryDetailContext(ctx context.Context, kind, storyID, local
 		episode.Fetched = episode.ScriptSHA256 != ""
 		detail.Episodes = append(detail.Episodes, episode)
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
 		return SideStoryDetail{}, err
 	}
 	for position := range detail.Episodes {
@@ -248,7 +248,7 @@ func (s *Store) SideStoryProgressContext(ctx context.Context) (map[string]SideSt
 			progress.Stories = stories
 		}
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	rows, err = tx.QueryContext(ctx, `SELECT kind,COUNT(*),SUM(script_sha256<>''),SUM(script_sha256='' OR jp_refetch=1),
@@ -273,7 +273,7 @@ func (s *Store) SideStoryProgressContext(ctx context.Context) (map[string]SideSt
 			*progress = p
 		}
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	out := make(map[string]SideStoryKindProgress, len(totals))

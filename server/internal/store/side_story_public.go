@@ -112,7 +112,7 @@ func buildSideStoryPublicFilesTx(ctx context.Context, tx *sql.Tx, locale string,
 		}
 		episodes[episode.kind+"\x00"+episode.storyID+"\x00"+episode.key] = episode
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	storyFilter := ""
@@ -147,7 +147,7 @@ func buildSideStoryPublicFilesTx(ctx context.Context, tx *sql.Tx, locale string,
 		episode.sources.add(source, 1)
 		episode.lastUpdated = max(episode.lastUpdated, updated)
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 

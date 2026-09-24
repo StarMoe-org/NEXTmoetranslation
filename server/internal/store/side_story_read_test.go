@@ -161,3 +161,28 @@ func TestSideStoryDetailOrdersEpisodesAndLines(t *testing.T) {
 		t.Fatalf("ja-JP detail error=%v", err)
 	}
 }
+
+func TestSideStoryReadsReportAnErrorThatEndsTheRowScan(t *testing.T) {
+	s := newSideStoryTestStore(t)
+	ctx := context.Background()
+	for _, id := range []string{"310", "311"} {
+		seedSideStoryCard(t, s, id, 1)
+		mustUpdateSideStory(t, s, "card", id, "1", "zh-CN", SideStoryLineEdit{JP: "テスト台詞甲", Text: "测试甲"})
+	}
+	// abs() of the smallest integer fails while card 311's row is stepped, so
+	// rows.Next stops early and only rows.Err reports why.
+	if _, err := s.db.Exec(`ALTER TABLE side_stories RENAME TO side_stories_table`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`CREATE VIEW side_stories AS SELECT kind,story_id,title,character_id,area_id,area_category,
+		CASE WHEN story_id='311' THEN abs(-9223372036854775807-1) ELSE action_set_id END AS action_set_id,released_at,updated_at
+		FROM side_stories_table`); err != nil {
+		t.Fatal(err)
+	}
+	if stories, err := s.ListSideStoriesContext(ctx, "card", "zh-CN"); err == nil {
+		t.Fatalf("list returned %d stories without the scan error", len(stories))
+	}
+	if files, err := s.SideStoryPublicFilesContext(ctx, "zh-CN"); err == nil {
+		t.Fatalf("public files returned %d files without the scan error", len(files))
+	}
+}
