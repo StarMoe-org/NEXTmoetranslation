@@ -140,7 +140,7 @@ export function SideStorySidebar({
         </button>
         {areaExpanded && (
           <div id="area-talk-sidebar-list">
-            <input className="sidebar-filter" aria-label="按 scenarioId 或区域名搜索区域对话" placeholder="按 scenarioId 或区域名搜索…" value={areaQuery} onChange={(event) => setAreaQuery(event.target.value)} />
+            <input className="sidebar-filter" aria-label="按 scenarioId、区域名或分组名（活动、升学前等）搜索区域对话" placeholder="按 scenarioId、区域名或分组名搜索…" value={areaQuery} onChange={(event) => setAreaQuery(event.target.value)} />
             <ListState list={areaTalks} onRetry={() => onRetry("area")} />
             {areaTalks.loaded && areaGroups.length === 0 && <p className="sidebar-note">没有符合条件的区域对话</p>}
             {areaGroups.map((group) => {

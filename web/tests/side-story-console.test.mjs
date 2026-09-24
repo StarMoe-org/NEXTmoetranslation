@@ -507,6 +507,7 @@ test("the area talk group renders collapsed category subgroups with untranslated
   assert.match(html, /升学前<\/span><span class="side-story-subgroup-meta">1<span[^]*活动 12 · 测试活动<\/span><span class="side-story-subgroup-meta">1 · 未译 3/);
   assert.doesNotMatch(html, /areatalk_ev_1/, "groups start collapsed");
   assert.doesNotMatch(html, /id="card-story-sidebar-list"/, "a collapsed group renders no list");
+  assert.match(html, /aria-label="按 scenarioId、区域名或分组名（活动、升学前等）搜索区域对话" placeholder="按 scenarioId、区域名或分组名搜索…"/, "the search names the group labels it matches");
 });
 
 test("the side-story groups sit between event stories and music content", async () => {
