@@ -162,7 +162,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   revision_conflict: "保存被拒绝：服务器上的译文已更新",
   unknown_lines: "剧本已变化，提交的部分行已不存在，请重新载入",
   invalid_request: "请求参数无效",
-  already_running: "另一个剧情任务正在运行，请稍后再试",
+  already_running: "另一个任务正在运行（同步、AI 翻译或备份恢复），请稍后再试",
   draining: "服务正在关闭或重启，请稍后再试",
   internal_error: "服务器内部错误",
   producer_state_changed: "保存被拒绝",

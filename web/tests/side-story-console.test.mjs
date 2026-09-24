@@ -193,7 +193,7 @@ test("conflict errors parse only from a 409 revision_conflict and unknown lines 
 test("error messages append the contract details and map the runner codes", () => {
   const message = (status, body) => model.sideStoryErrorMessage(new TestAPIError(status, body), "兜底");
   assert.equal(message(500, { error: "internal_error", details: ["测试批次 2/5 失败", "测试 HTTP 429"] }), "服务器内部错误：测试批次 2/5 失败；测试 HTTP 429");
-  assert.equal(message(409, { error: "already_running", details: ["测试任务运行中"] }), "另一个剧情任务正在运行，请稍后再试：测试任务运行中");
+  assert.equal(message(409, { error: "already_running", details: ["测试任务运行中"] }), "另一个任务正在运行（同步、AI 翻译或备份恢复），请稍后再试：测试任务运行中");
   assert.equal(message(503, { error: "draining", details: ["测试停机"] }), "服务正在关闭或重启，请稍后再试：测试停机");
   assert.equal(message(409, { error: "producer_state_changed", details: ["测试状态变化"] }), "保存被拒绝：测试状态变化");
   assert.equal(message(400, { error: "something_else", details: ["测试原因"] }), "something_else：测试原因");
