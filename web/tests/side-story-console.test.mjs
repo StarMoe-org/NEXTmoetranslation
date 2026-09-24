@@ -61,6 +61,32 @@ test("area talks group in the main site's section order with category labels and
   assert.equal(catalog.areaCategoryLabel("", new Map()), "未分类");
 });
 
+test("an area search also matches the group label the sidebar shows", () => {
+  const stories = [
+    area("areatalk_ev_1", "event_12", 1201, 3),
+    area("areatalk_ev_2", "event_12", 1202, 1),
+    area("areatalk_ev_9", "event_40", 4001),
+    area("areatalk_g1_1", "grade1", 100),
+    area("areatalk_g2_1", "grade2", 300),
+    area("areatalk_th_1", "theater", 500),
+    area("areatalk_lt_1", "limited_7", 5001, 1, "测试限定区域"),
+    area("areatalk_af_1", "aprilfool2024", 7101),
+  ];
+  const names = new Map([[12, "测试活动"]]);
+  const search = (query) => catalog.groupAreaTalks(stories, query, names).map((group) => [group.key, group.stories.map((story) => story.id)]);
+  assert.deepEqual(search("测试活动"), [["event_12", ["areatalk_ev_1", "areatalk_ev_2"]]]);
+  assert.deepEqual(search("活动 40"), [["event_40", ["areatalk_ev_9"]]]);
+  assert.deepEqual(search("升学前"), [["grade1", ["areatalk_g1_1"]]]);
+  assert.deepEqual(search("升学后"), [["grade2", ["areatalk_g2_1"]]]);
+  assert.deepEqual(search("剧场"), [["theater", ["areatalk_th_1"]]]);
+  assert.deepEqual(search("限定区域 7"), [["limited_7", ["areatalk_lt_1"]]]);
+  assert.deepEqual(search("愚人节 2024"), [["aprilfool2024", ["areatalk_af_1"]]]);
+  assert.deepEqual(search("ev_2"), [["event_12", ["areatalk_ev_2"]]], "a talk match keeps only that talk");
+  const [event12] = catalog.groupAreaTalks(stories, "ev_2", names);
+  assert.equal(event12.label, "活动 12 · 测试活动");
+  assert.equal(event12.untranslated, 1);
+});
+
 test("the event name index prefers the translated name and falls back to the Japanese one", () => {
   const names = catalog.eventNameIndex([
     { eventId: 5, eventName: "测试活动名", eventNameJapanese: "テストイベント" },

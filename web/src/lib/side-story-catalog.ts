@@ -97,27 +97,31 @@ export function eventNameIndex(eventStories: readonly EventStorySummary[]): Map<
   return names;
 }
 
-/** Groups area talks by category; a search on scenarioId or area name keeps only matching talks. */
+/** Groups area talks by category; a search keeps whole groups whose label matches, else talks matching scenarioId or area name. */
 export function groupAreaTalks(
   stories: readonly SideStorySummary[], query: string, eventNames: ReadonlyMap<number, string>,
 ): AreaTalkGroup[] {
   const q = query.trim().toLowerCase();
   const groups = new Map<string, SideStorySummary[]>();
   for (const story of stories) {
-    if (q && !`${story.id}\n${story.title}`.toLowerCase().includes(q)) continue;
     const list = groups.get(story.areaCategory);
     if (list) list.push(story);
     else groups.set(story.areaCategory, [story]);
   }
   return [...groups.entries()]
-    .map(([key, list]) => {
+    .flatMap(([key, list]) => {
       list.sort((a, b) => (a.actionSetId - b.actionSetId) || a.id.localeCompare(b.id));
-      return {
+      const label = areaCategoryLabel(key, eventNames, list[0]?.title);
+      const matched = !q || label.toLowerCase().includes(q)
+        ? list
+        : list.filter((story) => `${story.id}\n${story.title}`.toLowerCase().includes(q));
+      if (matched.length === 0) return [];
+      return [{
         key,
-        label: areaCategoryLabel(key, eventNames, list[0]?.title),
-        stories: list,
-        untranslated: list.reduce((sum, story) => sum + story.untranslatedCount, 0),
-      };
+        label,
+        stories: matched,
+        untranslated: matched.reduce((sum, story) => sum + story.untranslatedCount, 0),
+      }];
     })
     .sort((a, b) => {
       const [ga, sa] = areaCategoryRank(a.key);
