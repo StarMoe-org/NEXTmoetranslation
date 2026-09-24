@@ -218,6 +218,8 @@ func (w *SideStoryBackfill) runRound(ctx context.Context) (deferred bool) {
 	w.mu.Unlock()
 
 	summary, changes, err := w.round(ctx, force)
+	// A round deferred before any request leaves the last round's report as it was.
+	report := err != errSideStoryDeferred || summary.Requests > 0 || changes.catalog || len(changes.stories) > 0
 	message := ""
 	if err != nil {
 		message = truncateStatusDetail(err.Error(), 600)
@@ -228,9 +230,11 @@ func (w *SideStoryBackfill) runRound(ctx context.Context) (deferred bool) {
 	}
 	w.mu.Lock()
 	w.running = false
-	w.lastRoundAt = started
-	w.lastRound = summary
-	w.lastRoundError = message
+	if report {
+		w.lastRoundAt = started
+		w.lastRound = summary
+		w.lastRoundError = message
+	}
 	w.mu.Unlock()
 	w.publishRound(ctx, changes)
 	if changes.catalog || len(changes.stories) > 0 {

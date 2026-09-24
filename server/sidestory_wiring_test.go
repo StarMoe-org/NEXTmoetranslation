@@ -249,8 +249,11 @@ func TestAfterContentRestoreRefreshesTheSideStoryCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	afterContentRestore(svc.collab, svc.sideStory)()
+	// A round deferred before any request keeps the last round's report and
+	// only moves the next round from an hour ahead to a few seconds ahead.
 	waitUntil("the woken round to defer to the restore", func() bool {
-		return strings.Contains(svc.sideStory.SideStoryBackfillState().LastRoundError, "producer")
+		next, err := time.Parse(time.RFC3339, svc.sideStory.SideStoryBackfillState().NextRoundAt)
+		return err == nil && next.After(time.Now()) && next.Before(time.Now().Add(time.Minute))
 	})
 	release()
 	waitUntil("a catalog refresh after the restore", func() bool { return requests() >= 2*first })

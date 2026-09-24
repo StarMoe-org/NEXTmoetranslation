@@ -3,6 +3,7 @@ package translator
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -539,7 +540,7 @@ func TestSideStoryBackfillDefersWritesWhileAProducerRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := h.round(t)
-	if !strings.Contains(state.LastRoundError, "producer") || len(h.upstream.requested()) != 0 {
+	if state.LastRoundError != "" || state.LastRoundAt != "" || len(h.upstream.requested()) != 0 {
 		t.Fatalf("round under a held producer: state=%+v requests=%d", state, len(h.upstream.requested()))
 	}
 	release()
@@ -558,7 +559,7 @@ func TestSideStoryBackfillDefersWritesWhileAProducerRuns(t *testing.T) {
 			testJPSpeaker + `","Body":"` + testJPLine1 + `"}],"SpecialEffectData":[],"AppearCharacters":[]}`))
 	})
 	state = h.round(t)
-	if !strings.Contains(state.LastRoundError, "producer") || state.LastRound.Fetched != 0 {
+	if !strings.Contains(state.LastRoundError, "producer") || state.LastRound.Fetched != 0 || state.LastRound.Requests == 0 {
 		t.Fatalf("round with a producer started mid-round = %+v", state)
 	}
 	if episode := episodeDetail(t, h.detail(t, store.SideStoryKindCard, testCardID, model.LocaleChinese), "1"); episode.Fetched {
@@ -567,6 +568,56 @@ func TestSideStoryBackfillDefersWritesWhileAProducerRuns(t *testing.T) {
 	releaseMidRound()
 	if state = h.round(t); state.LastRoundError != "" || state.LastRound.Fetched != 3 {
 		t.Fatalf("round after the producer finished = %+v", state)
+	}
+}
+
+func TestSideStoryBackfillKeepsTheLastRoundWhileDeferredToAProducer(t *testing.T) {
+	h := newSideStoryHarness(t)
+	h.upstream.remove("/en-master/actionSets.json")
+	h.upstream.remove(testCNCardPath2)
+	last := h.round(t)
+	if !strings.Contains(last.LastRoundError, "area catalog") || last.LastRound.Retrying != 1 || last.LastRound.Requests == 0 {
+		t.Fatalf("state after the real round = %+v", last)
+	}
+	release, err := h.gate.BeginProducerContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	requests := len(h.upstream.requested())
+	h.advance(sideStoryDeferredDelay)
+	if !h.worker.runRound(t.Context()) {
+		t.Fatal("round under a held producer was not deferred")
+	}
+	if state := h.worker.SideStoryBackfillState(); !reflect.DeepEqual(state, last) || len(h.upstream.requested()) != requests {
+		t.Fatalf("state after a deferred round = %+v, want %+v", state, last)
+	}
+}
+
+func TestSideStoryBackfillReportsARoundDeferredAfterItsCatalogRequests(t *testing.T) {
+	h := newSideStoryHarness(t)
+	h.upstream.mu.Lock()
+	cards := h.upstream.files["/jp-master/cards.json"]
+	h.upstream.mu.Unlock()
+	var once sync.Once
+	var release func()
+	h.upstream.handle("/jp-master/cards.json", func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() {
+			var err error
+			if release, err = h.gate.BeginProducerContext(r.Context()); err != nil {
+				t.Error(err)
+			}
+		})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(cards)
+	})
+	state := h.round(t)
+	if release == nil {
+		t.Fatal("the catalog was not fetched")
+	}
+	defer release()
+	if !strings.Contains(state.LastRoundError, "producer") || state.LastRound.Requests == 0 || state.LastRoundAt == "" {
+		t.Fatalf("round deferred after its catalog requests = %+v", state)
 	}
 }
 
