@@ -108,6 +108,10 @@ type Service struct {
 	running     bool
 	// started is set once Start has launched the publication worker.
 	started bool
+	// sideStoryPublishMu keeps a per-story publication's reads and its
+	// applyIncremental together, so a publication that read earlier cannot
+	// replace the bytes of one that read later. Taken after the content lock.
+	sideStoryPublishMu sync.Mutex
 
 	rebuildCh       chan struct{}
 	immediateCh     chan struct{}

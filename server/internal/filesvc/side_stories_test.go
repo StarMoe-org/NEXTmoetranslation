@@ -177,22 +177,29 @@ func TestRebuildSideStoryRepublishesAndWithdrawsOneFile(t *testing.T) {
 	}
 }
 
-// sideStoryPassPause is the context of a full rebuild that stops when
-// addSideStoryAssets checks it before the last locale pass: the zh-CN files
-// have been read and nothing is swapped yet. The rebuild has no hook there;
-// matching the caller keeps the database driver's context checks out of it.
+// sideStoryPassPause is a context that stops the at-th time the function
+// named by caller checks it, until resume is closed. The publication paths
+// have no hook between their reads and their swap; matching the caller keeps
+// the database driver's context checks out of it.
 type sideStoryPassPause struct {
 	context.Context
+	caller  string
+	at      int32
 	checks  atomic.Int32
 	reached chan struct{}
 	resume  chan struct{}
+}
+
+func newSideStoryPassPause(caller string, at int) *sideStoryPassPause {
+	return &sideStoryPassPause{Context: context.Background(), caller: caller, at: int32(at),
+		reached: make(chan struct{}), resume: make(chan struct{})}
 }
 
 func (p *sideStoryPassPause) Err() error {
 	pc := make([]uintptr, 1)
 	if runtime.Callers(2, pc) == 1 {
 		caller, _ := runtime.CallersFrames(pc).Next()
-		if strings.HasSuffix(caller.Function, ".(*Service).addSideStoryAssets") && p.checks.Add(1) == int32(len(sideStoryRoots)) {
+		if strings.HasSuffix(caller.Function, p.caller) && p.checks.Add(1) == p.at {
 			close(p.reached)
 			<-p.resume
 		}
@@ -201,10 +208,12 @@ func (p *sideStoryPassPause) Err() error {
 }
 
 // pauseFullRebuild starts a full rebuild and returns once it has read the zh-CN
-// side-story files; finish lets it swap and returns its error.
+// side-story files: addSideStoryAssets checks its context before each locale
+// pass, and the last check stops it before anything is swapped. finish lets it
+// swap and returns its error.
 func pauseFullRebuild(t *testing.T, svc *Service) (finish func() error) {
 	t.Helper()
-	pause := &sideStoryPassPause{Context: context.Background(), reached: make(chan struct{}), resume: make(chan struct{})}
+	pause := newSideStoryPassPause(".(*Service).addSideStoryAssets", len(sideStoryRoots))
 	done := make(chan error, 1)
 	go func() { done <- svc.rebuildAssetsContext(pause) }()
 	var once sync.Once
@@ -276,5 +285,50 @@ func TestFullRebuildDoesNotRestoreASideStoryFileWithdrawnDuringIt(t *testing.T) 
 	}
 	if card := f.get(t, "/files/translation/cardStory/card_800.json"); !strings.Contains(card.Body.String(), `"测试台词八百改"`) {
 		t.Fatalf("the full rebuild was not swapped in: %d %s", card.Code, card.Body)
+	}
+}
+
+// TestSideStoryPublicationDoesNotReplaceALaterOne pauses the publication of
+// one area talk after its zh-CN read of group 30, then commits and publishes an
+// edit to another talk in the group: the paused publication's older bytes must
+// not replace the edit's.
+func TestSideStoryPublicationDoesNotReplaceALaterOne(t *testing.T) {
+	f := setupSideStoryFiles(t)
+	f.svc.Rebuild()
+	const group = "/files/translation/areaTalk/group_30.json"
+
+	// RebuildSideStoryContext checks its context before taking the content lock
+	// and before each locale read; the last check follows the zh-CN read.
+	pause := newSideStoryPassPause(".(*Service).RebuildSideStoryContext", 1+len(sideStoryRoots))
+	var resumeOnce sync.Once
+	resume := func() { resumeOnce.Do(func() { close(pause.resume) }) }
+	t.Cleanup(resume)
+	earlier := make(chan error, 1)
+	go func() { earlier <- f.svc.RebuildSideStoryContext(pause, "area", "areatalk_test_y") }()
+	select {
+	case <-pause.reached:
+	case err := <-earlier:
+		t.Fatalf("the earlier publication finished without reaching its last locale read: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the earlier publication did not reach its last locale read")
+	}
+
+	f.edit(t, "area", "areatalk_test_x", "zh-CN", "テスト台詞areatalk_test_x", "测试区域台词改")
+	later := make(chan error, 1)
+	go func() { later <- f.svc.RebuildSideStoryContext(context.Background(), "area", "areatalk_test_x") }()
+	// Unserialized, the later publication lands while the earlier one is paused.
+	select {
+	case err := <-later:
+		later <- err
+	case <-time.After(200 * time.Millisecond):
+	}
+	resume()
+	for _, done := range []chan error{earlier, later} {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if published := f.get(t, group); published.Code != http.StatusOK || !strings.Contains(published.Body.String(), `"测试区域台词改"`) {
+		t.Fatalf("an earlier publication replaced the later edit: %d %s", published.Code, published.Body)
 	}
 }

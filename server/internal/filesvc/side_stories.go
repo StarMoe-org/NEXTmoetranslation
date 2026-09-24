@@ -49,11 +49,16 @@ func (svc *Service) RebuildSideStoryContext(ctx context.Context, kind, storyID s
 		return err
 	}
 	defer releaseContent()
+	svc.sideStoryPublishMu.Lock()
+	defer svc.sideStoryPublishMu.Unlock()
 
 	now := time.Now()
 	updates := make(map[string]asset, len(sideStoryRoots))
 	var removed []string
 	for _, root := range sideStoryRoots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		key, body, ok, err := svc.gen.SideStoryFileForStoryJSON(ctx, kind, storyID, root.locale)
 		if err != nil {
 			return fmt.Errorf("side story %s/%s %s: %w", kind, storyID, root.locale, err)
