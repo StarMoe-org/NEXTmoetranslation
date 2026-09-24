@@ -21,7 +21,8 @@ function mountPanel(t, { expanded = true, state }) {
 }
 
 test("an expanded panel polls every 15 s while a round is running and stops when unmounted", (t) => {
-  const { calls, runtime } = mountPanel(t, { state: { running: true, nextRoundAt: "2025-12-31T23:59:00Z" } });
+  // A resumed round runs while nextRoundAt is still the later time the previous round set.
+  const { calls, runtime } = mountPanel(t, { state: { running: true, nextRoundAt: "2026-01-01T01:00:00Z" } });
   t.mock.timers.tick(14_999);
   assert.equal(calls.reload, 0);
   t.mock.timers.tick(1);
