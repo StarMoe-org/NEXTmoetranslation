@@ -533,3 +533,39 @@ func TestApplySideStoryKeepsTheReasonOfALocaleLeftInErrorWithoutAFetch(t *testin
 		t.Fatalf("refresh after the CN error %+v stored %q", applied, state.lastError)
 	}
 }
+
+func TestApplySideStoryJPFailureLeavesAStoredScriptTheBackfillWillNotFetchAgain(t *testing.T) {
+	s := newSideStoryTestStore(t)
+	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, sideStoryTestCard("180", 1, "", ""), sideStoryTestCard("181", 1, "cn/181", ""))
+	jp := sideStoryTestScript(t, "test_card_180_01", sideStoryTestTalk{"テスト話者", "テスト台詞です"})
+	cn := sideStoryTestScript(t, "test_card_180_01", sideStoryTestTalk{"测试说话人", "测试台词一"})
+	mustApplySideStory(t, s, sideStoryTestNow, SideStoryEpisodeFetch{Kind: "card", StoryID: "180", EpisodeKey: "1", JP: fetchedJP(jp)},
+		SideStoryEpisodeFetch{Kind: "card", StoryID: "181", EpisodeKey: "1", JP: fetchedJP(jp), CN: fetchedJP(cn)},
+		SideStoryEpisodeFetch{Kind: "card", StoryID: "181", EpisodeKey: "2", JP: fetchedJP(jp), CN: SideStoryFetchOutcome{Attempted: true, Missing: true}})
+	stored := map[string]sideStoryTestEpisodeState{}
+	for _, key := range []string{"180/1", "181/1", "181/2"} {
+		id, episode, _ := strings.Cut(key, "/")
+		stored[key] = sideStoryEpisodeState(t, s, "card", id, episode)
+	}
+	later := sideStoryTestNow.Add(time.Hour)
+	for _, jpFailure := range []SideStoryFetchOutcome{{Attempted: true, Err: "timeout", Transient: true}, {Attempted: true, Missing: true}} {
+		result := mustApplySideStory(t, s, later, SideStoryEpisodeFetch{Kind: "card", StoryID: "180", EpisodeKey: "1", JP: jpFailure},
+			SideStoryEpisodeFetch{Kind: "card", StoryID: "181", EpisodeKey: "1", JP: jpFailure})
+		for index, key := range []string{"180/1", "181/1"} {
+			id, episode, _ := strings.Cut(key, "/")
+			if result.Changed || !strings.HasPrefix(result.Episodes[index].Error, "ja-JP: ") {
+				t.Fatalf("%s JP %+v result %+v", key, jpFailure, result.Episodes[index])
+			}
+			if state := sideStoryEpisodeState(t, s, "card", id, episode); state != stored[key] {
+				t.Fatalf("%s JP %+v state %+v want %+v", key, jpFailure, state, stored[key])
+			}
+		}
+	}
+	// A pending CN keeps the episode queued, so its JP failure still backs off.
+	mustApplySideStory(t, s, later, SideStoryEpisodeFetch{Kind: "card", StoryID: "181", EpisodeKey: "2",
+		JP: SideStoryFetchOutcome{Attempted: true, Err: "timeout", Transient: true}})
+	if state := sideStoryEpisodeState(t, s, "card", "181", "2"); state.attempts != 1 ||
+		state.nextAttemptAt != later.Add(10*time.Minute).Unix() || state.lastError != "ja-JP: timeout" {
+		t.Fatalf("queued episode JP failure state %+v", state)
+	}
+}

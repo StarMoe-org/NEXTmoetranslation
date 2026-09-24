@@ -77,7 +77,15 @@ type sideStoryApplyEpisode struct {
 	cnPath, enPath   string
 	cnState, enState string
 	attempts         int
+	jpRefetch        bool
 	lastError        string
+}
+
+// queued mirrors SideStoryWorkQueueContext: the backfill fetches the episode
+// again once it is due.
+func (e sideStoryApplyEpisode) queued() bool {
+	return e.scriptSHA256 == "" || e.jpRefetch ||
+		(e.cnPath != "" && e.cnState == SideStoryStatePending) || (e.enPath != "" && e.enState == SideStoryStatePending)
 }
 
 // keptError returns the stored part of locale left in mismatch or error by
@@ -146,9 +154,10 @@ func (s *Store) ApplySideStoryFetchesContext(ctx context.Context, fetches []Side
 func applySideStoryFetchTx(ctx context.Context, tx *sql.Tx, fetch SideStoryEpisodeFetch, stamp int64) (SideStoryEpisodeApply, bool, error) {
 	out := SideStoryEpisodeApply{Kind: fetch.Kind, StoryID: fetch.StoryID, EpisodeKey: fetch.EpisodeKey}
 	var episode sideStoryApplyEpisode
-	err := tx.QueryRowContext(ctx, `SELECT script_sha256,cn_asset_path,en_asset_path,cn_state,en_state,attempts,last_error
+	err := tx.QueryRowContext(ctx, `SELECT script_sha256,cn_asset_path,en_asset_path,cn_state,en_state,attempts,jp_refetch,last_error
 		FROM side_story_episodes WHERE kind=? AND story_id=? AND episode_key=?`, fetch.Kind, fetch.StoryID, fetch.EpisodeKey).
-		Scan(&episode.scriptSHA256, &episode.cnPath, &episode.enPath, &episode.cnState, &episode.enState, &episode.attempts, &episode.lastError)
+		Scan(&episode.scriptSHA256, &episode.cnPath, &episode.enPath, &episode.cnState, &episode.enState, &episode.attempts,
+			&episode.jpRefetch, &episode.lastError)
 	if errors.Is(err, sql.ErrNoRows) {
 		out.Error = "episode not found"
 		return out, false, nil
@@ -182,6 +191,11 @@ func applySideStoryFetchTx(ctx context.Context, tx *sql.Tx, fetch SideStoryEpiso
 			}
 		}
 		out.Error = strings.Join(messages, "; ")
+		if !episode.queued() {
+			// Nothing would retry or clear the failure of a refresh; the
+			// stored script and lines are intact, so only the caller sees it.
+			return out, false, nil
+		}
 		_, err := tx.ExecContext(ctx, `UPDATE side_story_episodes SET attempts=?,next_attempt_at=?,last_error=?,updated_at=?
 			WHERE kind=? AND story_id=? AND episode_key=?`, attempts, stamp+int64(delay/time.Second), out.Error, stamp,
 			fetch.Kind, fetch.StoryID, fetch.EpisodeKey)
