@@ -1,5 +1,5 @@
 import type { EventStorySummary } from "@/lib/api";
-import { CATEGORY_LABELS, FIELD_LABELS } from "@/lib/labels";
+import { CATEGORY_LABELS, fieldLabel } from "@/lib/labels";
 
 export interface ConsoleHeaderProps {
   category: string;
@@ -30,7 +30,7 @@ export function ConsoleHeader({
           {CATEGORY_LABELS[category] || category} /{" "}
           {isEventStory
             ? currentStory?.eventName || currentStory?.eventNameJapanese || `Event #${field}`
-            : FIELD_LABELS[field] || field}
+            : fieldLabel(category, field)}
         </h2>
         <div className="realtime-meta" role="status" aria-live="polite">
           <span className={`realtime-status ${realtimeState}`}>

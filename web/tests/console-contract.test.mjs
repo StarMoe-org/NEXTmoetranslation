@@ -71,6 +71,10 @@ test("translation review keeps a fixed editor above an independently scrolling l
   assert.match(css, /@media \(max-width: 768px\)[\s\S]*\.translation-editor-pane \{ max-height: none; overflow-y: visible; \}/);
   assert.match(css, /\.translation-entry-list \{[\s\S]*overflow-y: auto;[\s\S]*overscroll-behavior: contain;/);
   assert.doesNotMatch(css, /translation-resizer|row-resize/);
+  // A long original (gacha description) sits beside the editor so the save buttons stay in the pane.
+  assert.match(consoleSource, /const longSource = sourceLines > 4 \|\| sourceText\.length > 240;/);
+  assert.match(consoleSource, /className=\{longSource \? "proof-panel proof-panel-long" : "proof-panel"\}/);
+  assert.match(css, /\.proof-panel-long \.proof-jp \.jp-body \{ max-height: 45vh; overflow-y: auto; \}\s*@media \(min-width: 1024px\) \{\s*\.proof-panel-long \{ display: grid; grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\); \}\s*\.proof-panel-long \.proof-jp \{ contain: size; overflow-y: auto;/);
 });
 
 test("locale changes expose save discard and cancel dirty choices", async () => {
@@ -194,7 +198,8 @@ test("lyrics collaboration reads an imperative dirty snapshot before parent effe
   const [consoleSource, editor] = await Promise.all([
     readConsoleSurface(), readLyricsEditor(),
   ]);
-  assert.match(editor, /snapshot: \(\) => \(\{[\s\S]*dirty: lyricsRef\.current != null/);
+  assert.match(editor, /snapshot: \(\) => \(\{[\s\S]*dirty: isDirtyNow\(\)/);
+  assert.match(editor, /lyricsDocumentDirty\(lyricsRef\.current, baselineRef\.current, collaboration \? collaboration\.hasLocalChanges\(\) : null\)/);
   assert.match(editor, /document: lyricsRef\.current \? JSON\.parse\(JSON\.stringify\(lyricsRef\.current\)\)/);
   assert.match(editor, /editionKey: activeTranslationEditionKeyRef\.current/);
   assert.match(consoleSource, /const lyricsSnapshot = lyricsEditorRef\.current\?\.snapshot\(\) \?\? null/);
@@ -331,7 +336,7 @@ test("lyrics workspace covers catalog, verified source import, draft, and public
   ]);
   const combinedEditor = `${editor}\n${sidebar}\n${metadata}\n${projection}`;
   for (const contract of [
-    "getCatalogMusic", "保存草稿", "候选来源", "使用此版本", "载入服务器版本", "取消发布",
+    "getCatalogMusic", "保存草稿", "保存并公开", "候选来源", "使用此版本", "载入服务器版本", "取消发布",
     "翻译", "校对", "translationCredit", "proofreadingCredit", "attribution",
   ]) {
     assert.ok(combinedEditor.includes(contract), `missing lyrics console contract: ${contract}`);
@@ -390,13 +395,15 @@ test("lyrics workspace covers catalog, verified source import, draft, and public
   assert.doesNotMatch(editor, /sourcePreview\.lines\.slice\(0, 12\)/);
   assert.match(editor, /role === "admin" && isLegacyLyricsDocument\(lyrics\) && <button[\s\S]*查找来源/);
   assert.match(editor, /确认载入草稿/);
-  assert.match(editor, /首次保存后永久锁定来源、行序\/ID 与日文原文/);
-  assert.match(editor, /保持每行日文拼接结果完全一致的前提下重新分段/);
+  assert.match(editor, /固定来源只能在首次保存前导入/);
+  assert.match(editor, /已保存修订仍可调整歌词结构与日文原文/);
+  assert.doesNotMatch(editor, /永久锁定来源|已永久锁定|保持每行日文拼接结果完全一致的前提下重新分段/);
   assert.doesNotMatch(lineEditor, /value={segment\.text} readOnly=/);
   assert.match(lineEditor, /aria-label={`第 \$\{lineNumber\} 行分段 \$\{segmentNumber\}`}/);
   assert.match(editor, /<LyricsLineEditor/);
   assert.match(editor, /const patch: Partial<LyricsEditorLine> = \{ segments \} as Partial<LyricsEditorLine>;[\s\S]*if \(sourceMayChange\) patch\.japanese/);
-  assert.match(editor, /setSegments\(lineIndex, segments, lyrics\.revision === 0\)/);
+  assert.match(editor, /setSegments\(lineIndex, segments, activeSideSourceMutable\)/);
+  assert.doesNotMatch(editor, /lyrics\.revision > 0 \|\| activeSideReadOnly/);
   assert.match(editor, /publicationChecks/);
   assert.match(api, /getProjectionStatus = \(musicId\?: number\) =>/);
   assert.match(editor, /previousProjectionGeneration = status\.generation/);

@@ -5,7 +5,9 @@ import type {
   APIError, CatalogMusicItem, CatalogPerformerItem, LyricsEditorLine, LyricsRenditionPerformer,
   LyricsSourceCandidate, LyricsSourcePreview, ProjectionStatus, RenditionLyricsDocument, SongLyricsDocument,
 } from "@/lib/api";
-import { isLegacyLyricsDocument, type LyricsProjectionKind } from "@/components/lyrics/lyricsDocumentModel";
+import {
+  isLegacyLyricsDocument, sourceV3PublicStateFor, type LyricsProjectionKind,
+} from "@/components/lyrics/lyricsDocumentModel";
 import {
   isRenditionLyricsDocument, lyricsHasPerformerSegmentation, lyricsRenditionByKey, lyricsRenditionKeys,
   lyricsVersionSaveProblems, normalizedLyricsVersions, projectGameLyricsLines,
@@ -18,7 +20,8 @@ import {
   LyricsCollaboration,
   type LyricsCollaborationPeer,
   type LyricsCollaborationStatus,
-  canonicalLyricsJSON,
+  lyricsDocumentDirty,
+  lyricsDocumentSaveable,
 } from "@/lib/yjs-lyrics";
 
 /** Holds the document-scoped editor state shared by the loader, command, source and persistence hooks. */
@@ -49,7 +52,8 @@ export function useLyricsEditorState(producerWriteLocked: boolean) {
   const collaborationRef = useRef<LyricsCollaboration | null>(null);
   const collaborationGenerationRef = useRef(0);
   const collaborationSyncedRef = useRef(false);
-  const collaborationInitialBaselineRef = useRef<number | null>(null);
+  // Authority envelope of the shared document the baseline was taken from; null until the first sync.
+  const collaborationBaselineEnvelopeRef = useRef<string | null>(null);
   const collaborationDocumentJSONRef = useRef("");
   const collaborationAuthoritativeRef = useRef<SongLyricsDocument | null>(null);
   const collaborationStructuralConflictRef = useRef(false);
@@ -57,6 +61,7 @@ export function useLyricsEditorState(producerWriteLocked: boolean) {
   const [collaborationPeers, setCollaborationPeers] = useState<LyricsCollaborationPeer[]>([]);
   const [collaborationError, setCollaborationError] = useState("");
   const [collaborationStructuralConflict, setCollaborationStructuralConflict] = useState(false);
+  const [collaborationLocalChanges, setCollaborationLocalChanges] = useState(false);
   const [confirmSourceImport, setConfirmSourceImport] = useState(false);
   const [confirmImportRecovery, setConfirmImportRecovery] = useState<SongLyricsDocument | null>(null);
   const [confirmConflictReload, setConfirmConflictReload] = useState(false);
@@ -85,7 +90,15 @@ export function useLyricsEditorState(producerWriteLocked: boolean) {
   const linesContainerRef = useRef<HTMLDivElement | null>(null);
   const segmentInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  const dirty = lyrics != null && canonicalLyricsJSON(lyrics) !== baseline;
+  const collaborationOwnsDocument = !localSourceImportDraft && !collaborationStructuralConflict &&
+    collaborationStatus !== "offline";
+  const dirty = lyricsDocumentDirty(lyrics, baseline, collaborationOwnsDocument ? collaborationLocalChanges : null);
+  const saveable = lyricsDocumentSaveable(lyrics, baseline);
+  // The catalog reloads after saves and projection rebuilds; the selection is a snapshot.
+  const selectedCatalogItem = selectedMusic
+    ? catalog.find((item) => item.musicId === selectedMusic.musicId) || selectedMusic
+    : null;
+  const sourceV3PublicState = sourceV3PublicStateFor(lyrics, selectedCatalogItem);
   const lyricsRef = useRef<SongLyricsDocument | null>(lyrics);
   const baselineRef = useRef(baseline);
   const activeTranslationEditionKeyRef = useRef(activeTranslationEditionKey);
@@ -115,12 +128,13 @@ export function useLyricsEditorState(producerWriteLocked: boolean) {
     sourceRetry, setSourceRetry,
     sourcePreview, setSourcePreview,
     sourceImportTokenRef,
-    collaborationRef, collaborationGenerationRef, collaborationSyncedRef, collaborationInitialBaselineRef,
+    collaborationRef, collaborationGenerationRef, collaborationSyncedRef, collaborationBaselineEnvelopeRef,
     collaborationDocumentJSONRef, collaborationAuthoritativeRef, collaborationStructuralConflictRef,
     collaborationStatus, setCollaborationStatus,
     collaborationPeers, setCollaborationPeers,
     collaborationError, setCollaborationError,
     collaborationStructuralConflict, setCollaborationStructuralConflict,
+    collaborationLocalChanges, setCollaborationLocalChanges,
     confirmSourceImport, setConfirmSourceImport,
     confirmImportRecovery, setConfirmImportRecovery,
     confirmConflictReload, setConfirmConflictReload,
@@ -137,7 +151,7 @@ export function useLyricsEditorState(producerWriteLocked: boolean) {
     projectionMessage, setProjectionMessage,
     projectionSequence,
     linesContainerRef, segmentInputRefs,
-    dirty, lyricsRef, baselineRef, activeTranslationEditionKeyRef,
+    dirty, saveable, sourceV3PublicState, lyricsRef, baselineRef, activeTranslationEditionKeyRef,
   };
 }
 
@@ -178,8 +192,14 @@ export function useLyricsActiveTarget(state: LyricsEditorState) {
     ? "exact_projection"
     : null;
   const activeSideReadOnly = activeVersion === "game" && gameSideReadOnlyReason !== null;
+  // Legacy lyrics keep structure and Japanese editable after the first save; source-v3
+  // renditions take their Japanese and ruby from the stored source document.
   const activeSourceFactsReadOnly = Boolean(activeRendition) || activeSideReadOnly;
-  const activeSideSourceMutable = Boolean(lyrics && lyrics.revision === 0 && !activeSourceFactsReadOnly);
+  const activeSideSourceMutable = Boolean(lyrics && !activeSourceFactsReadOnly);
+  // The recovery import ledger owns this source document, so saves refuse any change to
+  // segments, performers or stanza breaks as well; translations and credits stay editable.
+  const recoveryLedgerOwned = renditionDocument?.recoveryLedgerOwned === true;
+  const activeSourceLayoutLocked = activeSideReadOnly || recoveryLedgerOwned;
   const activeTranslationCredit = activeRendition
     ? activeRendition.translationCredits?.translation || ""
     : legacyLyrics?.translationCredit || "";
@@ -198,7 +218,7 @@ export function useLyricsActiveTarget(state: LyricsEditorState) {
   return {
     renditionKeys, activeRendition, legacyLyrics, renditionDocument, translationEditions, activeTranslationEdition,
     availableVersions, hasGameVersion, projectionKind, activeSide, activeLines, activePerformerOptions,
-    gameSideReadOnlyReason, activeSideReadOnly, activeSideSourceMutable,
+    gameSideReadOnlyReason, activeSideReadOnly, activeSideSourceMutable, recoveryLedgerOwned, activeSourceLayoutLocked,
     activeTranslationCredit, activeProofreadingCredit, gameProjection, versionSaveProblems, componentProvenance,
     hasPerformerSegmentation,
   };

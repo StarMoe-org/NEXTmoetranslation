@@ -6,7 +6,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   cards: "卡牌", skills: "技能", events: "活动", information: "公告", music: "音乐", gacha: "卡池",
   virtualLive: "虚拟Live", sticker: "贴纸", comic: "漫画",
   mysekai: "我的世界", costumes: "服装", characters: "角色", units: "团体",
-  eventStory: "活动剧情",
+  eventStory: "活动剧情", gachaInfo: "卡池简介与说明",
 };
 
 export const FIELD_LABELS: Record<string, string> = {
@@ -18,6 +18,15 @@ export const FIELD_LABELS: Record<string, string> = {
   introduction: "自我介绍", unitName: "团体名", profileSentence: "团体简介",
   subGenre: "子分类", material: "材料",
 };
+
+// Field names whose meaning differs by category; these override FIELD_LABELS.
+const CATEGORY_FIELD_LABELS: Record<string, Record<string, string>> = {
+  gachaInfo: { summary: "卡池简介", bubbleText: "气泡文字", description: "招募说明" },
+};
+
+export function fieldLabel(category: string, field: string): string {
+  return CATEGORY_FIELD_LABELS[category]?.[field] || FIELD_LABELS[field] || field;
+}
 
 export const SOURCE_LABELS: Record<string, string> = {
   cn: "官方", human: "人工", pinned: "锁定", llm: "AI", unknown: "未知",
@@ -36,13 +45,14 @@ export const DETAIL_BUILDERS: Record<string, (id: string) => string> = {
   cards: (id) => `${SOURCE_BASE}/cards/${id}/`,
   events: (id) => `${SOURCE_BASE}/events/${id}/`,
   gacha: (id) => `${SOURCE_BASE}/gacha/${id}/`,
+  gachaInfo: (id) => `${SOURCE_BASE}/gacha/${id}/`,
   virtualLive: (id) => `${SOURCE_BASE}/live/${id}/`,
   music: (id) => `${SOURCE_BASE}/music/${id}/`,
   mysekai: (id) => `${SOURCE_BASE}/mysekai/${id}/`,
   costumes: (id) => `${SOURCE_BASE}/costumes/${id}/`,
   characters: (id) => `${SOURCE_BASE}/character/${id}/`,
 };
-export const EVENTSTORY_DETAIL = (id: string) => `${SOURCE_BASE}/eventstory/${id}/`;
+export const EVENTSTORY_DETAIL = (id: string) => `${SOURCE_BASE}/story/event/${id}/`;
 
 /**
  * Build a Moesekai detail-page URL for the given category.

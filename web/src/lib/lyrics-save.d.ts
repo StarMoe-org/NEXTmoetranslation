@@ -2,7 +2,7 @@ import type { RenditionLyricsDocument, SongLyrics, SongLyricsDocument } from "./
 
 export type LyricsSavePayload =
   | (SongLyrics & { sourceImportToken?: string; clientId: string })
-  | (Omit<RenditionLyricsDocument, "defaultTranslationEditionKey" | "translationEditions"> & {
+  | (Omit<RenditionLyricsDocument, "defaultTranslationEditionKey" | "translationEditions" | "recoveryLedgerOwned"> & {
       sourceImportToken?: string;
       clientId: string;
     });

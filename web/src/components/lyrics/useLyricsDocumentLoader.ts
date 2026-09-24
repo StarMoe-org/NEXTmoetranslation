@@ -11,7 +11,17 @@ import {
   getCatalogMusic, getCatalogPerformers, getClientID, getUsername,
   getLyrics, issueLyricsCollabTicket, subscribeSessionChanged,
 } from "@/lib/api";
-import { LyricsCollaboration, canonicalLyricsJSON } from "@/lib/yjs-lyrics";
+import { LyricsCollaboration, canonicalLyricsJSON, lyricsAuthorityEnvelopeKey } from "@/lib/yjs-lyrics";
+
+const translationEditionKeyOf = (document: SongLyricsDocument) =>
+  isRenditionLyricsDocument(document) ? (document as RenditionLyricsDocument).translationEditionKey : "";
+
+// Rooms are seeded from the default translation edition of the stored document; while the
+// shared document still carries that document's envelope, any other difference is unsaved.
+function roomHoldsStoredDocument(stored: SongLyricsDocument | null, shared: SongLyricsDocument): stored is SongLyricsDocument {
+  return stored != null && lyricsAuthorityEnvelopeKey(stored) === lyricsAuthorityEnvelopeKey(shared) &&
+    translationEditionKeyOf(stored) === translationEditionKeyOf(shared);
+}
 
 /** Owns catalog and performer loading, song selection, the Yjs provider lifecycle and the stale-load fence. */
 export function useLyricsDocumentLoader(state: LyricsEditorState) {
@@ -24,9 +34,10 @@ export function useLyricsDocumentLoader(state: LyricsEditorState) {
     setCandidates, setSourceSearchCompleted, setSourceActivity, setSourcePreviewCandidate,
     setSourceRetry, setSourcePreview, sourceImportTokenRef,
     setConfirmSourceImport, setConfirmImportRecovery, setConfirmConflictReload,
-    collaborationRef, collaborationGenerationRef, collaborationSyncedRef, collaborationInitialBaselineRef,
+    collaborationRef, collaborationGenerationRef, collaborationSyncedRef, collaborationBaselineEnvelopeRef,
     collaborationDocumentJSONRef, collaborationAuthoritativeRef, collaborationStructuralConflictRef,
     setCollaborationStatus, setCollaborationPeers, setCollaborationError, setCollaborationStructuralConflict,
+    setCollaborationLocalChanges,
     setActiveTranslationEditionKey, activeTranslationEditionKeyRef,
     activeRenditionKey, setActiveRenditionKey, activeVersion, setActiveVersion,
     setEditionWorkflow, setPendingTransition, setPendingAnnotationOperation,
@@ -75,30 +86,62 @@ export function useLyricsDocumentLoader(state: LyricsEditorState) {
     collaborationRef.current?.destroy();
     collaborationRef.current = null;
     collaborationSyncedRef.current = false;
-    collaborationInitialBaselineRef.current = null;
+    collaborationBaselineEnvelopeRef.current = null;
     collaborationDocumentJSONRef.current = "";
     collaborationAuthoritativeRef.current = null;
     collaborationStructuralConflictRef.current = false;
     setCollaborationPeers([]);
     setCollaborationError("");
     setCollaborationStructuralConflict(false);
+    setCollaborationLocalChanges(false);
     setCollaborationStatus("offline");
-  }, [collaborationAuthoritativeRef, collaborationDocumentJSONRef, collaborationGenerationRef, collaborationInitialBaselineRef, collaborationRef, collaborationStructuralConflictRef, collaborationSyncedRef, setCollaborationError, setCollaborationPeers, setCollaborationStatus, setCollaborationStructuralConflict]);
+  }, [collaborationAuthoritativeRef, collaborationBaselineEnvelopeRef, collaborationDocumentJSONRef, collaborationGenerationRef, collaborationRef, collaborationStructuralConflictRef, collaborationSyncedRef, setCollaborationError, setCollaborationLocalChanges, setCollaborationPeers, setCollaborationStatus, setCollaborationStructuralConflict]);
+
+  const replaceEditionURL = useCallback((editionKey: string) => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (editionKey) url.searchParams.set("edition", editionKey);
+    else url.searchParams.delete("edition");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, []);
 
   const startCollaboration = useCallback((musicID: number) => {
     const generation = ++collaborationGenerationRef.current;
     collaborationRef.current?.destroy();
     collaborationRef.current = null;
     collaborationSyncedRef.current = false;
-    collaborationInitialBaselineRef.current = null;
+    collaborationBaselineEnvelopeRef.current = null;
     collaborationDocumentJSONRef.current = "";
     collaborationStructuralConflictRef.current = false;
     setCollaborationPeers([]);
     setCollaborationError("");
     setCollaborationStructuralConflict(false);
+    setCollaborationLocalChanges(false);
     setCollaborationStatus("connecting");
     const clientId = getClientID();
     const username = getUsername();
+    // Stored content for the current authority envelope once read back from the server.
+    let storedJSON: string | null = null;
+    // The server snapshots the room before it broadcasts a new envelope, and the shared
+    // content the envelope arrives with can hold edits made in between: read the stored
+    // document so they stay savable, and dirty for the client that made them.
+    const adoptStoredBaseline = async (shared: SongLyricsDocument, sharedJSON: string) => {
+      const envelope = lyricsAuthorityEnvelopeKey(shared);
+      let stored: SongLyricsDocument;
+      try {
+        stored = editableLyricsDocument(await getLyrics(musicID, translationEditionKeyOf(shared) || undefined));
+      } catch {
+        return;
+      }
+      if (collaborationGenerationRef.current !== generation || selectedMusicIDRef.current !== musicID ||
+          collaborationBaselineEnvelopeRef.current !== envelope || !roomHoldsStoredDocument(stored, shared)) return;
+      storedJSON = canonicalLyricsJSON(stored);
+      collaborationAuthoritativeRef.current = stored;
+      setBaseline(storedJSON);
+      if (sharedJSON === storedJSON || collaborationDocumentJSONRef.current === storedJSON) {
+        collaborationRef.current?.settleRetainedLocalChanges();
+      }
+    };
     const collaboration = new LyricsCollaboration({
       musicId: musicID,
       clientId,
@@ -120,6 +163,7 @@ export function useLyricsDocumentLoader(state: LyricsEditorState) {
           conflicted?.destroy();
           collaborationSyncedRef.current = false;
           setCollaborationStructuralConflict(true);
+          setCollaborationLocalChanges(false);
           setCollaborationStatus("error");
           setCollaborationPeers([]);
           setCollaborationError("");
@@ -127,7 +171,7 @@ export function useLyricsDocumentLoader(state: LyricsEditorState) {
           if (authoritative) {
             const editable = editableLyricsDocument(authoritative);
             const serialized = canonicalLyricsJSON(editable);
-            collaborationInitialBaselineRef.current = editable.revision;
+            collaborationBaselineEnvelopeRef.current = lyricsAuthorityEnvelopeKey(editable);
             collaborationDocumentJSONRef.current = serialized;
             documentGenerationRef.current++;
             setLyrics(editable);
@@ -139,6 +183,7 @@ export function useLyricsDocumentLoader(state: LyricsEditorState) {
         }
         collaborationSyncedRef.current = snapshot.synced;
         setCollaborationStatus(snapshot.status);
+        setCollaborationLocalChanges(snapshot.localChanges);
         setCollaborationPeers(snapshot.peers);
         setCollaborationError(snapshot.error?.message || "");
         if (snapshot.status === "error" && !snapshot.document) {
@@ -148,23 +193,45 @@ export function useLyricsDocumentLoader(state: LyricsEditorState) {
         if (!snapshot.synced || !snapshot.document) return;
         const editable = editableLyricsDocument(snapshot.document);
         const serialized = canonicalLyricsJSON(editable);
-        if (collaborationInitialBaselineRef.current === null) {
-          collaborationInitialBaselineRef.current = editable.revision;
+        const envelope = lyricsAuthorityEnvelopeKey(editable);
+        if (collaborationBaselineEnvelopeRef.current === null) {
+          collaborationBaselineEnvelopeRef.current = envelope;
+          const stored = collaborationAuthoritativeRef.current;
+          setBaseline(roomHoldsStoredDocument(stored, editable) ? canonicalLyricsJSON(stored) : serialized);
+        } else if (collaborationBaselineEnvelopeRef.current !== envelope) {
+          // A checkpoint, publication or reseed moved the envelope. Undoing earlier history
+          // would now revert stored content; the shared content stands in as the baseline
+          // until the stored document is read.
+          collaborationBaselineEnvelopeRef.current = envelope;
+          storedJSON = null;
+          collaborationRef.current?.retireLocalHistory();
           setBaseline(serialized);
+          void adoptStoredBaseline(editable, serialized);
         }
         if (collaborationDocumentJSONRef.current !== serialized) {
           collaborationDocumentJSONRef.current = serialized;
           documentGenerationRef.current++;
           setLyrics(editable);
+          // A room holds one translation edition at a time, and saving writes that one.
+          const roomEditionKey = translationEditionKeyOf(editable);
+          if (roomEditionKey && roomEditionKey !== activeTranslationEditionKeyRef.current) {
+            setActiveTranslationEditionKey(roomEditionKey);
+            replaceEditionURL(roomEditionKey);
+          }
         }
         setLoading(false);
         setError(null);
+        if (storedJSON === serialized) collaborationRef.current?.settleRetainedLocalChanges();
       },
     });
     collaborationRef.current = collaboration;
-  }, [collaborationAuthoritativeRef, collaborationDocumentJSONRef, collaborationGenerationRef, collaborationInitialBaselineRef, collaborationRef, collaborationStructuralConflictRef, collaborationSyncedRef, documentGenerationRef, selectedMusicIDRef, setBaseline, setCollaborationError, setCollaborationPeers, setCollaborationStatus, setCollaborationStructuralConflict, setError, setLoading, setLyrics]);
+  }, [activeTranslationEditionKeyRef, collaborationAuthoritativeRef, collaborationBaselineEnvelopeRef, collaborationDocumentJSONRef, collaborationGenerationRef, collaborationRef, collaborationStructuralConflictRef, collaborationSyncedRef, documentGenerationRef, replaceEditionURL, selectedMusicIDRef, setActiveTranslationEditionKey, setBaseline, setCollaborationError, setCollaborationLocalChanges, setCollaborationPeers, setCollaborationStatus, setCollaborationStructuralConflict, setError, setLoading, setLyrics]);
 
-  useEffect(() => () => stopCollaboration(), [stopCollaboration]);
+  useEffect(() => () => {
+    // Retire in-flight loads so a late getLyrics cannot start a connection after unmount.
+    lyricsLoadSequence.current++;
+    stopCollaboration();
+  }, [lyricsLoadSequence, stopCollaboration]);
   useEffect(() => subscribeSessionChanged(() => collaborationRef.current?.reconnectNow()), [collaborationRef]);
 
   useEffect(() => {
@@ -176,14 +243,6 @@ export function useLyricsDocumentLoader(state: LyricsEditorState) {
 
   const requestIsCurrent = useCallback((sequence: number, musicID: number) =>
     lyricsLoadSequence.current === sequence && selectedMusicIDRef.current === musicID, [lyricsLoadSequence, selectedMusicIDRef]);
-
-  const replaceEditionURL = useCallback((editionKey: string) => {
-    if (typeof window === "undefined") return;
-    const url = new URL(window.location.href);
-    if (editionKey) url.searchParams.set("edition", editionKey);
-    else url.searchParams.delete("edition");
-    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-  }, []);
 
   const acceptAuthoritativeDocument = useCallback((
     loaded: SongLyricsDocument,

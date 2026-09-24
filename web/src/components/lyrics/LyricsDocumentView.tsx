@@ -5,11 +5,13 @@ import { LyricsEditionMenu } from "@/components/LyricsEditionMenu";
 import { LyricsCatalogSidebar, runtimeLyricsStateLabel, runtimeLyricsVersionsLabel } from "@/components/lyrics/LyricsCatalogSidebar";
 import { LyricsCollaborationBanner } from "@/components/lyrics/LyricsCollaborationBanner";
 import { LyricsLineEditor } from "@/components/lyrics/LyricsLineEditor";
-import { LyricsMetadataCard } from "@/components/lyrics/LyricsMetadataCard";
+import { LyricsMetadataCard, LyricsSourceMetadataCard } from "@/components/lyrics/LyricsMetadataCard";
 import { LyricsProjectionStatusCard } from "@/components/lyrics/LyricsProjectionStatusCard";
+import { LyricsRecoveryLedgerNotice } from "@/components/lyrics/LyricsRecoveryTakeover";
 import { LyricsVocalCard } from "@/components/lyrics/VocalPlayer";
 import {
   databaseAvailabilityDescription, detailLabel, isLegacyLyricsDocument, sourceImportFailureIsTerminal, sourceLabel,
+  sourceV3SaveWording,
 } from "@/components/lyrics/lyricsDocumentModel";
 import type { LyricsActiveTarget, LyricsEditorState } from "@/components/lyrics/lyricsEditorState";
 import type { LyricsDocumentCommands } from "@/components/lyrics/useLyricsDocumentCommands";
@@ -48,13 +50,15 @@ export interface LyricsDocumentViewProps {
   role: "admin" | "editor" | "";
   publicationChecks: Array<{ label: string; complete: boolean }>;
   publicationComplete: boolean;
+  onRequestRecoveryTakeover?: () => void;
 }
 
 export function LyricsDocumentView({
   state, activeTarget, loader, commands, source, persistence, role, publicationChecks, publicationComplete,
+  onRequestRecoveryTakeover,
 }: LyricsDocumentViewProps) {
   const {
-    query, setQuery, catalog, catalogLoading, catalogError, selectedMusic, busy, loading, lyrics, dirty,
+    query, setQuery, catalog, catalogLoading, catalogError, selectedMusic, busy, loading, lyrics, saveable, sourceV3PublicState,
     databaseAvailabilityOnly, runtimeOnlyMissingDatabaseSource, collaborationStructuralConflict,
     collaborationRef, collaborationStatus, collaborationError, collaborationPeers, localSourceImportDraft,
     writeLocked, error, performerError, sourceImportTokenRef, sourceRetry, sourceActivity,
@@ -66,7 +70,7 @@ export function LyricsDocumentView({
   const {
     renditionDocument, translationEditions, activeTranslationEdition, renditionKeys, availableVersions,
     hasGameVersion, gameSideReadOnlyReason, projectionKind, activeRendition, legacyLyrics, activeSide,
-    activeLines, activeSideReadOnly, activeSideSourceMutable, activePerformerOptions,
+    activeLines, activeSideReadOnly, activeSideSourceMutable, recoveryLedgerOwned, activeSourceLayoutLocked, activePerformerOptions,
     activeTranslationCredit, activeProofreadingCredit, componentProvenance, versionSaveProblems,
     gameProjection, hasPerformerSegmentation,
   } = activeTarget;
@@ -78,6 +82,7 @@ export function LyricsDocumentView({
   } = commands;
   const { findSource, previewSource } = source;
   const { save, publish, requestEditionSwitch, requestEditionCommand, refreshProjectionStatus } = persistence;
+  const sourceV3Wording = sourceV3SaveWording(sourceV3PublicState);
   const [previewLocale, setPreviewLocale] = useState<"ja-JP" | "zh-CN" | "en-US">("zh-CN");
   const previewTabRefs = useRef<Record<"ja-JP" | "zh-CN" | "en-US", HTMLButtonElement | null>>({
     "ja-JP": null, "zh-CN": null, "en-US": null,
@@ -101,7 +106,7 @@ export function LyricsDocumentView({
   const handleEditorKeyDown = (event: React.KeyboardEvent<HTMLFieldSetElement>) => {
     if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "s") return;
     event.preventDefault();
-    if (!busy && !writeLocked && dirty) void save();
+    if (!busy && !writeLocked && saveable) void save();
   };
 
   const previewLocales = ["ja-JP", "zh-CN", "en-US"] as const;
@@ -118,6 +123,22 @@ export function LyricsDocumentView({
     setPreviewLocale(nextLocale);
     previewTabRefs.current[nextLocale]?.focus();
   };
+
+  // Collaboration states that lock writes stay in view; the ready/local-draft states are technical detail.
+  const collaborationNeedsAttention = collaborationStructuralConflict ||
+    (!localSourceImportDraft && collaborationStatus !== "synced");
+  const collaborationBanner = (
+    <LyricsCollaborationBanner
+      collaborationStructuralConflict={collaborationStructuralConflict}
+      localSourceImportDraft={localSourceImportDraft}
+      collaborationStatus={collaborationStatus}
+      collaborationError={collaborationError}
+      collaborationPeers={collaborationPeers}
+      busy={busy}
+      onReload={() => selectedMusic && void performChooseMusic(selectedMusic)}
+      onReconnect={() => collaborationRef.current?.reconnectNow()}
+    />
+  );
 
   return (
     <>
@@ -176,61 +197,105 @@ export function LyricsDocumentView({
               </div>
               <div className="lyrics-actions">
                 {role === "admin" && isLegacyLyricsDocument(lyrics) && <button className="btn btn-secondary" onClick={findSource} disabled={busy || writeLocked || lyrics.revision > 0}>{sourceActivity === "searching" ? "正在查找…" : "查找来源"}</button>}
-                <button className="btn btn-primary" onClick={save} disabled={busy || writeLocked || !dirty}>保存草稿</button>
+                <button className="btn btn-primary" onClick={save} disabled={busy || writeLocked || !saveable}>{sourceV3Wording ? sourceV3Wording.button : "保存草稿"}</button>
                 {role === "admin" && isLegacyLyricsDocument(lyrics) && lyrics.revision > 0 && lyrics.status !== "published" && <button className="btn btn-secondary" onClick={() => publish(true)} disabled={busy || writeLocked}>发布当前修订</button>}
                 {role === "admin" && isLegacyLyricsDocument(lyrics) && Boolean(lyrics.publishedRevision) && <button className="btn btn-secondary" onClick={() => publish(false)} disabled={busy || writeLocked}>取消发布 revision {lyrics.publishedRevision}</button>}
               </div>
             </div>
 
-            <LyricsCollaborationBanner
-              collaborationStructuralConflict={collaborationStructuralConflict}
-              localSourceImportDraft={localSourceImportDraft}
-              collaborationStatus={collaborationStatus}
-              collaborationError={collaborationError}
-              collaborationPeers={collaborationPeers}
-              busy={busy}
-              onReload={() => void performChooseMusic(selectedMusic)}
-              onReconnect={() => collaborationRef.current?.reconnectNow()}
-            />
+            {collaborationNeedsAttention && collaborationBanner}
+
+            {recoveryLedgerOwned && <LyricsRecoveryLedgerNotice role={role} publicState={sourceV3PublicState} disabled={busy || writeLocked} onConvert={onRequestRecoveryTakeover} />}
 
             <LyricsVocalCard musicId={selectedMusic.musicId} />
 
-            {renditionDocument ? (
-              <div className="lyrics-lock-notice locked" role="status">
-                <strong>Plural source facts 已由固定证据永久锁定</strong>
-                <span>当前编辑器按 stable rendition key 与 Full/Game side 分开保存简中译文，并保留每个 rendition 的翻译/校对署名。Full/Game source text、行 ID/顺序、relation、provenance、演唱者、分段、ruby 与英文均不会通过此路由改写；exact projection 的 Game 仍跟随 Full。</span>
-              </div>
-            ) : lyrics.revision === 0 ? (
-              <div className="lyrics-lock-notice" role="note">
-                <strong>首次保存后永久锁定来源、行序/ID 与日文原文</strong>
-                <span>保存后，来源资料、歌词行顺序与编号、日文原文将不可直接修改。请先完成来源核对、行顺序和分段文字检查；后续仍可在不改变日文全文的前提下重新分段，并编辑中英翻译、演唱者与备注。</span>
-              </div>
-            ) : (
-              <div className="lyrics-lock-notice locked" role="status">
-                <strong>来源、行序/ID 与日文原文已永久锁定</strong>
-                <span>当前修订可在保持每行日文拼接结果完全一致的前提下重新分段，并调整中英翻译、演唱者与备注。如需修正来源、行序或日文原文，必须另行设计并审核显式迁移流程。</span>
-              </div>
-            )}
+            <details className="lyrics-technical-details">
+              <summary><strong>技术详情</strong><span>协作状态、来源与发布说明、公共文件、版本关系与组件 provenance</span></summary>
+              <div className="lyrics-technical-details-body">
+                {!collaborationNeedsAttention && collaborationBanner}
 
-            {renditionDocument ? (
-              <div className="lyrics-publication-progress" role="note">
-                <div><strong>Public v3 发布由 recovery batch 管理</strong><span>此页面不会调用 legacy publish/unpublish</span></div>
-                <ul><li className="complete"><span aria-hidden="true">✓</span>可按 stable key 独立保存 Full、Game-only 与 independent Game 简中译文；exact projection Game 继续由 Full 推导</li></ul>
-              </div>
-            ) : (
-              <div className="lyrics-publication-progress" role="status" aria-live="polite">
-                <div><strong>发布准备</strong><span>{publicationComplete ? "已满足发布前置条件" : `还需完成 ${publicationChecks.filter((check) => !check.complete).length} 项`}</span></div>
-                <ul>{publicationChecks.map((check) => <li key={check.label} className={check.complete ? "complete" : "pending"}><span aria-hidden="true">{check.complete ? "✓" : "○"}</span>{check.label}</li>)}</ul>
-              </div>
-            )}
+                {renditionDocument ? (
+                  <div className="lyrics-lock-notice locked" role="status">
+                    <strong>Plural source facts 已由固定证据永久锁定</strong>
+                    <span>当前编辑器按 stable rendition key 与 Full/Game side 分开保存简中译文，并保留每个 rendition 的翻译/校对署名。Full/Game source text、行 ID/顺序、relation、provenance、演唱者、分段、ruby 与英文均不会通过此路由改写；exact projection 的 Game 仍跟随 Full。</span>
+                  </div>
+                ) : lyrics.revision === 0 ? (
+                  <div className="lyrics-lock-notice" role="note">
+                    <strong>固定来源只能在首次保存前导入</strong>
+                    <span>请先完成来源核对。首次保存后仍可增删、移动歌词行，修改分段文字（日文原文随之更新）与注音，并编辑中英翻译、演唱者与备注。</span>
+                  </div>
+                ) : (
+                  <div className="lyrics-lock-notice" role="note">
+                    <strong>已保存修订仍可调整歌词结构与日文原文</strong>
+                    <span>可以增删、移动歌词行，修改分段文字（日文原文随之更新）与注音，并调整中英翻译、演唱者与备注；外部固定来源只能在首次保存前导入。</span>
+                  </div>
+                )}
 
-            <LyricsProjectionStatusCard
-              projectionState={projectionState}
-              projectionStatus={projectionStatus}
-              projectionMessage={projectionMessage}
-              busy={busy}
-              onRefresh={() => void refreshProjectionStatus()}
-            />
+                {sourceV3Wording ? (
+                  <div className="lyrics-publication-progress" role="note">
+                    <div><strong>{sourceV3Wording.title}</strong><span>{sourceV3Wording.detail}</span></div>
+                    <ul><li className="complete"><span aria-hidden="true">✓</span>可按 stable key 独立保存 Full、Game-only 与 independent Game 简中译文；exact projection Game 继续由 Full 推导</li></ul>
+                  </div>
+                ) : (
+                  <div className="lyrics-publication-progress" role="status" aria-live="polite">
+                    <div><strong>发布准备</strong><span>{publicationComplete ? "已满足发布前置条件" : `还需完成 ${publicationChecks.filter((check) => !check.complete).length} 项`}</span></div>
+                    <ul>{publicationChecks.map((check) => <li key={check.label} className={check.complete ? "complete" : "pending"}><span aria-hidden="true">{check.complete ? "✓" : "○"}</span>{check.label}</li>)}</ul>
+                  </div>
+                )}
+
+                <LyricsProjectionStatusCard
+                  projectionState={projectionState}
+                  projectionStatus={projectionStatus}
+                  projectionMessage={projectionMessage}
+                  busy={busy}
+                  onRefresh={() => void refreshProjectionStatus()}
+                />
+
+                <div className="lyrics-version-notes">
+                  {activeRendition && <p>每个 stable key 都保留自己的 Full / Game、relation、演唱者分段、ruby、翻译与翻译/校对署名；即使文本相同也不会与其他 family 合并。</p>}
+                  <p>{activeRendition
+                    ? activeVersion === "game" && gameSideReadOnlyReason === "exact_projection"
+                      ? `Game 只引用同一 stable key（${activeRendition.key}）的 Full 行 ID；Game 自有分段和 ruby 原样保留，简中译文由 Full 对应行同步。`
+                      : activeVersion === "game" && projectionKind === "game_only"
+                        ? `${activeRendition.key} 是 Game-only rendition，没有 Full peer；Game 简中按该 stable key/side 独立保存，source facts 与英文保持只读。`
+                        : activeVersion === "game"
+                          ? `${activeRendition.key} 的 independent Game 简中按该 stable key/side 独立保存，不会覆盖 Full 或其他 rendition family。`
+                          : `${activeRendition.key} 的 Full 简中按该 stable key/side 独立保存；source facts 与英文保持只读。`
+                    : activeVersion === "full"
+                      ? "singular v2 Full 保持原有可编辑行为。"
+                      : "singular v2 Game 继续作为同一 Full 的只读行 ID 投影，不做有损 v2 coercion。"}</p>
+                </div>
+
+                <LyricsSourceMetadataCard
+                  activeRendition={activeRendition}
+                  legacyLyrics={legacyLyrics}
+                  activeVersion={activeVersion}
+                  projectionKind={projectionKind}
+                  writeLocked={writeLocked}
+                  onUpdateLyrics={updateLyrics}
+                />
+
+                <section className="lyrics-component-provenance" aria-labelledby="lyrics-component-provenance-title">
+                  <div><strong id="lyrics-component-provenance-title">组件 provenance</strong><span>仅认证编辑器显示固定证据；公开输出使用对应版本的严格 attribution contract</span></div>
+                  {componentProvenance.length === 0 ? (
+                    <p>当前歌词没有组件级固定来源映射；旧版单一来源字段仍保持只读，不会被伪装成 Full / Game / ruby 的独立证据。</p>
+                  ) : (
+                    <dl>{componentProvenance.map((row: ResolvedLyricsComponentProvenanceRow) => <div key={row.component}>
+                      <dt>{row.label}</dt>
+                      <dd>
+                        <code>{row.renditionKey}</code>
+                        {row.identity ? <>
+                          <span>{row.identity.provider === "moegirl" || row.identity.provider === "moegirl_public_exact"
+                            ? "萌娘百科"
+                            : row.identity.provider === "sekaipedia" ? "Sekaipedia" : "Vocaloid Wiki"} · revision {row.identity.revisionId} · {row.identity.section}</span>
+                          <a href={row.identity.canonicalUrl} target="_blank" rel="noopener noreferrer">打开固定来源</a>
+                        </> : <span>未找到对应固定来源详情</span>}
+                      </dd>
+                    </div>)}</dl>
+                  )}
+                </section>
+              </div>
+            </details>
 
             {error && (
               <div className="lyrics-error" role="alert">
@@ -277,7 +342,7 @@ export function LyricsDocumentView({
             {sourcePreview && lyrics.revision === 0 && (
               <div className="lyrics-source-preview" aria-labelledby="lyrics-source-preview-title">
                 <div><strong id="lyrics-source-preview-title">固定修订预览 · 共 {sourcePreview.lines.length} 行</strong><a href={sourcePreview.canonicalUrl} target="_blank" rel="noopener noreferrer">打开来源</a></div>
-                <p className="lyrics-muted">下方展示解析后的全部 {sourcePreview.lines.length} 行，不会只截取前几行；滚动区域仅影响显示。请核对完整日文歌词。使用此版本会把固定 revision 与一次性导入授权载入 revision 0 草稿，并清空现有中英翻译；来源中的演唱者证据会在可安全映射时保留，无法映射时会显示错误并阻止载入。网络或服务器瞬时失败会保留授权和 verified draft，可直接重试。仅当服务端明确拒绝授权、来源身份/修订或内容生产者已变化等终态发生时，才需要重新预览。只有首次保存成功才会永久锁定来源、行顺序与日文原文。</p>
+                <p className="lyrics-muted">下方展示解析后的全部 {sourcePreview.lines.length} 行，不会只截取前几行；滚动区域仅影响显示。请核对完整日文歌词。使用此版本会把固定 revision 与一次性导入授权载入 revision 0 草稿，并清空现有中英翻译；来源中的演唱者证据会在可安全映射时保留，无法映射时会显示错误并阻止载入。网络或服务器瞬时失败会保留授权和 verified draft，可直接重试。仅当服务端明确拒绝授权、来源身份/修订或内容生产者已变化等终态发生时，才需要重新预览。固定来源只能在首次保存前导入。</p>
                 <pre tabIndex={0} aria-label={`固定修订 ${sourcePreview.revisionId} 的完整歌词，共 ${sourcePreview.lines.length} 行`}>{sourcePreview.lines.map((line) => `${line.stanzaBreakBefore ? "\n" : ""}${line.japanese}`).join("\n")}</pre>
                 <div className="lyrics-actions"><button className="btn btn-primary" onClick={() => setConfirmSourceImport(true)} disabled={writeLocked}>使用此版本</button><button className="btn btn-ghost" onClick={() => { setSourcePreview(null); setSourcePreviewCandidate(null); sourceImportTokenRef.current = ""; }}>取消</button></div>
               </div>
@@ -294,7 +359,6 @@ export function LyricsDocumentView({
                   }}>{rendition?.label || renditionKey}<span>{renditionKey}</span></button>;
                 })}
               </div>
-              <p>每个 stable key 都保留自己的 Full / Game、relation、演唱者分段、ruby、翻译与翻译/校对署名；即使文本相同也不会与其他 family 合并。</p>
             </div>}
 
             <div className="lyrics-version-switcher">
@@ -302,50 +366,23 @@ export function LyricsDocumentView({
                 {availableVersions.includes("full") && <button type="button" role="tab" id="lyrics-version-full-tab" aria-controls="lyrics-version-panel" aria-selected={activeVersion === "full"} tabIndex={activeVersion === "full" ? 0 : -1} className={activeVersion === "full" ? "active" : ""} onClick={() => setActiveVersion("full")}>Full <span>{activeRendition ? "仅简中可编辑" : "可编辑"}</span></button>}
                 {hasGameVersion && <button type="button" role="tab" id="lyrics-version-game-tab" aria-controls="lyrics-version-panel" aria-selected={activeVersion === "game"} tabIndex={activeVersion === "game" ? 0 : -1} className={activeVersion === "game" ? "active" : ""} onClick={() => setActiveVersion("game")}>Game <span>{gameSideReadOnlyReason === "exact_projection" ? "只读 exact projection" : "独立简中可编辑"}</span></button>}
               </div>
-              <p>{activeRendition
-                ? activeVersion === "game" && gameSideReadOnlyReason === "exact_projection"
-                  ? `Game 只引用同一 stable key（${activeRendition.key}）的 Full 行 ID；Game 自有分段和 ruby 原样保留，简中译文由 Full 对应行同步。`
-                  : activeVersion === "game" && projectionKind === "game_only"
-                    ? `${activeRendition.key} 是 Game-only rendition，没有 Full peer；Game 简中按该 stable key/side 独立保存，source facts 与英文保持只读。`
-                    : activeVersion === "game"
-                      ? `${activeRendition.key} 的 independent Game 简中按该 stable key/side 独立保存，不会覆盖 Full 或其他 rendition family。`
-                      : `${activeRendition.key} 的 Full 简中按该 stable key/side 独立保存；source facts 与英文保持只读。`
-                : activeVersion === "full"
-                  ? "singular v2 Full 保持原有可编辑行为。"
-                  : "singular v2 Game 继续作为同一 Full 的只读行 ID 投影，不做有损 v2 coercion。"}</p>
             </div>
+
+            {sourceV3PublicState === "served_uncredited" && (
+              <div className="lyrics-credit-notice" role="note">
+                <strong>还没有署名，保存后不会公开</strong>
+                <span>请在下面的“翻译”或“校对”栏填写署名：至少一个 rendition 带署名时，保存的译文才会出现在公开页面；在此之前公开页面保持原样。</span>
+              </div>
+            )}
 
             <LyricsMetadataCard
               activeTranslationCredit={activeTranslationCredit}
               activeProofreadingCredit={activeProofreadingCredit}
               activeRendition={activeRendition}
-              legacyLyrics={legacyLyrics}
               activeVersion={activeVersion}
-              projectionKind={projectionKind}
               writeLocked={writeLocked}
               updateActiveCredits={updateActiveCredits}
-              onUpdateLyrics={updateLyrics}
             />
-
-            <section className="lyrics-component-provenance" aria-labelledby="lyrics-component-provenance-title">
-              <div><strong id="lyrics-component-provenance-title">组件 provenance</strong><span>仅认证编辑器显示固定证据；公开输出使用对应版本的严格 attribution contract</span></div>
-              {componentProvenance.length === 0 ? (
-                <p>当前歌词没有组件级固定来源映射；旧版单一来源字段仍保持只读，不会被伪装成 Full / Game / ruby 的独立证据。</p>
-              ) : (
-                <dl>{componentProvenance.map((row: ResolvedLyricsComponentProvenanceRow) => <div key={row.component}>
-                  <dt>{row.label}</dt>
-                  <dd>
-                    <code>{row.renditionKey}</code>
-                    {row.identity ? <>
-                      <span>{row.identity.provider === "moegirl" || row.identity.provider === "moegirl_public_exact"
-                        ? "萌娘百科"
-                        : row.identity.provider === "sekaipedia" ? "Sekaipedia" : "Vocaloid Wiki"} · revision {row.identity.revisionId} · {row.identity.section}</span>
-                      <a href={row.identity.canonicalUrl} target="_blank" rel="noopener noreferrer">打开固定来源</a>
-                    </> : <span>未找到对应固定来源详情</span>}
-                  </dd>
-                </div>)}</dl>
-              )}
-            </section>
 
             {hasPerformerSegmentation && !activeRendition && performerError && (
               <div className="lyrics-error" role="alert">
@@ -371,7 +408,7 @@ export function LyricsDocumentView({
             )}
 
             {!activeSideReadOnly && (!activeRendition || activeSide) && <div id="lyrics-version-panel" role="tabpanel" aria-labelledby={`lyrics-version-${activeVersion}-tab`} className="lyrics-lines" ref={linesContainerRef}>
-              {activeLines.length === 0 && <div className="lyrics-empty-lines"><strong>当前 {activeVersion === "full" ? "Full" : "Game"} side 还没有歌词行</strong><span>{role === "admin" && !activeRendition ? "可以查找 Wiki 来源，或手动添加歌词行。" : "请在来源仍可修改时添加该 side 的歌词行。"}</span></div>}
+              {activeLines.length === 0 && <div className="lyrics-empty-lines"><strong>当前 {activeVersion === "full" ? "Full" : "Game"} side 还没有歌词行</strong><span>{activeRendition ? "source-v3 rendition 的歌词行来自固定来源，不能在此添加。" : role === "admin" && lyrics.revision === 0 ? "可以查找 Wiki 来源，或手动添加歌词行。" : "可以手动添加歌词行。"}</span></div>}
               {activeLines.map((line, lineIndex) => (
                 <LyricsLineEditor
                   key={`${activeRenditionKey || "legacy-v2"}:${activeVersion}:${line.id}`}
@@ -379,6 +416,7 @@ export function LyricsDocumentView({
                   lineIndex={lineIndex}
                   lineCount={activeLines.length}
                   sourceMutable={activeSideSourceMutable}
+                  sourceLayoutLocked={activeSourceLayoutLocked}
                   writeLocked={writeLocked || activeSideReadOnly}
                   showPerformerSegmentation={hasPerformerSegmentation}
                   performers={activePerformerOptions}

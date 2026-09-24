@@ -4,6 +4,7 @@ import { useToast } from "@/app/providers";
 import type { LyricsEditionCommand } from "@/components/LyricsEditionMenu";
 import {
   editableLyricsDocument, isLegacyLyricsDocument, preserveReadOnlyLyricsSourceFacts, sourceImportFailureIsTerminal,
+  sourceV3SaveWording,
 } from "@/components/lyrics/lyricsDocumentModel";
 import type { LyricsEditorState } from "@/components/lyrics/lyricsEditorState";
 import type { LyricsDocumentLoader } from "@/components/lyrics/useLyricsDocumentLoader";
@@ -15,30 +16,29 @@ import {
   checkpointLyrics, getLyrics, getProjectionStatus, mutateLyricsTranslationEdition,
   publishLyrics, saveLyrics, unpublishLyrics,
 } from "@/lib/api";
-import { canonicalLyricsJSON } from "@/lib/yjs-lyrics";
+import { canonicalLyricsJSON, lyricsAuthorityEnvelopeKey, lyricsDocumentSaveable } from "@/lib/yjs-lyrics";
 
 /** Owns draft checkpoints, translation-edition mutations, publication and the public-file projection watch. */
 export function useLyricsPersistence(state: LyricsEditorState, loader: LyricsDocumentLoader) {
   const { show } = useToast();
   const {
-    lyrics, setLyrics, baseline, setBaseline, lyricsRef, baselineRef, dirty,
+    lyrics, setLyrics, baseline, setBaseline, lyricsRef, baselineRef, dirty, sourceV3PublicState,
     busyRef, setBusy, writeLocked, writeLockedRef, error, setError,
     query, selectedMusic, selectedMusicIDRef, lyricsLoadSequence, documentGenerationRef,
     requestSequence, performerSequence,
-    sourceImportTokenRef, localSourceImportDraft, sourcePreviewCandidate,
+    sourceImportTokenRef, sourcePreviewCandidate,
     setSourcePreview, setSourcePreviewCandidate, setSourceRetry, setConfirmSourceImport,
     setConfirmImportRecovery, setConfirmConflictReload, setCandidates, setSourceSearchCompleted,
     pendingTransition, setPendingTransition, setPendingAnnotationOperation,
     editionWorkflow, setEditionWorkflow,
     setActiveTranslationEditionKey, activeTranslationEditionKeyRef, activeRenditionKey, activeVersion,
-    collaborationRef, collaborationAuthoritativeRef,
+    collaborationRef, collaborationAuthoritativeRef, collaborationBaselineEnvelopeRef,
     projectionSequence, setProjectionStatus, setProjectionState, setProjectionMessage,
   } = state;
   const {
     loadCatalog, loadPerformers, performChooseMusic, acceptAuthoritativeDocument, startCollaboration,
     requestIsCurrent, replaceEditionURL,
   } = loader;
-  const hasLocalUndo = localSourceImportDraft || collaborationRef.current?.undoManager.canUndo() === true;
 
   const loadTranslationEdition = async (requestedEditionKey: string): Promise<boolean> => {
     const current = lyricsRef.current;
@@ -131,7 +131,7 @@ export function useLyricsPersistence(state: LyricsEditorState, loader: LyricsDoc
     const documentGeneration = documentGenerationRef.current;
     const importToken = lyrics.revision === 0 ? sourceImportTokenRef.current : "";
     const collaboration = collaborationRef.current;
-    const checkpointBoundary = importToken ? 0 : collaboration?.beginCheckpoint() ?? 0;
+    const checkpointBoundary = importToken ? null : collaboration?.beginCheckpoint() ?? null;
     busyRef.current = true;
     setBusy(true);
     setError(null);
@@ -152,6 +152,7 @@ export function useLyricsPersistence(state: LyricsEditorState, loader: LyricsDoc
         collaboration?.updateAuthoritativeEnvelope(persisted);
       }
       setBaseline(canonicalLyricsJSON(persisted));
+      collaborationBaselineEnvelopeRef.current = lyricsAuthorityEnvelopeKey(persisted);
       if (isRenditionLyricsDocument(persisted)) {
         const persistedEditionDocument = persisted as RenditionLyricsDocument;
         setActiveTranslationEditionKey(persistedEditionDocument.translationEditionKey);
@@ -167,7 +168,7 @@ export function useLyricsPersistence(state: LyricsEditorState, loader: LyricsDoc
       setSourceSearchCompleted(false);
       void loadCatalog(query);
       if (importToken) startCollaboration(musicID);
-      show("歌词草稿已保存", "ok");
+      show(sourceV3SaveWording(sourceV3PublicState)?.saved ?? "歌词草稿已保存", "ok");
       return persisted;
     } catch (reason) {
       if (!requestIsCurrent(sequence, musicID)) return null;
@@ -438,8 +439,14 @@ export function useLyricsPersistence(state: LyricsEditorState, loader: LyricsDoc
     show("数据库状态已更新，公共文件仍在生成或状态未知", "err");
   };
 
-  const performPublication = async (nextPublished: boolean, document: SongLyricsDocument) => {
-    if (busyRef.current || writeLockedRef.current) return;
+  // Newest content a publication would act on: the shared document while a collaboration owns it.
+  const currentDocument = (): SongLyricsDocument | null => {
+    const shared = collaborationRef.current?.getSnapshot().document;
+    return shared ? editableLyricsDocument(shared) : lyricsRef.current;
+  };
+
+  const performPublication = async (nextPublished: boolean, document: SongLyricsDocument, stored: string): Promise<boolean> => {
+    if (busyRef.current || writeLockedRef.current) return false;
     const sequence = lyricsLoadSequence.current;
     const musicID = document.musicId;
     const documentGeneration = documentGenerationRef.current;
@@ -450,29 +457,37 @@ export function useLyricsPersistence(state: LyricsEditorState, loader: LyricsDoc
     try {
       try {
         const status = await getProjectionStatus(musicID);
-        if (!requestIsCurrent(sequence, musicID) || documentGenerationRef.current !== documentGeneration) return;
+        if (!requestIsCurrent(sequence, musicID) || documentGenerationRef.current !== documentGeneration) return false;
         setProjectionStatus(status);
         previousProjectionGeneration = status.generation;
       } catch {
-        if (!requestIsCurrent(sequence, musicID) || documentGenerationRef.current !== documentGeneration) return;
+        if (!requestIsCurrent(sequence, musicID) || documentGenerationRef.current !== documentGeneration) return false;
         setProjectionState("unknown");
         setProjectionMessage("提交前无法读取公共文件 generation；数据库操作仍可继续，但提交后只能报告公共文件状态未知。");
+      }
+      // Publishing and unpublishing reseed the collaboration room from the stored revision.
+      if (lyricsDocumentSaveable(currentDocument(), stored)) {
+        show("提交前又出现了未保存修改，发布状态没有改变；请先保存", "err");
+        return false;
       }
       const response = nextPublished
         ? await publishLyrics(document.musicId, document.revision)
         : await unpublishLyrics(document.musicId, document.revision);
-      if (!requestIsCurrent(sequence, musicID) || documentGenerationRef.current !== documentGeneration) return;
+      if (!requestIsCurrent(sequence, musicID) || documentGenerationRef.current !== documentGeneration) return false;
       const result = preserveReadOnlyLyricsSourceFacts(response, document);
       documentGenerationRef.current++;
       collaborationRef.current?.updateAuthoritativeEnvelope(result);
       setBaseline(canonicalLyricsJSON(result));
+      collaborationBaselineEnvelopeRef.current = lyricsAuthorityEnvelopeKey(result);
       void loadCatalog(query);
       show(nextPublished ? "数据库发布已提交，正在核对公共文件" : "数据库撤回已提交，正在核对公共文件", "ok");
       void waitForProjection(previousProjectionGeneration, nextPublished, musicID);
+      return true;
     } catch (reason) {
-      if (!requestIsCurrent(sequence, musicID) || documentGenerationRef.current !== documentGeneration) return;
+      if (!requestIsCurrent(sequence, musicID) || documentGenerationRef.current !== documentGeneration) return false;
       const apiError = reason instanceof APIError ? reason : new APIError(500, { error: "publication_failed" });
       setError(apiError);
+      return false;
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -487,6 +502,7 @@ export function useLyricsPersistence(state: LyricsEditorState, loader: LyricsDoc
       show("Game 投影需要先修复，未打开发布操作", "err");
       return;
     }
+    setError(null);
     setPendingTransition({ kind: "publish", nextPublished });
   };
 
@@ -496,9 +512,12 @@ export function useLyricsPersistence(state: LyricsEditorState, loader: LyricsDoc
     const editionTransition = pending.kind === "edition-switch" || pending.kind === "edition-command";
     if ((saveFirst || pending.kind === "publish" || editionTransition) && writeLockedRef.current) return;
     let document = lyrics;
-    if (saveFirst) {
+    let stored = baselineRef.current;
+    // A publication discards unsaved shared edits, so it saves them first whatever was clicked.
+    if (saveFirst || (pending.kind === "publish" && lyricsDocumentSaveable(currentDocument(), stored))) {
       document = await saveDocument();
       if (!document) return;
+      stored = canonicalLyricsJSON(document);
       const currentSharedDocument = collaborationRef.current?.getSnapshot().document;
       if (collaborationRef.current?.undoManager.canUndo() ||
           (currentSharedDocument && canonicalLyricsJSON(editableLyricsDocument(currentSharedDocument)) !== canonicalLyricsJSON(document))) {
@@ -513,7 +532,7 @@ export function useLyricsPersistence(state: LyricsEditorState, loader: LyricsDoc
         setLyrics(document);
         if (isRenditionLyricsDocument(document)) setActiveTranslationEditionKey((document as RenditionLyricsDocument).translationEditionKey);
       } else {
-        if (hasLocalUndo) collaborationRef.current?.discardLocalChanges();
+        collaborationRef.current?.discardLocalChanges();
         document = collaborationRef.current?.getSnapshot().document ?? (JSON.parse(baseline) as SongLyricsDocument);
       }
       sourceImportTokenRef.current = "";
@@ -530,8 +549,7 @@ export function useLyricsPersistence(state: LyricsEditorState, loader: LyricsDoc
       setPendingTransition(null);
       await performChooseMusic(pending.item);
     } else if (pending.kind === "publish" && document) {
-      setPendingTransition(null);
-      await performPublication(pending.nextPublished, document);
+      if (await performPublication(pending.nextPublished, document, stored)) setPendingTransition(null);
     } else if (pending.kind === "edition-switch") {
       const switched = await loadTranslationEdition(pending.editionKey);
       if (!switched) {

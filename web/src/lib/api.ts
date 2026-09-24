@@ -280,6 +280,10 @@ export interface CatalogMusicItem {
    * database publications, minus withdrawals). Absent when nothing is served.
    */
   runtimeLyrics?: RuntimeLyricsMetadata;
+  /** An operator withdrew this song from the public site. Omitted when false. */
+  lyricsWithdrawn?: boolean;
+  /** The song is a source-v3 document, whose saves go public unless withdrawn. Omitted when false. */
+  lyricsSourceV3?: boolean;
 }
 
 export interface CatalogPerformerItem {
@@ -413,6 +417,11 @@ export interface RenditionLyricsDocument {
   translationEditions: TranslationEditionSummary[];
   /** Materialized source-v3 content for translationEditionKey only. */
   renditions: LyricsRendition[];
+  /**
+   * True (omitted otherwise) while the recovery import ledger owns the source document: saves that
+   * change Japanese, ruby, segments, performers or line structure answer 422 source_drift.
+   */
+  recoveryLedgerOwned?: boolean;
 }
 
 export type LyricsTranslationEditionMutation =
@@ -422,6 +431,180 @@ export type LyricsTranslationEditionMutation =
   | { musicId: number; revision: number; operation: "set-default"; editionKey: string };
 
 export type SongLyricsDocument = SongLyrics | RenditionLyricsDocument;
+
+// ---- Whole-song lyrics document route (/editor/v1/lyrics/document) ----
+
+/** One run of a line's ja markup; ja lines write ruby inline as {kanji|reading}. */
+export interface LyricsDocumentSegment {
+  ja: string;
+  performerIds: number[];
+}
+
+export interface LyricsDocumentLine {
+  ja: string;
+  /** Text of the default translation edition. */
+  zh?: string;
+  /**
+   * Text of declared non-default editions, keyed by edition; a missing key is an empty line in that
+   * edition. Only on lines and on the gameLines of independent and only renditions.
+   */
+  zhEditions?: Record<string, string>;
+  en?: string;
+  performerIds?: number[];
+  segments?: LyricsDocumentSegment[];
+  stanzaBreakBefore?: boolean;
+  inGame?: boolean;
+}
+
+export interface LyricsDocumentRendition {
+  key: string;
+  kind?: string;
+  label?: string;
+  performerIds?: number[];
+  game?: "none" | "same" | "cut" | "independent" | "only";
+  lines: LyricsDocumentLine[];
+  gameLines?: LyricsDocumentLine[];
+  /** Credits of the default translation edition for this rendition. */
+  translationCredits?: LyricsRenditionTranslationCredits;
+  /** Credits of declared non-default editions for this rendition, keyed by edition. */
+  editionCredits?: Record<string, LyricsRenditionTranslationCredits>;
+}
+
+export interface LyricsDocumentRequest {
+  musicId: number;
+  expectedRevision?: number;
+  source: { url: string; title?: string };
+  /**
+   * zh-CN translation editions; the first entry is the default edition, whose text is each line's zh.
+   * Omitted: the one implicit edition main labelled 默认译本.
+   */
+  translationEditions?: TranslationEditionSummary[];
+  translationCredit?: string;
+  proofreadingCredit?: string;
+  renditions: LyricsDocumentRendition[];
+  dryRun?: boolean;
+}
+
+/** A 422 validation failure; line is zero-based and absent for rendition- or document-level issues. */
+export interface LyricsDocumentIssue {
+  rendition: string;
+  side?: string;
+  line?: number;
+  field?: string;
+  /** The translation edition key the issue is about. */
+  edition?: string;
+  message: string;
+}
+
+/** Something the served detail carries that the request format cannot; line is zero-based. */
+export interface LyricsDocumentWarning {
+  code: string;
+  rendition?: string;
+  side?: string;
+  line?: number;
+  message: string;
+}
+
+export interface LyricsDocumentExport {
+  musicId: number;
+  servedVersion: number;
+  servedRevision: number;
+  /** Which state was exported: what the site serves, or the database state when it serves nothing. */
+  from: "served" | "database";
+  /** document.expectedRevision is the revision PUT and takeover compare against. */
+  document: LyricsDocumentRequest;
+  warnings: LyricsDocumentWarning[];
+}
+
+export interface LyricsDocumentPublishResult {
+  dryRun: boolean;
+  musicId: number;
+  revision: number;
+  publicPath: string;
+  /** The detail the site serves: public v3, or v4 when the song has several translation editions. */
+  document: PublicLyricsV3Detail | { version: 4; [key: string]: unknown };
+  changes: LyricsDocumentChanges;
+}
+
+export interface LyricsDocumentBeforeAfter<T> {
+  before: T;
+  after: T;
+}
+
+export interface LyricsDocumentRenditionSummary {
+  key: string;
+  game: string;
+  lines: number;
+  gameLines: number;
+}
+
+/** An added or removed line in the request format; performerIds and segments are resolved. */
+export interface LyricsDocumentLineSummary {
+  line: number;
+  /** ja markup, ruby included. */
+  ja: string;
+  zh?: string;
+  stanzaBreakBefore?: boolean;
+  performerIds: number[];
+  /** Only when the line has several segments or a segment's performers differ from the line's. */
+  segments?: LyricsDocumentSegment[];
+  /** Only on Full lines of a cut rendition. */
+  inGame?: boolean;
+  zhEditions?: Record<string, string>;
+}
+
+/** fields names ja, ruby, segments, performers, zh, zhEditions, stanzaBreakBefore and inGame. */
+export interface LyricsDocumentLineChange {
+  before: number;
+  after: number;
+  fields: string[];
+  ja?: LyricsDocumentBeforeAfter<string>;
+  zh?: LyricsDocumentBeforeAfter<string>;
+  /** Changed keys of non-default editions only. */
+  zhEditions?: Record<string, LyricsDocumentBeforeAfter<string>>;
+  segments?: LyricsDocumentBeforeAfter<LyricsDocumentSegment[]>;
+}
+
+export interface LyricsDocumentSideChange {
+  side: "full" | "game";
+  linesBefore: number;
+  linesAfter: number;
+  addedCount: number;
+  removedCount: number;
+  changedCount: number;
+  added?: LyricsDocumentLineSummary[];
+  removed?: LyricsDocumentLineSummary[];
+  changed?: LyricsDocumentLineChange[];
+}
+
+export interface LyricsDocumentRenditionChange {
+  key: string;
+  kind?: LyricsDocumentBeforeAfter<string>;
+  label?: LyricsDocumentBeforeAfter<string>;
+  game?: LyricsDocumentBeforeAfter<string>;
+  translationCredits?: LyricsDocumentBeforeAfter<LyricsRenditionTranslationCredits>;
+  /** Changed keys of non-default editions only. */
+  editionCredits?: Record<string, LyricsDocumentBeforeAfter<LyricsRenditionTranslationCredits>>;
+  sides?: LyricsDocumentSideChange[];
+}
+
+/** Bounded diff of a document request against what it replaces; empty entries are omitted. */
+export interface LyricsDocumentChanges {
+  against: "served" | "database" | "nothing";
+  changed: boolean;
+  truncated?: boolean;
+  source?: { before: { url: string; title?: string } | null; after: { url: string; title?: string } };
+  /** Present when the edition list or its order differs. */
+  translationEditions?: LyricsDocumentBeforeAfter<TranslationEditionSummary[]>;
+  renditionsAdded?: LyricsDocumentRenditionSummary[];
+  renditionsRemoved?: LyricsDocumentRenditionSummary[];
+  renditions?: LyricsDocumentRenditionChange[];
+}
+
+/** Takeover answers the publish result of the exported served song plus the export warnings. */
+export interface LyricsDocumentTakeoverResult extends LyricsDocumentPublishResult {
+  warnings: LyricsDocumentWarning[];
+}
 
 /** Public v3 detail envelope; kept separate from the authenticated editor envelope. */
 export interface PublicLyricsV3Detail {
@@ -656,6 +839,14 @@ function isEditorGateStatus(value: unknown): value is EditorGateStatus {
     typeof status.running === "boolean" && typeof status.lastRun === "string";
 }
 
+interface APIErrorBody {
+  error?: string;
+  details?: string[];
+  current?: SongLyricsDocument;
+  results?: Record<string, string>;
+  issues?: LyricsDocumentIssue[];
+}
+
 export class APIError extends Error {
   status: number;
   code: string;
@@ -663,10 +854,11 @@ export class APIError extends Error {
   current?: SongLyricsDocument;
   producerStatus?: EditorGateStatus;
   results?: Record<string, string>;
+  issues: LyricsDocumentIssue[];
 
-  constructor(status: number, body: { error?: string; details?: string[]; current?: SongLyricsDocument; results?: Record<string, string> } | EditorGateStatus) {
+  constructor(status: number, body: APIErrorBody | EditorGateStatus) {
     const producerStatus = isEditorGateStatus(body) ? body : undefined;
-    const contractBody = producerStatus ? undefined : body as { error?: string; details?: string[]; current?: SongLyricsDocument; results?: Record<string, string> };
+    const contractBody = producerStatus ? undefined : body as APIErrorBody;
     super(producerStatus ? "producer_state_changed" : contractBody?.error || `HTTP ${status}`);
     this.name = "APIError";
     this.status = status;
@@ -675,6 +867,7 @@ export class APIError extends Error {
     this.current = contractBody?.current;
     this.producerStatus = producerStatus;
     this.results = contractBody?.results;
+    this.issues = Array.isArray(contractBody?.issues) ? contractBody.issues : [];
   }
 }
 
@@ -1210,6 +1403,34 @@ export const publishLyrics = (musicId: number, revision: number) =>
 export const unpublishLyrics = (musicId: number, revision: number) =>
   lyricsMutation("/editor/v1/lyrics/unpublish", { method: "POST", body: JSON.stringify({ musicId, revision, clientId: getClientID() }) },
     { operation: "unpublish", musicId, revision });
+export const getLyricsDocumentExport = (musicId: number) =>
+  apiFetch<LyricsDocumentExport>(`/editor/v1/lyrics/document?musicId=${musicId}`);
+
+function isLyricsDocumentWarning(value: unknown): value is LyricsDocumentWarning {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const warning = value as Record<string, unknown>;
+  return typeof warning.code === "string" && typeof warning.message === "string" &&
+    ["rendition", "side"].every((key) => warning[key] === undefined || typeof warning[key] === "string") &&
+    (warning.line === undefined || Number.isSafeInteger(warning.line));
+}
+
+/** Publishes the song exactly as the site serves it as an editable document; admin only. */
+export const takeOverLyricsDocument = async (musicId: number, expectedRevision: number): Promise<LyricsDocumentTakeoverResult> => {
+  const response = await apiFetch<unknown>("/editor/v1/lyrics/document/takeover", {
+    method: "POST",
+    body: JSON.stringify({ musicId, expectedRevision }),
+  }, true);
+  const result = response && typeof response === "object" && !Array.isArray(response)
+    ? response as Record<string, unknown>
+    : null;
+  const warnings = result?.warnings ?? [];
+  if (!result || result.musicId !== musicId || result.dryRun !== false ||
+      !Number.isSafeInteger(result.revision) || Number(result.revision) <= 0 ||
+      !Array.isArray(warnings) || !warnings.every(isLyricsDocumentWarning)) {
+    throw new APIError(502, { error: "invalid_lyrics_response", details: ["转换响应没有确认这首歌已发布为可编辑文档"] });
+  }
+  return { ...result, warnings } as unknown as LyricsDocumentTakeoverResult;
+};
 export const searchLyricsSource = (musicId: number) =>
   apiFetch<{ items: LyricsSourceCandidate[] }>(`/lyrics/source/search?musicId=${musicId}`);
 export const previewLyricsSource = (musicId: number, pageId: number, revisionId: number) =>

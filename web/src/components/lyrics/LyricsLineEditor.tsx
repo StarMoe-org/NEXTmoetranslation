@@ -67,6 +67,7 @@ interface LyricSegmentEditorProps {
   segment: LyricsEditorSegment;
   segmentIndex: number;
   sourceMutable: boolean;
+  layoutLocked: boolean;
   writeLocked: boolean;
   showPerformerSegmentation: boolean;
   performers: LyricsPerformerOption[];
@@ -90,6 +91,7 @@ function LyricSegmentEditor({
   segment,
   segmentIndex,
   sourceMutable,
+  layoutLocked,
   writeLocked,
   showPerformerSegmentation,
   performers,
@@ -126,7 +128,7 @@ function LyricSegmentEditor({
           id={`performers-${line.id}-${segmentIndex}`}
           aria-label={`第 ${lineNumber} 行分段 ${segmentNumber} 的演唱者`}
           multiple
-          disabled={writeLocked}
+          disabled={writeLocked || layoutLocked}
           value={segment.performerIds.map(String)}
           onChange={(event) => onChange(segment.text, Array.from(event.target.selectedOptions, (option) =>
             performers.find((performer) => String(performer.performerId) === option.value)?.performerId
@@ -145,7 +147,7 @@ function LyricSegmentEditor({
       </>}
 
       <div className="lyric-ruby-spans" aria-label={`第 ${lineNumber} 行分段 ${segmentNumber} 的 ruby 注音`}>
-        <strong>Ruby 注音（可编辑）</strong>
+        <strong>{!sourceMutable || writeLocked ? "Ruby 注音（只读）" : "Ruby 注音"}</strong>
         {segment.ruby.map((span, rubyIndex) => (
           <LyricRubySpanEditor
             key={`${line.id}-${segmentIndex}-ruby-${rubyIndex}`}
@@ -162,7 +164,7 @@ function LyricSegmentEditor({
         ))}
       </div>
 
-      {showPerformerSegmentation && <span className="lyric-structure-actions">
+      {showPerformerSegmentation && !layoutLocked && <span className="lyric-structure-actions">
         <button type="button" className="btn btn-ghost btn-sm" aria-label={`在第 ${lineNumber} 行第 ${segmentNumber} 分段后新增分段`} onClick={onAdd} disabled={writeLocked}>新增分段</button>
         <button type="button" className="btn btn-ghost btn-sm" aria-label={`在第 ${lineNumber} 行第 ${segmentNumber} 分段的光标位置分段`} title="请先把光标放在分段文字中的边界位置" onClick={onSplit} disabled={writeLocked || !lyricSegmentCanSplit(segment.text)}>在光标处分段</button>
         <button type="button" className="btn btn-ghost btn-sm" aria-label={`将第 ${lineNumber} 行第 ${segmentNumber} 分段与上一分段合并`} title={segmentIndex > 0 && !canMergePrevious ? "演唱者不同，不能直接合并" : undefined} onClick={onMergeWithPrevious} disabled={writeLocked || !canMergePrevious}>与上一段合并</button>
@@ -181,6 +183,8 @@ export interface LyricsLineEditorProps {
   lineIndex: number;
   lineCount: number;
   sourceMutable: boolean;
+  /** Stanza breaks, segment boundaries and performers are read-only as well. */
+  sourceLayoutLocked: boolean;
   writeLocked: boolean;
   showPerformerSegmentation: boolean;
   performers: LyricsPerformerOption[];
@@ -206,6 +210,7 @@ export function LyricsLineEditor({
   lineIndex,
   lineCount,
   sourceMutable,
+  sourceLayoutLocked,
   writeLocked,
   showPerformerSegmentation,
   performers,
@@ -232,7 +237,7 @@ export function LyricsLineEditor({
       <header>
         <strong>{lineNumber}</strong>
         <code>{line.id}</code>
-        <label><input type="checkbox" checked={Boolean(line.stanzaBreakBefore)} disabled={writeLocked} onChange={(event) => onUpdateLine({ stanzaBreakBefore: event.target.checked })} /> 段落前空行</label>
+        <label><input type="checkbox" checked={Boolean(line.stanzaBreakBefore)} disabled={writeLocked || sourceLayoutLocked} onChange={(event) => onUpdateLine({ stanzaBreakBefore: event.target.checked })} /> 段落前空行</label>
         {sourceMutable && <span className="lyric-structure-actions">
           <button type="button" className="btn btn-ghost btn-sm" aria-label={`上移第 ${lineNumber} 行`} disabled={writeLocked || lineIndex === 0} onClick={() => onMoveLine(-1)}>上移</button>
           <button type="button" className="btn btn-ghost btn-sm" aria-label={`下移第 ${lineNumber} 行`} disabled={writeLocked || lineIndex === lineCount - 1} onClick={() => onMoveLine(1)}>下移</button>
@@ -244,7 +249,7 @@ export function LyricsLineEditor({
         <label>日文<textarea aria-label={`第 ${lineNumber} 行日文原文`} lang="ja" value={line.japanese} readOnly rows={2} /></label>
         <label>简中<textarea aria-label={`第 ${lineNumber} 行简体中文译文`} lang="zh-CN" value={line["zh-CN"] || ""} readOnly={writeLocked} onChange={(event) => onUpdateLine({ "zh-CN": event.target.value })} rows={2} /></label>
         <label>英文<textarea aria-label={`第 ${lineNumber} 行英文译文`} lang="en" value={line["en-US"] || ""} readOnly={writeLocked} onChange={(event) => onUpdateLine({ "en-US": event.target.value })} rows={2} /></label>
-        {showPerformerSegmentation && line.trailingPerformerIds !== undefined && <label>行尾演唱者<select aria-label={`第 ${lineNumber} 行尾演唱者`} multiple disabled={writeLocked} value={line.trailingPerformerIds.map(String)} onChange={(event) => onUpdateLine({ trailingPerformerIds: Array.from(event.target.selectedOptions, (option) => performers.find((performer) => String(performer.performerId) === option.value)?.performerId).filter((id): id is LyricsPerformerID => id !== undefined) } as Partial<LyricsEditorLine>)}>
+        {showPerformerSegmentation && line.trailingPerformerIds !== undefined && <label>行尾演唱者<select aria-label={`第 ${lineNumber} 行尾演唱者`} multiple disabled={writeLocked || sourceLayoutLocked} value={line.trailingPerformerIds.map(String)} onChange={(event) => onUpdateLine({ trailingPerformerIds: Array.from(event.target.selectedOptions, (option) => performers.find((performer) => String(performer.performerId) === option.value)?.performerId).filter((id): id is LyricsPerformerID => id !== undefined) } as Partial<LyricsEditorLine>)}>
           {performers.map((performer) => <option key={performer.performerId} value={performer.performerId}>{performerOptionName(performer)}</option>)}
         </select></label>}
       </div>
@@ -258,6 +263,7 @@ export function LyricsLineEditor({
             segment={segment}
             segmentIndex={segmentIndex}
             sourceMutable={sourceMutable}
+            layoutLocked={sourceLayoutLocked}
             writeLocked={writeLocked}
             showPerformerSegmentation={showPerformerSegmentation}
             performers={performers}

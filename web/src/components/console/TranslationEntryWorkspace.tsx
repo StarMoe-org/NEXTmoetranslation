@@ -69,6 +69,15 @@ export function TranslationEntryWorkspace({
 }: TranslationEntryWorkspaceProps) {
   const translationWorkspaceRef = useRef<HTMLDivElement>(null);
   const saveKeyLabel = enterSaves ? "Enter" : "Shift+Enter";
+  const newlineKeyLabel = enterSaves ? "Shift+Enter" : "Enter";
+  const sourceText = selectedEntry
+    ? isEventStory ? (selectedEntry.japanese || eventStoryEntryLabel(selectedEntry.key)) : selectedEntry.key
+    : "";
+  const sourceLines = sourceText.split("\n").length;
+  // Long originals (gacha descriptions) sit beside the editor on wide screens, so the
+  // textarea and save buttons fit inside the fixed-height editor pane.
+  const longSource = sourceLines > 4 || sourceText.length > 240;
+  const textareaRows = Math.min(longSource ? 10 : 12, Math.max(3, sourceLines));
 
   // ---- Moesekai URL for the currently selected entry ----
   const moesekaiUrl = useMemo(() => {
@@ -80,11 +89,11 @@ export function TranslationEntryWorkspace({
     <div className="translation-workspace" ref={translationWorkspaceRef}>
       <section className="translation-editor-pane" aria-label="当前翻译编辑区">
         {selectedEntry && (
-        <div className="proof-panel">
+        <div className={longSource ? "proof-panel proof-panel-long" : "proof-panel"}>
           <div className="proof-jp">
             <span className="label">日文原文</span>
             {selectedEntry.speakerName && <div className="speaker">{selectedEntry.speakerName}</div>}
-            <div className="jp-body">{isEventStory ? (selectedEntry.japanese || eventStoryEntryLabel(selectedEntry.key)) : selectedEntry.key}</div>
+            <div className="jp-body">{sourceText}</div>
             {isEventStory && <div className="episode">第 {eventStoryEpisodeNo(selectedEntry)} 章</div>}
             {moesekaiUrl && (
               <a className="moesekai-link" href={moesekaiUrl} target="_blank" rel="noopener noreferrer" title="在 Moesekai 上查看详情">
@@ -124,7 +133,7 @@ export function TranslationEntryWorkspace({
               onChange={(e) => setEditValue(e.target.value)}
               onKeyDown={onTextareaKey}
               placeholder="输入翻译…"
-              rows={3}
+              rows={textareaRows}
               readOnly={isReadOnly || saving || writesLocked || selectedEventStoryIdentityMissing}
               aria-label="翻译校对内容"
             />
@@ -152,6 +161,7 @@ export function TranslationEntryWorkspace({
               </button>
               <div className="proof-hints">
                 <span>保存 <kbd>{saveKeyLabel}</kbd></span>
+                <span>换行 <kbd>{newlineKeyLabel}</kbd></span>
                 <span><kbd>Ctrl+↑↓</kbd> 切换</span>
               </div>
             </div>

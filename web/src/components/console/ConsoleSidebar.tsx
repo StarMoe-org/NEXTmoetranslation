@@ -1,5 +1,5 @@
 import type { CategoryInfo, EventStorySummary, Locale } from "@/lib/api";
-import { CATEGORY_LABELS, FIELD_LABELS } from "@/lib/labels";
+import { CATEGORY_LABELS, fieldLabel } from "@/lib/labels";
 
 // ---- Inline SVG icons (lucide-style, 24×24 viewBox) ----
 
@@ -111,7 +111,7 @@ export function ConsoleSidebar({
               const hideBadge = hiddenBadges.has(badgeKey);
               return (
                 <button type="button" key={badgeKey} className={`field-item ${active ? "active" : ""}`} aria-current={active ? "page" : undefined} onClick={() => selectField(cat.name, f.name)}>
-                  <span>{FIELD_LABELS[f.name] || f.name}</span>
+                  <span>{fieldLabel(cat.name, f.name)}</span>
                   {work > 0 && !hideBadge && <span className="badge work">{work}</span>}
                 </button>
               );

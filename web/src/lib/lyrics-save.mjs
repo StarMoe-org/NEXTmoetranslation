@@ -11,7 +11,7 @@ const SONG_LYRICS_KEYS = new Set([
 ]);
 const RENDITION_DOCUMENT_KEYS = new Set([
   "musicId", "status", "revision", "publishedRevision", "updatedAt", "translationEditionKey",
-  "defaultTranslationEditionKey", "translationEditions", "renditions",
+  "defaultTranslationEditionKey", "translationEditions", "renditions", "recoveryLedgerOwned",
 ]);
 const RENDITION_KEYS = new Set([
   "key", "kind", "label", "availableVersions", "performers", "full", "game", "relation",
@@ -155,6 +155,8 @@ function modeledSongLyrics(lyrics, options = {}) {
           : lyrics?.translationEditions,
       }),
       renditions: Array.isArray(lyrics?.renditions) ? lyrics.renditions.map(modeledRendition) : lyrics?.renditions,
+      // Server-derived; the collaboration room carries it too, so baselines keep it, saves do not send it.
+      ...(options.forSave !== true && lyrics?.recoveryLedgerOwned === true ? { recoveryLedgerOwned: true } : {}),
     };
   }
   const document = {
@@ -174,7 +176,7 @@ function modeledSongLyrics(lyrics, options = {}) {
 }
 
 export function buildLyricsSavePayload(lyrics, sourceImportToken, clientId) {
-  const document = modeledSongLyrics(lyrics, { includeEditionSummaries: false });
+  const document = modeledSongLyrics(lyrics, { includeEditionSummaries: false, forSave: true });
   return {
     ...document,
     ...(document.revision === 0 && sourceImportToken ? { sourceImportToken } : {}),
@@ -503,6 +505,9 @@ export function validateSongLyricsMutationResponse(value, expectation) {
 
   if (isRendition) {
     validateTranslationEditionEnvelope(value, errors);
+    if (value.recoveryLedgerOwned !== undefined && typeof value.recoveryLedgerOwned !== "boolean") {
+      errors.push("recoveryLedgerOwned must be a boolean when present");
+    }
     if (value.renditions.length === 0 || value.renditions.length > 16) errors.push("renditions must contain 1-16 items");
     const keys = new Set();
     for (let index = 0; index < value.renditions.length; index++) {

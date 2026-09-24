@@ -21,6 +21,7 @@ import { LyricsEditor, LyricsEditorHandle } from "@/components/LyricsEditor";
 import { LyricsSourceReview, LyricsSourceReviewHandle } from "@/components/LyricsSourceReview";
 import { Locale, TranslationEntry, clearLoadedProducerState, clearSession, getClientID, getRole, getUsername } from "@/lib/api";
 import { restoreEventStoryDraftEntries } from "@/lib/event-story-console";
+import { translationTextareaAction } from "@/lib/translation-shortcuts";
 
 interface PendingAction {
   token: number;
@@ -287,16 +288,11 @@ export function Console({ onLogout }: { onLogout: () => void }) {
   };
 
   const onTextareaKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (enterSaves) {
-      // Enter = save (Shift+Enter = newline)
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); save(); }
-    } else {
-      // Shift+Enter = save (Enter = newline, default)
-      if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); save(); }
-    }
-    if (e.key === "Escape") { runOrGuard("关闭当前条目", () => setSelectedKey(null)); }
-    else if ((e.ctrlKey || e.metaKey) && e.key === "ArrowUp") { e.preventDefault(); navigate(-1); }
-    else if ((e.ctrlKey || e.metaKey) && e.key === "ArrowDown") { e.preventDefault(); navigate(1); }
+    const action = translationTextareaAction(e, enterSaves);
+    if (action === "save") { e.preventDefault(); save(); }
+    else if (action === "close") { runOrGuard("关闭当前条目", () => setSelectedKey(null)); }
+    else if (action === "previous") { e.preventDefault(); navigate(-1); }
+    else if (action === "next") { e.preventDefault(); navigate(1); }
   };
 
   useEffect(() => {

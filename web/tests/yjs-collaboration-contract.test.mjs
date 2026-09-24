@@ -482,9 +482,197 @@ test("a materialized shared document compares clean against the server response 
   assert.notEqual(collaboration.canonicalLyricsJSON(lyrics), collaboration.canonicalLyricsJSON(reordered));
 });
 
+test("a remote checkpoint envelope leaves a collaborator who changed nothing clean", async () => {
+  const originalWindow = globalThis.window;
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: { location: { origin: "https://console.example" } },
+  });
+  globalThis.__lyricsYjsProviders.length = 0;
+  const snapshots = [];
+  const instance = new collaboration.LyricsCollaboration({
+    musicId: 42,
+    clientId: "tab-1",
+    username: "editor",
+    color: "#1677FF",
+    issueTicket: async () => ({
+      ticket: "short-ticket",
+      room: "lyrics-42-e7",
+      expiresAt: new Date(Date.now() + 30_000).toISOString(),
+    }),
+    onSnapshot: snapshot => snapshots.push(snapshot),
+  });
+
+  try {
+    await waitFor(() => globalThis.__lyricsYjsProviders.length === 1);
+    const provider = globalThis.__lyricsYjsProviders[0];
+    const seed = sampleLyrics();
+    collaboration.syncLyricsDocument(instance.root, seed);
+    provider.handlers.get("sync")(true);
+    const baseline = collaboration.canonicalLyricsJSON(seed);
+    assert.equal(instance.hasLocalChanges(), false);
+
+    const remote = new Y.Doc();
+    Y.applyUpdate(remote, Y.encodeStateAsUpdate(instance.doc));
+    const remoteBaseline = Y.encodeStateVector(remote);
+    collaboration.syncLyricsDocument(remote.getMap(collaboration.LYRICS_YJS_ROOT), {
+      ...seed, status: "published", revision: 1, updatedAt: "2026-08-15T00:00:00Z",
+    });
+    Y.applyUpdate(instance.doc, Y.encodeStateAsUpdate(remote, remoteBaseline), provider);
+
+    const shared = instance.getSnapshot();
+    assert.equal(shared.document.revision, 1);
+    assert.notEqual(collaboration.canonicalLyricsJSON(shared.document), baseline, "the shared envelope moved");
+    assert.equal(shared.localChanges, false);
+    assert.equal(snapshots.at(-1).localChanges, false);
+    assert.equal(collaboration.lyricsDocumentDirty(shared.document, baseline, instance.hasLocalChanges()), false);
+
+    const edited = structuredClone(shared.document);
+    edited.lines[0]["zh-CN"] = "本地修改";
+    assert.equal(instance.updateDocument(edited), true);
+    assert.equal(instance.hasLocalChanges(), true);
+    assert.equal(snapshots.at(-1).localChanges, true, "the snapshot after the undo stack records the edit reports it");
+    assert.equal(collaboration.lyricsDocumentDirty(instance.getSnapshot().document, baseline, true), true);
+
+    instance.checkpointCommitted(instance.beginCheckpoint());
+    assert.equal(instance.hasLocalChanges(), false);
+    assert.equal(snapshots.at(-1).localChanges, false);
+  } finally {
+    instance.destroy();
+    Object.defineProperty(globalThis, "window", { configurable: true, value: originalWindow });
+  }
+});
+
+async function openSyncedCollaboration(seed) {
+  globalThis.__lyricsYjsProviders.length = 0;
+  const snapshots = [];
+  const instance = new collaboration.LyricsCollaboration({
+    musicId: 42,
+    clientId: "tab-1",
+    username: "editor",
+    color: "#1677FF",
+    issueTicket: async () => ({
+      ticket: "short-ticket",
+      room: "lyrics-42-e7",
+      expiresAt: new Date(Date.now() + 30_000).toISOString(),
+    }),
+    onSnapshot: snapshot => snapshots.push(snapshot),
+  });
+  await waitFor(() => globalThis.__lyricsYjsProviders.length === 1);
+  collaboration.syncLyricsDocument(instance.root, seed);
+  globalThis.__lyricsYjsProviders[0].handlers.get("sync")(true);
+  return { instance, snapshots };
+}
+
+function withWindow(t) {
+  const originalWindow = globalThis.window;
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: { location: { origin: "https://console.example" } },
+  });
+  t.after(() => Object.defineProperty(globalThis, "window", { configurable: true, value: originalWindow }));
+}
+
+test("retired history stays reported until settled and discarding it never reverts stored content", async (t) => {
+  withWindow(t);
+  const { instance, snapshots } = await openSyncedCollaboration(sampleLyrics());
+  t.after(() => instance.destroy());
+  const edited = sampleLyrics();
+  edited.lines[0]["zh-CN"] = "已被他人保存的修改";
+  assert.equal(instance.updateDocument(edited), true);
+  assert.equal(instance.hasLocalChanges(), true);
+
+  instance.retireLocalHistory();
+  assert.equal(instance.undoManager.canUndo(), false, "undoing would revert stored content");
+  assert.equal(instance.undoManager.canRedo(), false);
+  assert.equal(instance.hasLocalChanges(), true, "the stored document has not been shown to contain the edit yet");
+  assert.equal(snapshots.at(-1).localChanges, true);
+
+  instance.settleRetainedLocalChanges();
+  assert.equal(instance.hasLocalChanges(), false);
+  assert.equal(snapshots.at(-1).localChanges, false, "settling reports the change");
+
+  const later = structuredClone(edited);
+  later.lines[0]["zh-CN"] = "尚未确认保存的修改";
+  instance.updateDocument(later);
+  instance.retireLocalHistory();
+  instance.discardLocalChanges();
+  assert.equal(instance.hasLocalChanges(), false);
+  assert.equal(snapshots.at(-1).localChanges, false);
+  assert.equal(instance.getSnapshot().document.lines[0]["zh-CN"], "尚未确认保存的修改",
+    "retired edits stay in the shared document rather than being undone blindly");
+});
+
+test("a checkpoint boundary cleared by an authority change never drops newer edits", async (t) => {
+  withWindow(t);
+  const { instance } = await openSyncedCollaboration(sampleLyrics());
+  t.after(() => instance.destroy());
+  const first = sampleLyrics();
+  first.lines[0]["zh-CN"] = "请求保存前的修改";
+  instance.updateDocument(first);
+  const boundary = instance.beginCheckpoint();
+
+  // The envelope broadcast can reach this client before its own checkpoint response.
+  instance.checkpointCommitted();
+  const second = structuredClone(first);
+  second.lines[0]["zh-CN"] = "保存期间的修改";
+  instance.updateDocument(second);
+  instance.checkpointCommitted(boundary);
+
+  assert.equal(instance.undoManager.canUndo(), true, "the edit made during the save keeps its undo history");
+  assert.equal(instance.hasLocalChanges(), true);
+});
+
+test("lyrics dirtiness follows local changes while a collaboration owns the document", () => {
+  const baselineDocument = sampleLyrics();
+  const baseline = collaboration.canonicalLyricsJSON(baselineDocument);
+  const remotelyAdvanced = { ...baselineDocument, revision: 3, status: "published", updatedAt: "2026-08-16T00:00:00Z" };
+  assert.equal(collaboration.lyricsDocumentDirty(remotelyAdvanced, baseline, false), false);
+  assert.equal(collaboration.lyricsDocumentDirty(remotelyAdvanced, baseline, true), true);
+  assert.equal(collaboration.lyricsDocumentDirty(baselineDocument, baseline, true), false, "edits that net to the baseline are clean");
+  assert.equal(collaboration.lyricsDocumentDirty(remotelyAdvanced, baseline, null), true, "without collaboration the baseline decides");
+  assert.equal(collaboration.lyricsDocumentDirty(null, baseline, true), false);
+});
+
+test("saving follows the shared document while only a stored-state change moves the authority envelope", () => {
+  const seed = sampleLyrics();
+  const baseline = collaboration.canonicalLyricsJSON(seed);
+  const pair = pairedLyricsDocs(seed);
+  const edited = structuredClone(seed);
+  edited.lines[0]["zh-CN"] = "离开前未保存";
+  collaboration.syncLyricsDocument(pair.leftRoot, edited);
+  exchangeConcurrentUpdates(pair);
+
+  const shared = collaboration.materializeLyricsDocument(pair.rightRoot);
+  assert.equal(collaboration.lyricsDocumentDirty(shared, baseline, false), false, "a collaborator's edit is not dirty here");
+  assert.equal(collaboration.lyricsDocumentSaveable(shared, baseline), true, "but it can be saved here");
+  assert.equal(collaboration.lyricsDocumentSaveable(collaboration.materializeLyricsDocument(pair.leftRoot), baseline), true);
+  assert.equal(collaboration.lyricsDocumentSaveable(null, baseline), false);
+  assert.equal(collaboration.lyricsAuthorityEnvelopeKey(shared), collaboration.lyricsAuthorityEnvelopeKey(seed));
+
+  collaboration.syncLyricsDocument(pair.leftRoot, { ...edited, revision: 1, updatedAt: "2026-08-15T00:00:00Z" });
+  exchangeConcurrentUpdates(pair);
+  const checkpointed = collaboration.materializeLyricsDocument(pair.rightRoot);
+  assert.notEqual(collaboration.lyricsAuthorityEnvelopeKey(checkpointed), collaboration.lyricsAuthorityEnvelopeKey(shared));
+  assert.equal(
+    collaboration.lyricsAuthorityEnvelopeKey({ ...checkpointed, publishedRevision: 0 }),
+    collaboration.lyricsAuthorityEnvelopeKey(checkpointed),
+    "an omitted publishedRevision and zero record the same stored state",
+  );
+  assert.notEqual(
+    collaboration.lyricsAuthorityEnvelopeKey({ ...checkpointed, status: "published", publishedRevision: 1 }),
+    collaboration.lyricsAuthorityEnvelopeKey(checkpointed),
+  );
+});
+
 test("LyricsEditor dirty tracking never compares raw JSON.stringify output against the baseline", async () => {
   const editor = await readLyricsEditor();
-  assert.match(editor, /const dirty = lyrics != null && canonicalLyricsJSON\(lyrics\) !== baseline;/);
+  assert.match(editor, /const dirty = lyricsDocumentDirty\(lyrics, baseline, collaborationOwnsDocument \? collaborationLocalChanges : null\);/);
+  assert.match(editor, /const saveable = lyricsDocumentSaveable\(lyrics, baseline\);/);
+  assert.match(editor, /disabled=\{busy \|\| writeLocked \|\| !saveable\}/);
+  assert.match(editor, /isDirty: isDirtyNow/);
+  assert.match(editor, /dirty: isDirtyNow\(\)/);
+  assert.match(editor, /setCollaborationLocalChanges\(snapshot\.localChanges\)/);
   assert.match(editor, /setBaseline\(canonicalLyricsJSON\(persisted\)\)/);
   assert.match(editor, /canonicalLyricsJSON\(editableLyricsDocument\(currentSharedDocument\)\) !== canonicalLyricsJSON\(document\)/);
   assert.doesNotMatch(editor, /JSON\.stringify\([^\n]*\) !== baseline/);

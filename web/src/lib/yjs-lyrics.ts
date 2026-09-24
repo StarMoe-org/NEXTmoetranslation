@@ -64,8 +64,16 @@ export interface LyricsCollaborationSnapshot {
   status: LyricsCollaborationStatus;
   peers: LyricsCollaborationPeer[];
   synced: boolean;
+  /**
+   * This client holds edits in its undo history that no checkpoint has committed yet, or
+   * retired history whose edits the stored document has not been shown to contain.
+   */
+  localChanges: boolean;
   error?: Error;
 }
+
+/** The newest undo item a checkpoint request covers; null when there was none. */
+export type LyricsCheckpointBoundary = Y.UndoManager["undoStack"][number] | null;
 
 export interface LyricsCollaborationOptions {
   musicId: number;
@@ -516,6 +524,35 @@ function peerFromState(value: unknown): LyricsCollaborationPeer | null {
   return { clientId: user.clientId, username: user.username, color: user.color.toUpperCase() };
 }
 
+/**
+ * Saving is possible whenever the document differs from the saved baseline, whoever made
+ * the difference: edits a collaborator left unsaved in the shared document included.
+ */
+export function lyricsDocumentSaveable(document: SongLyricsDocument | null, baseline: string): boolean {
+  return document != null && canonicalLyricsJSON(document) !== baseline;
+}
+
+/**
+ * While a collaboration owns the document only this client's own edits make it dirty;
+ * remote checkpoints and collaborators' edits change the shared document without doing so.
+ * Pass null for localChanges when no collaboration owns the document.
+ */
+export function lyricsDocumentDirty(
+  document: SongLyricsDocument | null,
+  baseline: string,
+  localChanges: boolean | null,
+): boolean {
+  return localChanges !== false && lyricsDocumentSaveable(document, baseline);
+}
+
+/**
+ * Identifies the stored state a document's authority envelope records. Checkpoints,
+ * publications and server reseeds change it; editing the shared document never does.
+ */
+export function lyricsAuthorityEnvelopeKey(document: SongLyricsDocument): string {
+  return JSON.stringify([document.revision, document.status, document.publishedRevision || 0, document.updatedAt]);
+}
+
 export class LyricsCollaboration {
   doc: Y.Doc;
   root: Y.Map<unknown>;
@@ -533,12 +570,14 @@ export class LyricsCollaboration {
   private status: LyricsCollaborationStatus = "connecting";
   private lastError: Error | undefined;
   private peers: LyricsCollaborationPeer[] = [];
+  private reportedLocalChanges = false;
+  private retainedLocalChanges = false;
 
   constructor(options: LyricsCollaborationOptions) {
     this.options = options;
     this.doc = new Y.Doc();
     this.root = this.doc.getMap<unknown>(LYRICS_YJS_ROOT);
-    this.undoManager = new Y.UndoManager(this.root, { trackedOrigins: new Set([LYRICS_YJS_LOCAL_ORIGIN]) });
+    this.undoManager = this.createUndoManager();
     this.root.observeDeep(this.handleDocumentChange);
     void this.connect();
   }
@@ -574,21 +613,53 @@ export class LyricsCollaboration {
     return true;
   }
 
-  beginCheckpoint(): number {
+  beginCheckpoint(): LyricsCheckpointBoundary {
     this.undoManager.stopCapturing();
-    return this.undoManager.undoStack.length;
+    return this.undoManager.undoStack.at(-1) ?? null;
   }
 
-  checkpointCommitted(boundary = this.undoManager.undoStack.length): void {
-    this.undoManager.undoStack.splice(0, Math.min(boundary, this.undoManager.undoStack.length));
+  /**
+   * Drops the undo history up to and including boundary (all of it when omitted). A boundary
+   * that is no longer on the stack was already retired, so nothing newer is dropped.
+   */
+  checkpointCommitted(boundary?: LyricsCheckpointBoundary): void {
+    const stack = this.undoManager.undoStack;
+    stack.splice(0, boundary === undefined ? stack.length : boundary === null ? 0 : stack.indexOf(boundary) + 1);
     this.undoManager.redoStack.splice(0);
     this.undoManager.stopCapturing();
+    this.handleUndoStackChange();
   }
 
+  /**
+   * The authority envelope moved, so undoing the history recorded so far would revert
+   * stored content: drop it. The server snapshots the room before it broadcasts the
+   * envelope, so edits in that history may still be unsaved; they stay reported as local
+   * changes until settleRetainedLocalChanges().
+   */
+  retireLocalHistory(): void {
+    this.retainedLocalChanges = this.hasLocalChanges();
+    this.checkpointCommitted();
+  }
+
+  /** No retired edit is left unsaved: the shared document matched the stored one. */
+  settleRetainedLocalChanges(): void {
+    if (!this.retainedLocalChanges) return;
+    this.retainedLocalChanges = false;
+    this.handleUndoStackChange();
+  }
+
+  hasLocalChanges(): boolean {
+    return this.undoManager.canUndo() || this.retainedLocalChanges;
+  }
+
+  // Retired edits have no undo history left; they stay in the shared document as
+  // unsaved shared edits instead of being reverted together with others' content.
   discardLocalChanges(): void {
     if (this.destroyed || !this.synced) return;
+    this.retainedLocalChanges = false;
     while (this.undoManager.canUndo()) this.undoManager.undo();
     this.undoManager.clear();
+    this.handleUndoStackChange();
   }
 
   reconnectNow(): void {
@@ -608,6 +679,7 @@ export class LyricsCollaboration {
       status: this.status,
       peers: this.peers,
       synced: this.synced,
+      localChanges: this.hasLocalChanges(),
       ...(this.lastError ? { error: this.lastError } : {}),
     };
   }
@@ -639,8 +711,24 @@ export class LyricsCollaboration {
     this.emit();
   };
 
+  // Undo stack items are recorded after the document observers run, so a local edit
+  // is reported by a second snapshot once the stack changes.
+  private readonly handleUndoStackChange = (): void => {
+    if (!this.destroyed && this.hasLocalChanges() !== this.reportedLocalChanges) this.emit();
+  };
+
+  private createUndoManager(): Y.UndoManager {
+    const undoManager = new Y.UndoManager(this.root, { trackedOrigins: new Set([LYRICS_YJS_LOCAL_ORIGIN]) });
+    undoManager.on("stack-item-added", this.handleUndoStackChange);
+    undoManager.on("stack-item-popped", this.handleUndoStackChange);
+    undoManager.on("stack-cleared", this.handleUndoStackChange);
+    return undoManager;
+  }
+
   private emit(): void {
-    this.options.onSnapshot(this.getSnapshot());
+    const snapshot = this.getSnapshot();
+    this.reportedLocalChanges = snapshot.localChanges;
+    this.options.onSnapshot(snapshot);
   }
 
   private setStatus(status: LyricsCollaborationStatus, error?: Error): void {
@@ -692,8 +780,9 @@ export class LyricsCollaboration {
     this.doc.destroy();
     this.doc = new Y.Doc();
     this.root = this.doc.getMap<unknown>(LYRICS_YJS_ROOT);
-    this.undoManager = new Y.UndoManager(this.root, { trackedOrigins: new Set([LYRICS_YJS_LOCAL_ORIGIN]) });
+    this.undoManager = this.createUndoManager();
     this.root.observeDeep(this.handleDocumentChange);
+    this.retainedLocalChanges = false;
     this.completedInitialSync = false;
     this.synced = false;
     this.peers = [];

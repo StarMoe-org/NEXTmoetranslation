@@ -1,9 +1,12 @@
 import type { CatalogMusicItem } from "@/lib/api";
 
 export function databaseLyricsStatusLabel(item: CatalogMusicItem): string {
+  const withdrawn = item.lyricsWithdrawn ? "（已撤下）" : "";
+  // A source-v3 document has no separate publication: saving it goes public.
+  if (item.lyricsSourceV3) return `source-v3 文档${withdrawn}`;
   if (item.lyricsStatus === "published") return "已发布";
   if (item.lyricsStatus === "draft-published") return "草稿（旧版公开）";
-  if (item.lyricsStatus === "draft") return "草稿";
+  if (item.lyricsStatus === "draft") return `草稿${withdrawn}`;
   if (item.lyricsAvailabilityState === "satisfied_no_lyrics") return "无需歌词（已记录）";
   if (item.lyricsAvailabilityState === "incomplete") return "来源未完成（已记录）";
   if (item.lyricsAvailabilityState === "ambiguous") return "来源有歧义（已记录）";

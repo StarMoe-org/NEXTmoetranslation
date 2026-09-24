@@ -3,6 +3,17 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { readLyricsEditor } from "./source-surfaces.mjs";
+import { loadSourceModule } from "./source-module-harness.mjs";
+
+test("the catalog labels a source-v3 song as a document and shows withdrawals", () => {
+  const { databaseLyricsStatusLabel } = loadSourceModule("components/lyrics/LyricsCatalogSidebar.tsx");
+  const item = { musicId: 68, title: {}, isNewlyWrittenMusic: false, lyricsStatus: "draft" };
+  assert.equal(databaseLyricsStatusLabel({ ...item, lyricsSourceV3: true }), "source-v3 文档");
+  assert.equal(databaseLyricsStatusLabel({ ...item, lyricsSourceV3: true, lyricsWithdrawn: true }), "source-v3 文档（已撤下）");
+  assert.equal(databaseLyricsStatusLabel(item), "草稿");
+  assert.equal(databaseLyricsStatusLabel({ ...item, lyricsWithdrawn: true }), "草稿（已撤下）");
+  assert.equal(databaseLyricsStatusLabel({ ...item, lyricsStatus: "published" }), "已发布");
+});
 
 
 test("LyricsEditor selects stable rendition families without merging equal text", async () => {
@@ -35,7 +46,7 @@ test("LyricsEditor selects stable rendition families without merging equal text"
   assert.match(combined, /value=\{activeProofreadingCredit\}[\s\S]*updateActiveCredits\("proofreading"/);
   assert.match(combined, /maxLength=\{activeRendition \? 2048 : undefined\}/);
   assert.match(editor, /snapshot: \(\) => \(\{/);
-  assert.match(editor, /isDirty: \(\) => lyricsRef\.current != null/);
+  assert.match(editor, /isDirty: isDirtyNow/);
   assert.match(editor, /discard: \(\) => boolean/);
   assert.doesNotMatch(editor, /gameProjection\?\.lines/);
 });
@@ -71,7 +82,8 @@ test("ruby editing, performer squares, and private component provenance remain e
     readFile(new URL("../src/app/globals.css", import.meta.url), "utf8"),
   ]);
 
-  assert.match(lineEditor, /Ruby 注音（可编辑）/);
+  assert.match(lineEditor, /!sourceMutable \|\| writeLocked \? "Ruby 注音（只读）" : "Ruby 注音"/);
+  assert.doesNotMatch(lineEditor, /Ruby 注音（可编辑）/);
   assert.match(lineEditor, /className="lyric-performer-swatch"/);
   assert.match(lineEditor, /line\.trailingPerformerIds !== undefined/);
   assert.match(lineEditor, /行尾演唱者/);
@@ -93,7 +105,7 @@ test("VOCALOID-only lyrics omit performer controls, squares, and publication req
   assert.match(editor, /line\.segments\.some\(\(segment\) => segment\.performerIds\.length === 0\)/);
   assert.match(editor, /segment\.performerIds\.length > 0 && <span className="lyric-performer-squares"/);
   assert.match(lineEditor, /\{showPerformerSegmentation && <>[\s\S]*lyric-performer-summary/);
-  assert.match(lineEditor, /\{showPerformerSegmentation && <span className="lyric-structure-actions">/);
+  assert.match(lineEditor, /\{showPerformerSegmentation && !layoutLocked && <span className="lyric-structure-actions">/);
   assert.match(review, /selectedVersion\.kind !== "vocaloid" \|\|[\s\S]*lyricsHasPerformerSegmentation\(detail\.analysis/);
   assert.match(review, /showPerformerSegmentation && segment\.performerIds\.length > 0/);
   assert.match(review, /showPerformerSegmentation && line\.trailingPerformerIds\.length > 0/);

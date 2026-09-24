@@ -73,11 +73,13 @@ function renderLine(overrides = {}) {
     return node;
   };
   const buttons = (text) => nodes.filter((node) => node.type === "button" && node.props.children === text);
-  return { calls, labelled, buttons };
+  const rubyHeading = nodes.find((node) => node.type === "strong" && String(node.props.children).startsWith("Ruby"))?.props.children;
+  return { calls, labelled, buttons, rubyHeading };
 }
 
-test("revision-0 manual lines accept Japanese segment and ruby input", () => {
-  const { calls, labelled, buttons } = renderLine();
+test("source-mutable legacy lines accept Japanese segment and ruby input", () => {
+  const { calls, labelled, buttons, rubyHeading } = renderLine();
+  assert.equal(rubyHeading, "Ruby 注音");
 
   const segmentInput = labelled("第 1 行分段 1");
   const rubyText = labelled("第 1 行分段 1 ruby 1 原文");
@@ -103,9 +105,10 @@ test("revision-0 manual lines accept Japanese segment and ruby input", () => {
   assert.equal(mergeButtons[1].props.disabled, false);
 });
 
-test("imported or write-locked lines keep segment and ruby inputs read-only", () => {
+test("source-read-only or write-locked lines keep segment and ruby inputs read-only and say so", () => {
   for (const overrides of [{ sourceMutable: false }, { writeLocked: true }]) {
-    const { labelled, buttons } = renderLine(overrides);
+    const { labelled, buttons, rubyHeading } = renderLine(overrides);
+    assert.equal(rubyHeading, "Ruby 注音（只读）");
 
     assert.equal(labelled("第 1 行分段 1").props.readOnly, true);
     assert.equal(labelled("第 1 行分段 1 ruby 1 原文").props.readOnly, true);

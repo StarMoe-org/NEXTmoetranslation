@@ -1,7 +1,6 @@
 import type {
   CatalogPerformerItem, LyricsEditorLine, LyricsEditorSegment, LyricsPerformerID,
   LyricsRendition, LyricsRenditionPerformer, LyricsRenditionSide, LyricsRenditionTranslationCredits,
-  LyricsRenditionVersion,
 } from "@/lib/api";
 import { performerRepresentativeColor } from "@/lib/performer-colors.mjs";
 
@@ -11,6 +10,7 @@ export function orderedLyricsLines(lines: LyricsEditorLine[]): LyricsEditorLine[
 
 export function lineWithEditablePatch(line: LyricsEditorLine, patch: Partial<LyricsEditorLine>): LyricsEditorLine {
   const updated = { ...line };
+  if (patch.japanese !== undefined) updated.japanese = patch.japanese;
   if (patch["zh-CN"] !== undefined) updated["zh-CN"] = patch["zh-CN"];
   if (patch["en-US"] !== undefined) updated["en-US"] = patch["en-US"];
   if (patch.stanzaBreakBefore !== undefined) updated.stanzaBreakBefore = patch.stanzaBreakBefore;
@@ -32,8 +32,10 @@ export function renditionSideLinesPatch(
   };
   if (version === "full" && rendition.relation.kind === "exact_projection" && rendition.game) {
     const fullMap = new Map(ordered.map((line) => [line.id, line]));
-    const nextGameLines: LyricsEditorLine[] = rendition.game.lines.map((gameLine: LyricsEditorLine) => {
-      const fullLine = fullMap.get(gameLine.id);
+    // Game rows carry their own IDs; relation.lineIds names the Full row each one projects.
+    const projectedIds = rendition.relation.lineIds || [];
+    const nextGameLines: LyricsEditorLine[] = rendition.game.lines.map((gameLine: LyricsEditorLine, index: number) => {
+      const fullLine = fullMap.get(projectedIds[index] ?? gameLine.id);
       if (!fullLine) return gameLine;
       return {
         ...gameLine,
@@ -68,8 +70,7 @@ export function renditionSideLinesPatch(
       return {
         performerId: id,
         name: nameStr,
-        // `version` lives on the rendition sides, not on the rendition itself.
-        color: performerRepresentativeColor(id, (rendition as LyricsRendition & { version: LyricsRenditionVersion }).version.label),
+        color: performerRepresentativeColor(id, side.version.label),
       };
     });
     patch.performers = [...rendition.performers, ...added];

@@ -10,7 +10,7 @@ import {
   getUpstreamStatusPublic, getUsername, getRole,
   pushBackup, runCNSync,
 } from "@/lib/api";
-import { CATEGORY_LABELS, FIELD_LABELS } from "@/lib/labels";
+import { CATEGORY_LABELS, fieldLabel } from "@/lib/labels";
 
 type ShowFn = (msg: string, type?: "ok" | "err") => void;
 
@@ -189,7 +189,7 @@ function BadgeFilterCard({ locale }: { locale: Locale }) {
             return (
               <label className="badge-filter-item" key={key}>
                 <input type="checkbox" checked={hidden.has(key)} onChange={() => toggle(key)} />
-                <span>{CATEGORY_LABELS[cat.name] || cat.name} / {FIELD_LABELS[f.name] || f.name}</span>
+                <span>{CATEGORY_LABELS[cat.name] || cat.name} / {fieldLabel(cat.name, f.name)}</span>
               </label>
             );
           })

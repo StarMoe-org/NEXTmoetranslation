@@ -61,10 +61,10 @@ export const EntryRow = React.memo(function EntryRow({
       <td>
         <div className="jp">
           {entry.speakerName && <div className="speaker">{entry.speakerName}</div>}
-          {isEventStory ? (entry.japanese || eventStoryEntryLabel(entry.key)) : entry.key}
+          <div className="entry-preview">{isEventStory ? (entry.japanese || eventStoryEntryLabel(entry.key)) : entry.key}</div>
         </div>
       </td>
-      <td><div className="cn">{entry.text}</div></td>
+      <td><div className="cn entry-preview">{entry.text}</div></td>
     </tr>
   );
 });

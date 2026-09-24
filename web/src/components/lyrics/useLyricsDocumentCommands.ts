@@ -27,7 +27,7 @@ export function useLyricsDocumentCommands(state: LyricsEditorState, target: Lyri
     pendingAnnotationOperation, setPendingAnnotationOperation,
     activeRenditionKey, activeVersion, segmentInputRefs, linesContainerRef,
   } = state;
-  const { activeRendition, activeSide, activeLines, activeSideReadOnly } = target;
+  const { activeRendition, activeSide, activeLines, activeSideReadOnly, activeSideSourceMutable, recoveryLedgerOwned } = target;
 
   const updateLyrics = (patch: Partial<SongLyrics> | Partial<RenditionLyricsDocument>) => {
     if (!lyrics || busyRef.current || writeLocked) return;
@@ -74,6 +74,7 @@ export function useLyricsDocumentCommands(state: LyricsEditorState, target: Lyri
 
   const updateLine = (index: number, patch: Partial<LyricsEditorLine>) => {
     if (!lyrics || activeSideReadOnly) return;
+    if (recoveryLedgerOwned && Object.keys(patch).some((key) => key !== "zh-CN" && key !== "en-US")) return;
     replaceActiveLines(activeLines.map((line, lineIndex) =>
       lineIndex === index ? lineWithEditablePatch(line, patch) : line) as LyricsEditorLine[]);
   };
@@ -93,7 +94,7 @@ export function useLyricsDocumentCommands(state: LyricsEditorState, target: Lyri
       return;
     }
     const segments = line.segments.map((segment, index) => index === segmentIndex ? result.segment : segment);
-    setSegments(lineIndex, segments, lyrics.revision === 0);
+    setSegments(lineIndex, segments, activeSideSourceMutable);
   };
 
   const updateSegment = (lineIndex: number, segmentIndex: number, text: string, performerIds?: LyricsPerformerID[]) => {
@@ -174,7 +175,7 @@ export function useLyricsDocumentCommands(state: LyricsEditorState, target: Lyri
       setPendingAnnotationOperation({ kind: "ruby-edit", lineIndex, segmentIndex, rubyIndex, patch });
       return;
     }
-    setSegments(lineIndex, result.segments, lyrics.revision === 0);
+    setSegments(lineIndex, result.segments, activeSideSourceMutable);
   };
 
   const updateRubySpan = (lineIndex: number, segmentIndex: number, rubyIndex: number, patch: { text?: string; reading?: string }) => {
@@ -247,14 +248,14 @@ export function useLyricsDocumentCommands(state: LyricsEditorState, target: Lyri
   };
 
   const moveSegment = (lineIndex: number, segmentIndex: number, direction: -1 | 1) => {
-    if (!lyrics || lyrics.revision > 0 || activeSideReadOnly) return;
+    if (!lyrics || !activeSideSourceMutable) return;
     const segments = segmentsWithSegmentMoved(activeLines[lineIndex].segments, segmentIndex, direction);
     if (!segments) return;
     setSegments(lineIndex, segments, true);
   };
 
   const addLine = () => {
-    if (!lyrics || lyrics.revision > 0 || activeSideReadOnly) return;
+    if (!lyrics || !activeSideSourceMutable) return;
     const order = activeLines.length;
     const line: LyricsEditorLine = {
       id: `manual-${lyrics.musicId}-${activeRenditionKey || "legacy"}-${activeVersion}-${Date.now()}-${order}`,
@@ -265,7 +266,7 @@ export function useLyricsDocumentCommands(state: LyricsEditorState, target: Lyri
   };
 
   const removeLine = (lineIndex: number) => {
-    if (!lyrics || lyrics.revision > 0 || activeSideReadOnly || activeLines.length <= 1) return;
+    if (!lyrics || !activeSideSourceMutable || activeLines.length <= 1) return;
     const removedLineID = activeLines[lineIndex]?.id;
     const focusLineIndex = Math.max(0, Math.min(lineIndex, activeLines.length - 2));
     replaceActiveLines(activeLines.filter((_, index) => index !== lineIndex));
@@ -280,7 +281,7 @@ export function useLyricsDocumentCommands(state: LyricsEditorState, target: Lyri
   };
 
   const moveLine = (lineIndex: number, direction: -1 | 1) => {
-    if (!lyrics || lyrics.revision > 0 || activeSideReadOnly) return;
+    if (!lyrics || !activeSideSourceMutable) return;
     const lines = linesWithLineMoved(activeLines, lineIndex, direction);
     if (!lines) return;
     replaceActiveLines(lines);

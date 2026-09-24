@@ -4,24 +4,18 @@ export interface LyricsMetadataCardProps {
   activeTranslationCredit: string;
   activeProofreadingCredit: string;
   activeRendition: LyricsRendition | null;
-  legacyLyrics: SongLyrics | null;
   activeVersion: "full" | "game";
-  projectionKind: "full_only" | "game_only" | "exact_projection" | "independent_game" | "invalid";
   writeLocked: boolean;
   updateActiveCredits: (field: "translation" | "proofreading", value: string) => void;
-  onUpdateLyrics: (patch: Partial<SongLyrics> | Partial<RenditionLyricsDocument>) => void;
 }
 
 export function LyricsMetadataCard({
   activeTranslationCredit,
   activeProofreadingCredit,
   activeRendition,
-  legacyLyrics,
   activeVersion,
-  projectionKind,
   writeLocked,
   updateActiveCredits,
-  onUpdateLyrics,
 }: LyricsMetadataCardProps) {
   return (
     <div className="lyrics-metadata">
@@ -45,6 +39,31 @@ export function LyricsMetadataCard({
           readOnly={writeLocked || (!activeRendition && activeVersion === "game")}
         />
       </label>
+    </div>
+  );
+}
+
+export interface LyricsSourceMetadataCardProps {
+  activeRendition: LyricsRendition | null;
+  legacyLyrics: SongLyrics | null;
+  activeVersion: "full" | "game";
+  projectionKind: "full_only" | "game_only" | "exact_projection" | "independent_game" | "invalid";
+  writeLocked: boolean;
+  onUpdateLyrics: (patch: Partial<SongLyrics> | Partial<RenditionLyricsDocument>) => void;
+}
+
+/** Internal notes and source identity; rendered inside the editor's 技术详情 disclosure. */
+export function LyricsSourceMetadataCard({
+  activeRendition,
+  legacyLyrics,
+  activeVersion,
+  projectionKind,
+  writeLocked,
+  onUpdateLyrics,
+}: LyricsSourceMetadataCardProps) {
+  if (!legacyLyrics && !activeRendition) return null;
+  return (
+    <div className="lyrics-source-metadata">
       {legacyLyrics ? (
         <>
           <label>
@@ -65,7 +84,7 @@ export function LyricsMetadataCard({
           </label>
           {legacyLyrics.sourceUrl && (
             <a href={legacyLyrics.sourceUrl} target="_blank" rel="noopener noreferrer">
-              已锁定来源修订 {legacyLyrics.sourceRevisionId}
+              固定来源修订 {legacyLyrics.sourceRevisionId}
             </a>
           )}
         </>

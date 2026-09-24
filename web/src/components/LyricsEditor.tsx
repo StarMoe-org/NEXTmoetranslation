@@ -5,16 +5,18 @@ import { useToast } from "@/app/providers";
 import { Modal } from "@/components/Modal";
 import { LyricsDocumentView } from "@/components/lyrics/LyricsDocumentView";
 import {
-  isLegacyLyricsDocument, lyricsPublicationReadiness, sourceLabel,
+  detailLabel, isLegacyLyricsDocument, lyricsPublicationReadiness, sourceLabel, sourceV3SaveWording,
 } from "@/components/lyrics/lyricsDocumentModel";
 import { useLyricsActiveTarget, useLyricsEditorState } from "@/components/lyrics/lyricsEditorState";
 import { useLyricsDocumentCommands } from "@/components/lyrics/useLyricsDocumentCommands";
 import { useLyricsDocumentLoader } from "@/components/lyrics/useLyricsDocumentLoader";
 import { useLyricsPersistence } from "@/components/lyrics/useLyricsPersistence";
+import { LyricsRecoveryTakeoverDialog } from "@/components/lyrics/LyricsRecoveryTakeover";
+import { useLyricsRecoveryTakeover } from "@/components/lyrics/useLyricsRecoveryTakeover";
 import { useLyricsSourceWorkflow } from "@/components/lyrics/useLyricsSourceWorkflow";
 import { isTranslationEditionLabel, selectTranslationEditionKey } from "@/lib/lyrics-editions.mjs";
 import type { SongLyricsDocument } from "@/lib/api";
-import { canonicalLyricsJSON } from "@/lib/yjs-lyrics";
+import { canonicalLyricsJSON, lyricsDocumentDirty } from "@/lib/yjs-lyrics";
 
 export interface LyricsEditorHandle {
   save: () => Promise<boolean>;
@@ -49,9 +51,10 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
   const commands = useLyricsDocumentCommands(state, activeTarget);
   const source = useLyricsSourceWorkflow(state, loader, commands, role);
   const persistence = useLyricsPersistence(state, loader);
+  const takeover = useLyricsRecoveryTakeover(state, loader, role);
   const {
-    lyrics, setLyrics, setBaseline, busy, error, setError, dirty, writeLocked, query,
-    documentGenerationRef, lyricsRef, baselineRef, selectedMusicIDRef,
+    lyrics, setLyrics, setBaseline, busy, error, setError, dirty, saveable, sourceV3PublicState, writeLocked, query,
+    documentGenerationRef, lyricsRef, baselineRef, selectedMusicIDRef, collaborationRef, sourceImportTokenRef,
     activeTranslationEditionKey, setActiveTranslationEditionKey, activeTranslationEditionKeyRef,
     activeRenditionKey, setActiveRenditionKey, activeVersion, setActiveVersion,
     pendingTransition, setPendingTransition, pendingAnnotationOperation, setPendingAnnotationOperation,
@@ -69,7 +72,8 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
     save, discard, reloadAuthoritative, loadConflictAuthoritative, performEditionWorkflow, continuePendingTransition,
   } = persistence;
   const { publicationProblems, publicationChecks, publicationComplete } =
-    lyricsPublicationReadiness(lyrics, renditionDocument, legacyLyrics, dirty);
+    lyricsPublicationReadiness(lyrics, renditionDocument, legacyLyrics, saveable);
+  const saveAndContinueLabel = sourceV3SaveWording(sourceV3PublicState)?.continueLabel ?? "保存并继续";
 
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
   useEffect(() => {
@@ -108,12 +112,18 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty]);
 
+  // Same rule as state.dirty, read from refs so callers see edits made since the last render.
+  const isDirtyNow = () => {
+    const collaboration = sourceImportTokenRef.current ? null : collaborationRef.current;
+    return lyricsDocumentDirty(lyricsRef.current, baselineRef.current, collaboration ? collaboration.hasLocalChanges() : null);
+  };
+
   useImperativeHandle(ref, () => ({
     save,
     discard,
-    isDirty: () => lyricsRef.current != null && canonicalLyricsJSON(lyricsRef.current) !== baselineRef.current,
+    isDirty: isDirtyNow,
     snapshot: () => ({
-      dirty: lyricsRef.current != null && canonicalLyricsJSON(lyricsRef.current) !== baselineRef.current,
+      dirty: isDirtyNow(),
       document: lyricsRef.current ? JSON.parse(JSON.stringify(lyricsRef.current)) as SongLyricsDocument : null,
       generation: documentGenerationRef.current,
       editionKey: activeTranslationEditionKeyRef.current,
@@ -144,7 +154,9 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
         role={role}
         publicationChecks={publicationChecks}
         publicationComplete={publicationComplete}
+        onRequestRecoveryTakeover={() => void takeover.open()}
       />
+      <LyricsRecoveryTakeoverDialog takeover={takeover} saveable={saveable} writeLocked={writeLocked} />
       <Modal open={pendingAnnotationOperation != null} onClose={() => setPendingAnnotationOperation(null)} title="确认移除受影响的 ruby 注音" maxWidth={500}>
         <p className="dirty-guard-copy">这次拆分或文字修改落在已有注音范围内，无法在不猜测读音对应关系的情况下自动保留该注音。</p>
         <p className="dirty-guard-copy">确认后只会移除直接受影响的 ruby reading；其他分段和未受影响的注音会原样保留。系统不会把一个完整读音复制到拆分后的两边。</p>
@@ -155,7 +167,7 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
       </Modal>
       <Modal open={confirmSourceImport && sourcePreview != null && lyrics?.revision === 0} onClose={() => setConfirmSourceImport(false)} title="确认替换歌词草稿" maxWidth={500}>
         <p className="dirty-guard-copy">将载入固定修订 {sourcePreview?.revisionId} 的 {sourcePreview?.lines.length} 行日文歌词，并替换当前全部歌词行。已有中英翻译和分段会被替换；来源演唱者证据只会在可安全映射为当前数字角色 ID 时保留，否则会阻止载入并显示错误。</p>
-        <p className="dirty-guard-copy">此操作只更新 revision 0 本地草稿。请再次核对；网络或服务器瞬时失败会保留一次性授权和 verified draft，可直接重试保存。仅在授权过期、身份/来源或内容生产者变化等终态时需要重新预览。首次保存成功后，来源资料、行顺序与编号、日文原文才会永久锁定。</p>
+        <p className="dirty-guard-copy">此操作只更新 revision 0 本地草稿。请再次核对；网络或服务器瞬时失败会保留一次性授权和 verified draft，可直接重试保存。仅在授权过期、身份/来源或内容生产者变化等终态时需要重新预览。首次保存成功后仍可调整歌词行与日文原文，但固定来源只能在首次保存前导入。</p>
         <div className="dirty-guard-actions">
           <button className="btn btn-primary" onClick={acceptPreview} disabled={writeLocked}>确认载入草稿</button>
           <button className="btn btn-ghost" onClick={() => setConfirmSourceImport(false)}>返回核对</button>
@@ -221,13 +233,21 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
           {busy && <p className="dirty-guard-copy" role="status" aria-live="polite">正在保存或提交歌词，请等待服务器确认…</p>}
         {pendingTransition?.kind === "publish" ? (
           <>
-            <p className="dirty-guard-copy">{pendingTransition.nextPublished ? `将把当前 revision ${lyrics?.revision || 0} 发布到公共歌词文件。` : `将从公共歌词文件撤下 revision ${lyrics?.publishedRevision || lyrics?.revision || 0}。`}</p>
-            {dirty && <p className="dirty-guard-copy">当前还有未保存修改。必须先保存成功，才能发布刚刚核对的内容。</p>}
+            <p className="dirty-guard-copy">{pendingTransition.nextPublished ? (saveable ? "将先保存当前修改，再把保存后的新 revision 发布到公共歌词文件。" : `将把当前 revision ${lyrics?.revision || 0} 发布到公共歌词文件。`) : `将从公共歌词文件撤下 revision ${lyrics?.publishedRevision || lyrics?.revision || 0}。`}</p>
+            {saveable && <p className="dirty-guard-copy">共享文档里还有未保存修改（包括协作者留下的修改）。{pendingTransition.nextPublished ? "发布" : "取消发布"}会按已保存的 revision 重置协作文档，所以会先保存；保存成功后才提交，保存失败或遇到修订冲突则什么都不会提交。</p>}
             {pendingTransition.nextPublished && publicationProblems.length > 0 && (
               <div className="lyrics-publication-check" role="alert"><strong>发布前还需补齐：</strong><ul>{publicationProblems.slice(0, 8).map((problem) => <li key={problem}>{problem}</li>)}</ul>{publicationProblems.length > 8 && <span>另有 {publicationProblems.length - 8} 项未列出</span>}</div>
             )}
+            {error && (
+              <div className="lyrics-error" role="alert">
+                <strong>{sourceLabel(error)}</strong>
+                {error.details.map((detail) => <span key={detail}>{detailLabel(detail)}</span>)}
+                <span>{pendingTransition.nextPublished ? "未发布任何内容。" : "发布状态没有改变。"}</span>
+                {error.code === "revision_conflict" && error.current && <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setPendingTransition(null); setConfirmConflictReload(true); }}>载入服务器版本</button>}
+              </div>
+            )}
             <div className="dirty-guard-actions">
-              {dirty ? <button className="btn btn-primary" onClick={() => void continuePendingTransition(true)} disabled={busy || writeLocked}>保存并继续</button> : <button className="btn btn-primary" onClick={() => void continuePendingTransition(false)} disabled={busy || writeLocked || (pendingTransition.nextPublished && publicationProblems.length > 0)}>{pendingTransition.nextPublished ? "确认发布" : "确认取消发布"}</button>}
+              {saveable ? <button className="btn btn-primary" onClick={() => void continuePendingTransition(true)} disabled={busy || writeLocked || (pendingTransition.nextPublished && publicationProblems.length > 0)}>{pendingTransition.nextPublished ? "保存并发布" : "保存并取消发布"}</button> : <button className="btn btn-primary" onClick={() => void continuePendingTransition(false)} disabled={busy || writeLocked || (pendingTransition.nextPublished && publicationProblems.length > 0)}>{pendingTransition.nextPublished ? "确认发布" : "确认取消发布"}</button>}
               <button className="btn btn-ghost" onClick={() => setPendingTransition(null)} disabled={busy}>取消</button>
             </div>
           </>
@@ -238,7 +258,7 @@ export const LyricsEditor = forwardRef<LyricsEditorHandle, LyricsEditorProps>(fu
             {pendingTransition?.kind === "edition-command" && pendingTransition.command === "clone" && <p className="dirty-guard-copy"><strong>如果选择“放弃并继续”，克隆只会复制服务器上已保存的当前译本，明确不会复制这份未保存草稿。</strong></p>}
             {pendingTransition?.kind === "edition-command" && pendingTransition.command !== "clone" && <p className="dirty-guard-copy">译本元数据操作使用全歌曲 revision/CAS；继续前必须先同步处理当前译本草稿。</p>}
             <div className="dirty-guard-actions">
-              <button className="btn btn-primary" onClick={() => void continuePendingTransition(true)} disabled={busy || writeLocked}>保存并继续</button>
+              <button className="btn btn-primary" onClick={() => void continuePendingTransition(true)} disabled={busy || writeLocked}>{saveAndContinueLabel}</button>
               <button className="btn btn-secondary" onClick={() => void continuePendingTransition(false)} disabled={busy || ((pendingTransition?.kind === "edition-switch" || pendingTransition?.kind === "edition-command") && writeLocked)}>放弃并继续</button>
               <button className="btn btn-ghost" onClick={() => setPendingTransition(null)} disabled={busy}>取消</button>
             </div>

@@ -78,7 +78,7 @@ test("LyricsEditor guards every edition transition and keeps clone discard seman
   const editor = await readLyricsEditor();
   assert.match(editor, /setPendingTransition\(\{ kind: "edition-switch", editionKey \}\)/);
   assert.match(editor, /setPendingTransition\(\{ kind: "edition-command", command \}\)/);
-  assert.match(editor, /保存并继续/);
+  assert.match(editor, /const saveAndContinueLabel = sourceV3SaveWording\(sourceV3PublicState\)\?\.continueLabel \?\? "保存并继续"/);
   assert.match(editor, /放弃并继续/);
   assert.match(editor, />取消</);
   assert.match(editor, /克隆只会复制服务器上已保存的当前译本，明确不会复制这份未保存草稿/);
