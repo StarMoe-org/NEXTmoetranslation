@@ -874,7 +874,14 @@ func (s *Store) ImportTranslationContent(entries []EntryLocalizationRecord, even
 	return s.ImportTranslationContentContext(context.Background(), entries, events, lyrics)
 }
 
+// ImportTranslationContentContext replaces the content without side stories,
+// which leaves the side-story tables empty.
 func (s *Store) ImportTranslationContentContext(ctx context.Context, entries []EntryLocalizationRecord, events EventContentExport, lyrics LyricsContentExport) error {
+	return s.ImportTranslationContentWithSideStoriesContext(ctx, entries, events, lyrics, SideStoryContentExport{})
+}
+
+func (s *Store) ImportTranslationContentWithSideStoriesContext(ctx context.Context, entries []EntryLocalizationRecord,
+	events EventContentExport, lyrics LyricsContentExport, sideStories SideStoryContentExport) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -887,7 +894,7 @@ func (s *Store) ImportTranslationContentContext(ctx context.Context, entries []E
 	if _, err := tx.ExecContext(ctx, `UPDATE lyrics_collab_documents SET epoch=epoch+1, updated_at=?`, time.Now().UTC().Unix()); err != nil {
 		return err
 	}
-	if err := importTranslationContentTx(ctx, tx, entries, events, lyrics); err != nil {
+	if err := importTranslationContentTx(ctx, tx, entries, events, lyrics, sideStories); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -898,7 +905,11 @@ func (s *Store) ImportTranslationContentContext(ctx context.Context, entries []E
 	return nil
 }
 
-func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []EntryLocalizationRecord, events EventContentExport, lyrics LyricsContentExport) error {
+func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []EntryLocalizationRecord, events EventContentExport,
+	lyrics LyricsContentExport, sideStories SideStoryContentExport) error {
+	if err := validateRestoredSideStories(ctx, sideStories); err != nil {
+		return err
+	}
 	catalogPerformers, err := restoredLyricsPerformerAliases(ctx, lyrics)
 	if err != nil {
 		return err
@@ -951,6 +962,9 @@ func importTranslationContentTx(ctx context.Context, tx *sql.Tx, entries []Entry
 		return err
 	}
 	if err := importLyricsPublicationRowsTx(ctx, tx, lyrics); err != nil {
+		return err
+	}
+	if err := importSideStoryContentRowsTx(ctx, tx, sideStories); err != nil {
 		return err
 	}
 	if err := supersedeStalePendingLyricsSourceReviewsTx(ctx, tx, time.Now().UTC()); err != nil {
@@ -1151,7 +1165,7 @@ func deleteReplacedTranslationContentTx(ctx context.Context, tx *sql.Tx) error {
 	if err := restoreEmbeddedLyricsEditorSeedDeleteGuardsTx(ctx, tx); err != nil {
 		return err
 	}
-	return nil
+	return deleteSideStoryContentTx(ctx, tx)
 }
 
 func importEntryLocalizationRowsTx(ctx context.Context, tx *sql.Tx, entries []EntryLocalizationRecord) error {
@@ -2902,8 +2916,9 @@ func canonicalizeRestoredPublicationWithSource(record *LyricsPublicationBackupRe
 
 // RestoreBackup commits the legacy public projection and optional additive
 // content in one transaction. A missing additive manifest is an old backup: it
-// deliberately clears multilingual and lyrics-only state instead of retaining
-// unrelated data from the database being replaced.
+// deliberately clears multilingual, lyrics-only and side-story state instead of
+// retaining unrelated data from the database being replaced. Without side
+// stories the restore leaves the side-story tables empty.
 func (s *Store) RestoreBackup(categories map[string]model.Category, events []LegacyEventRestore,
 	entries []EntryLocalizationRecord, eventContent EventContentExport, lyrics LyricsContentExport,
 	additivePresent bool, actor string) error {
@@ -2913,6 +2928,15 @@ func (s *Store) RestoreBackup(categories map[string]model.Category, events []Leg
 func (s *Store) RestoreBackupContext(ctx context.Context, categories map[string]model.Category, events []LegacyEventRestore,
 	entries []EntryLocalizationRecord, eventContent EventContentExport, lyrics LyricsContentExport,
 	additivePresent bool, actor string) error {
+	return s.RestoreBackupWithSideStoriesContext(ctx, categories, events, entries, eventContent, lyrics,
+		SideStoryContentExport{}, additivePresent, actor)
+}
+
+// RestoreBackupWithSideStoriesContext is RestoreBackupContext for a backup that
+// carries side stories; they are restored only with the additive content.
+func (s *Store) RestoreBackupWithSideStoriesContext(ctx context.Context, categories map[string]model.Category,
+	events []LegacyEventRestore, entries []EntryLocalizationRecord, eventContent EventContentExport,
+	lyrics LyricsContentExport, sideStories SideStoryContentExport, additivePresent bool, actor string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -2964,7 +2988,7 @@ func (s *Store) RestoreBackupContext(ctx context.Context, categories map[string]
 		}
 	}
 	if additivePresent {
-		if err := importTranslationContentTx(ctx, tx, entries, eventContent, lyrics); err != nil {
+		if err := importTranslationContentTx(ctx, tx, entries, eventContent, lyrics, sideStories); err != nil {
 			return err
 		}
 	} else {
@@ -3002,6 +3026,9 @@ func (s *Store) RestoreBackupContext(ctx context.Context, categories map[string]
 			return err
 		}
 		if err := supersedeStalePendingLyricsSourceReviewsTx(ctx, tx, time.Now().UTC()); err != nil {
+			return err
+		}
+		if err := deleteSideStoryContentTx(ctx, tx); err != nil {
 			return err
 		}
 	}
