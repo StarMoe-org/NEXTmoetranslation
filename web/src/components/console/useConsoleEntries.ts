@@ -156,7 +156,8 @@ export function useConsoleEntries({
   }, []);
 
   // ---- Load entries on selection change ----
-  const loadEntries = useCallback(async (): Promise<boolean> => {
+  // keepKey reselects that story line when the reloaded episode still has it.
+  const loadEntries = useCallback(async (keepKey?: string | null): Promise<boolean> => {
     const generation = ++loadGenerationRef.current;
     if (!category || !field) {
       setEntries([]);
@@ -201,7 +202,8 @@ export function useConsoleEntries({
         selectedEpisodeRef.current = initialEp;
         setSelectedEpisode(initialEp);
         const epEntries = initialEp === "all" ? visible : visible.filter((entry) => eventStoryEpisodeNo(entry) === initialEp);
-        const first = epEntries.length > 0 ? epEntries[0] : visible[0];
+        const first = (keepKey ? epEntries.find((entry) => entry.key === keepKey) : undefined)
+          ?? (epEntries.length > 0 ? epEntries[0] : visible[0]);
         if (first) { setSelectedKey(first.key); setEditValue(first.text); }
         if (recovery.draft) {
           show(`已恢复 ${recovery.draft.fileName} 的 ${recovery.draft.translations.length} 条 TXT 本地草稿`, "ok");

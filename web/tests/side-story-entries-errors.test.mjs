@@ -1,53 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadSourceModule } from "./source-module-harness.mjs";
+import { createRenderer, loadSourceModule } from "./source-module-harness.mjs";
 
 // All ids, messages and details below are synthetic test data.
-
-// Re-renderable stand-in for React hooks: slots persist across render() calls in call
-// order, effects run after each render whose deps changed, unmount() runs cleanups.
-function createRenderer() {
-  const slots = [];
-  let cursor = 0;
-  let queue = [];
-  const changed = (previous, deps) => !previous || !deps || deps.some((dep, index) => !Object.is(dep, previous.deps[index]));
-  const memo = (factory, deps) => {
-    const index = cursor++;
-    if (changed(slots[index], deps)) slots[index] = { value: factory(), deps };
-    return slots[index].value;
-  };
-  const react = {
-    useState(initial) {
-      const slot = (slots[cursor++] ??= { value: typeof initial === "function" ? initial() : initial });
-      return [slot.value, (next) => { slot.value = typeof next === "function" ? next(slot.value) : next; }];
-    },
-    useRef: (current) => (slots[cursor++] ??= { current }),
-    useMemo: memo,
-    useCallback: (callback, deps) => memo(() => callback, deps),
-    useEffect(effect, deps) {
-      const index = cursor++;
-      const previous = slots[index];
-      if (!changed(previous, deps)) return;
-      slots[index] = { deps, cleanup: previous?.cleanup };
-      queue.push(() => { previous?.cleanup?.(); slots[index].cleanup = effect(); });
-    },
-  };
-  return {
-    react,
-    render(component, props) {
-      cursor = 0;
-      const output = component(props);
-      const effects = queue;
-      queue = [];
-      effects.forEach((run) => run());
-      return output;
-    },
-    unmount() {
-      for (const slot of slots) if (typeof slot?.cleanup === "function") slot.cleanup();
-    },
-  };
-}
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 

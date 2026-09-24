@@ -230,7 +230,7 @@ export function Console({ onLogout }: { onLogout: () => void }) {
     runOrGuard("切换章节", () => performSelectChapter(epNo));
   };
 
-  const reloadStory = () => runOrGuard("重新载入剧情", () => { void loadEntries(); });
+  const reloadStory = () => runOrGuard("重新载入剧情", () => { void loadEntries(selectedKey); });
 
   const selectEntry = useCallback((entry: TranslationEntry) => {
     if (savingRef.current) return;
