@@ -369,12 +369,14 @@ export function useConsoleRealtime({
   // sidestory.sync names no story, so the open story's list summary decides. A reload waits
   // until an unsaved draft is saved or discarded, and reselects the line once loaded.
   const syncReloadPendingRef = useRef<{ kind: SideStoryKind; id: string; locale: Locale } | null>(null);
-  const syncReselectRef = useRef<{ kind: SideStoryKind; id: string; locale: Locale; key: string } | null>(null);
+  const syncReselectRef = useRef<{
+    kind: SideStoryKind; id: string; locale: Locale; key: string; previous: readonly TranslationEntry[];
+  } | null>(null);
 
   const reloadSyncedSideStory = () => {
     syncReloadPendingRef.current = null;
     if (!sideStoryKind) return;
-    syncReselectRef.current = selectedKey ? { kind: sideStoryKind, id: field, locale, key: selectedKey } : null;
+    syncReselectRef.current = selectedKey ? { kind: sideStoryKind, id: field, locale, key: selectedKey, previous: entries } : null;
     void loadEntries().then((loaded) => {
       if (!loaded) syncReselectRef.current = null;
     });
@@ -411,7 +413,8 @@ export function useConsoleRealtime({
 
   useEffect(() => {
     const reselect = syncReselectRef.current;
-    if (!reselect || entries.length === 0) return;
+    // A save can change the lines in the render that starts the deferred reload.
+    if (!reselect || entries.length === 0 || entries === reselect.previous) return;
     syncReselectRef.current = null;
     if (reselect.kind !== sideStoryKind || reselect.id !== field || reselect.locale !== locale) return;
     const entry = entries.find((candidate) => candidate.key === reselect.key);
