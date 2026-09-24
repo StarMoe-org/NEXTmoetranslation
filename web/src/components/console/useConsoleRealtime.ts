@@ -453,6 +453,8 @@ export function useConsoleRealtime({
       sseConnectedRef.current = true;
       const status = d as unknown as EditorGateStatus;
       if (status.instanceId && !status.running) {
+        // A job that ended short of its total, e.g. a failed AI run, leaves no progress line.
+        setProgress((current) => (current && current.current < current.total ? null : current));
         if (acceptLoadedProducerState(status)) {
           if (!contentConflict && !preservedConflictDraftRef.current) {
             setWriteFence(false);
