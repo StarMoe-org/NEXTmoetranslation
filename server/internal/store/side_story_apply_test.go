@@ -569,3 +569,45 @@ func TestApplySideStoryJPFailureLeavesAStoredScriptTheBackfillWillNotFetchAgain(
 		t.Fatalf("queued episode JP failure state %+v", state)
 	}
 }
+
+func TestApplySideStoryKeepsAnImportAgainstALaterMissingOrMirroredFetch(t *testing.T) {
+	s := newSideStoryTestStore(t)
+	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, sideStoryTestCard("190", 1, "cn/190", ""))
+	jp := sideStoryTestScript(t, "test_card_190_01", sideStoryTestTalk{"テスト話者", "テスト台詞です"})
+	cn := sideStoryTestScript(t, "test_card_190_01", sideStoryTestTalk{"测试说话人", "测试台词一"})
+	mirrored := sideStoryTestScript(t, "test_card_190_01", sideStoryTestTalk{"テスト話者", "テスト台詞です"})
+	apply := func(jp *SideStoryScript, cn SideStoryFetchOutcome) SideStoryEpisodeApply {
+		t.Helper()
+		return mustApplySideStory(t, s, sideStoryTestNow, SideStoryEpisodeFetch{Kind: "card", StoryID: "190", EpisodeKey: "1", JP: fetchedJP(jp), CN: cn}).Episodes[0]
+	}
+	apply(jp, fetchedJP(cn))
+	// A round's older fetch is applied after a refresh imported the locale.
+	for _, test := range []struct {
+		cn   SideStoryFetchOutcome
+		want string
+	}{
+		{SideStoryFetchOutcome{Attempted: true, Missing: true}, "zh-CN: not found"},
+		{fetchedJP(mirrored), "zh-CN: official script repeats the Japanese text"},
+	} {
+		applied := apply(jp, test.cn)
+		if applied.CNState != "imported" || applied.Error != test.want {
+			t.Fatalf("later %q result %+v", test.want, applied)
+		}
+		if state := sideStoryEpisodeState(t, s, "card", "190", "1"); state.lastError != "" || state.attempts != 0 || state.nextAttemptAt != 0 {
+			t.Fatalf("later %q stored %+v", test.want, state)
+		}
+		if cnState, _ := sideStoryEpisodeStates(t, s, "card", "190", "1"); cnState != "imported" {
+			t.Fatalf("later %q stored CN state %s", test.want, cnState)
+		}
+		if row, ok := sideStoryRow(t, s, "card", "190", "1", "テスト台詞です", "zh-CN"); !ok || row.text != "测试台词一" || row.source != "official" {
+			t.Fatalf("later %q CN row %+v ok=%v", test.want, row, ok)
+		}
+	}
+	changed := sideStoryTestScript(t, "test_card_190_01", sideStoryTestTalk{"テスト話者", "テスト台詞改です"})
+	if applied := apply(changed, SideStoryFetchOutcome{Attempted: true, Missing: true}); applied.CNState != "pending" || applied.Error != "zh-CN: not found" {
+		t.Fatalf("404 under a changed JP script %+v", applied)
+	}
+	if state := sideStoryEpisodeState(t, s, "card", "190", "1"); state.lastError != "zh-CN: not found" || state.nextAttemptAt != sideStoryTestNow.Add(24*time.Hour).Unix() {
+		t.Fatalf("404 under a changed JP script stored %+v", state)
+	}
+}

@@ -210,7 +210,7 @@ func applySideStoryFetchTx(ctx context.Context, tx *sql.Tx, fetch SideStoryEpiso
 	}
 	out.DroppedHumanLines = dropped
 	requeue := out.ScriptChanged && episode.scriptSHA256 != ""
-	var messages []string
+	var messages, stored []string
 	retry := sideStoryNoRetry
 	for _, target := range []struct {
 		locale  string
@@ -232,10 +232,16 @@ func applySideStoryFetchTx(ctx context.Context, tx *sql.Tx, fetch SideStoryEpiso
 		out.OfficialWritten += written
 		switch {
 		case message != "":
-			messages = append(messages, target.locale+": "+message)
+			part := target.locale + ": " + message
+			messages = append(messages, part)
+			// An import kept over a 404 or a mirror is only reported.
+			if state != SideStoryStateImported {
+				stored = append(stored, part)
+			}
 		case !target.outcome.Attempted:
 			if kept := episode.keptError(target.locale, state); kept != "" {
 				messages = append(messages, kept)
+				stored = append(stored, kept)
 			}
 		}
 		retry = max(retry, localeRetry)
@@ -251,7 +257,7 @@ func applySideStoryFetchTx(ctx context.Context, tx *sql.Tx, fetch SideStoryEpiso
 	out.Error = strings.Join(messages, "; ")
 	if _, err := tx.ExecContext(ctx, `UPDATE side_story_episodes SET script_sha256=?,jp_fetched_at=?,jp_refetch=0,attempts=?,
 		next_attempt_at=?,last_error=?,cn_state=?,en_state=?,updated_at=? WHERE kind=? AND story_id=? AND episode_key=?`,
-		jp.Script.SHA256, stamp, attempts, next, out.Error, out.CNState, out.ENState, stamp,
+		jp.Script.SHA256, stamp, attempts, next, strings.Join(stored, "; "), out.CNState, out.ENState, stamp,
 		fetch.Kind, fetch.StoryID, fetch.EpisodeKey); err != nil {
 		return out, false, err
 	}
@@ -347,15 +353,20 @@ const (
 
 // applyTx returns the locale's new state, the rows written, a failure
 // message and when to retry it. A locale not fetched now keeps its state
-// unless the JP script changed under an earlier import.
+// unless the JP script changed under an earlier import. Under an unchanged JP
+// script an import also survives a 404 or a mirror serving Japanese: that
+// fetch may predate the refresh that imported it. Its message is not stored.
 func (o sideStoryOfficialImport) applyTx(ctx context.Context, tx *sql.Tx, state, path string, requeue bool) (string, int, string, sideStoryRetry, error) {
 	outcome := o.official
+	keepImport := state == SideStoryStateImported && !requeue
 	switch {
 	case !outcome.Attempted:
 		if requeue && path != "" && state != SideStoryStateAbsent {
 			return SideStoryStatePending, 0, "", sideStoryRetryNow, nil
 		}
 		return state, 0, "", sideStoryNoRetry, nil
+	case outcome.Missing && keepImport:
+		return state, 0, "not found", sideStoryNoRetry, nil
 	case outcome.Missing:
 		// A listed script the mirror has not synced yet 404s; absent is kept
 		// for a locale without an asset path.
@@ -383,6 +394,9 @@ func (o sideStoryOfficialImport) applyTx(ctx context.Context, tx *sql.Tx, state,
 	// A mirror still serving the Japanese placeholder of a newly listed script
 	// gets the real one later, so this is retried like a 404.
 	if mirrored*2 > kanaBodies {
+		if keepImport {
+			return state, 0, "official script repeats the Japanese text", sideStoryNoRetry, nil
+		}
 		return SideStoryStatePending, 0, "official script repeats the Japanese text", sideStoryRetryMissing, nil
 	}
 	written := 0
