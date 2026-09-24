@@ -16,7 +16,7 @@ import {
 } from "@/lib/lyrics-collaboration.mjs";
 import {
   applySideStoryLineStates, normalizeSideStoryUpdateEvent, sideStoryEntryKey, sideStoryLocale,
-  sideStorySyncEffect, sideStoryUpdateEffect, sideStoryUpdateRefreshesList,
+  sideStoryUpdateEffect, sideStoryUpdateRefreshesList,
 } from "@/lib/side-story-console";
 import { useSSE } from "@/lib/sse";
 import {
@@ -27,6 +27,13 @@ import type { ContentConflict, ReconciliationReason, RemoteConflict, ShowToast }
 import type { SideStoryListRefreshed } from "@/components/console/useSideStoryCatalog";
 
 interface Progress { label: string; current: number; total: number }
+
+// Saves share the debounced list load with a sync, so only what a save cannot change counts.
+function sideStoryBackfillChanged(before: SideStorySummary, after: SideStorySummary): boolean {
+  return before.title !== after.title || before.episodeCount !== after.episodeCount ||
+    before.fetchedEpisodeCount !== after.fetchedEpisodeCount || before.lineCount !== after.lineCount ||
+    after.sourceCounts.official > before.sourceCounts.official;
+}
 
 export interface ConsoleRealtimeOptions {
   username: string;
@@ -377,12 +384,13 @@ export function useConsoleRealtime({
 
   const handleSideStoryListSynced: SideStoryListRefreshed = (kind, before, after) => {
     if (kind !== sideStoryKind || !before) return;
-    const open = (stories: readonly SideStorySummary[]) => stories.find((story) => story.id === field);
-    const effect = sideStorySyncEffect(open(before), open(after), entryDirty);
-    if (effect === "reload") {
+    const previous = before.find((story) => story.id === field);
+    const next = after.find((story) => story.id === field);
+    if (!previous || !next || !sideStoryBackfillChanged(previous, next)) return;
+    if (!entryDirty) {
       reloadSyncedSideStory();
       show("后台回填更新了当前剧情，已重新载入", "ok");
-    } else if (effect === "notice") {
+    } else {
       syncReloadPendingRef.current = { kind, id: field, locale };
       if (selectedKey) setRemoteConflict({ key: selectedKey, user: "后台回填" });
       show("后台回填更新了当前剧情；保存或放弃本地草稿后将自动重新载入", "ok");

@@ -4,8 +4,6 @@ import test from "node:test";
 import { createHookRuntime, loadSourceModule } from "./source-module-harness.mjs";
 import { read } from "./source-surfaces.mjs";
 
-const model = loadSourceModule("lib/side-story-console.ts");
-
 // All titles below are synthetic test data.
 function summary(overrides = {}) {
   return {
@@ -16,21 +14,32 @@ function summary(overrides = {}) {
   };
 }
 
-test("a sync reloads the open story only when its list summary changed, and keeps a draft behind a notice", () => {
-  const before = summary();
-  const effect = (overrides, hasDraft = false) => model.sideStorySyncEffect(before, summary(overrides), hasDraft);
-  assert.equal(effect({}), "ignore");
-  assert.equal(effect({ fetchedEpisodeCount: 2, lineCount: 30, untranslatedCount: 28 }), "reload", "the script was fetched");
-  assert.equal(effect({ translatedCount: 9, untranslatedCount: 1 }), "reload");
-  assert.equal(effect({ sourceCounts: { official: 2, llm: 0, human: 0 }, primarySource: "official" }), "reload",
+test("a sync reloads the open story only for what a backfill alone changes, and keeps a draft behind a notice", () => {
+  const reloads = (after, { before = summary(), entryDirty = false } = {}) => {
+    const harness = realtimeHarness({ entryDirty });
+    harness.emit("sidestory.sync");
+    harness.calls.refresh[0][1]("card", [before], [after]);
+    return [harness.calls.loadEntries, harness.calls.remoteConflict.length];
+  };
+  assert.deepEqual(reloads(summary({ fetchedEpisodeCount: 2, lineCount: 30, untranslatedCount: 28 })), [1, 0], "the script was fetched");
+  assert.deepEqual(reloads(summary({ episodeCount: 3 })), [1, 0]);
+  assert.deepEqual(reloads(summary({ lineCount: 12 })), [1, 0]);
+  assert.deepEqual(reloads(summary({ title: "测试卡面二" })), [1, 0]);
+  assert.deepEqual(reloads(summary({ sourceCounts: { official: 2, llm: 0, human: 0 }, primarySource: "official" })), [1, 0],
     "official lines replaced AI lines");
-  assert.equal(effect({ sourceCounts: { official: 1, llm: 1, human: 0 } }), "reload");
-  assert.equal(effect({ updatedAt: 200 }), "reload");
-  assert.equal(effect({ status: "translated" }), "reload");
-  assert.equal(effect({ updatedAt: 200 }, true), "notice", "an unsaved draft is never reloaded away");
-  assert.equal(effect({}, true), "ignore");
-  assert.equal(model.sideStorySyncEffect(undefined, summary(), false), "ignore", "the list had not shown the story yet");
-  assert.equal(model.sideStorySyncEffect(before, undefined, false), "ignore");
+  assert.deepEqual(reloads(summary({ fetchedEpisodeCount: 2 }), { entryDirty: true }), [0, 1], "an unsaved draft is never reloaded away");
+  assert.deepEqual(reloads(summary()), [0, 0]);
+  assert.deepEqual(reloads(summary({
+    translatedCount: 3, untranslatedCount: 7, sourceCounts: { official: 0, llm: 2, human: 1 }, updatedAt: 150,
+  })), [0, 0], "a save of an untranslated line");
+  assert.deepEqual(reloads(summary({
+    sourceCounts: { official: 0, llm: 1, human: 1 }, primarySource: "human", status: "translated", updatedAt: 150,
+  })), [0, 0], "a save over an AI line");
+  assert.deepEqual(reloads(summary({ sourceCounts: { official: 0, llm: 0, human: 1 }, updatedAt: 150 }), {
+    before: summary({ sourceCounts: { official: 1, llm: 0, human: 0 } }),
+  }), [0, 0], "a save over an official line");
+  assert.deepEqual(reloads(summary({ fetchedEpisodeCount: 2 }), { before: summary({ id: "102" }) }), [0, 0],
+    "the list had not shown the story yet");
 });
 
 test("a list refresh reports the stories it replaced to the sync callback", async (t) => {
@@ -62,7 +71,7 @@ test("a list refresh reports the stories it replaced to the sync callback", asyn
   assert.equal(seen.length, 1, "a refresh without the callback does not report");
 });
 
-function realtimeHarness({ entryDirty = false } = {}) {
+function realtimeHarness({ entryDirty = false, refreshSideStoryLists } = {}) {
   const runtime = createHookRuntime();
   let handler = null;
   const calls = { loadEntries: 0, refresh: [], remoteConflict: [], toasts: [] };
@@ -87,7 +96,7 @@ function realtimeHarness({ entryDirty = false } = {}) {
     lyricsDirty: false, lyricsEditorRef: { current: null }, lyricsSourceReviewRef: { current: null },
     setRemoteConflict: (next) => calls.remoteConflict.push(next), contextGenerationRef: { current: 0 }, invalidatePendingAction() {},
     loadEntries: async () => { calls.loadEntries++; return true; }, reloadSidebar: async () => true,
-    refreshSideStoryLists: (kind, onRefreshed) => calls.refresh.push([kind, onRefreshed]),
+    refreshSideStoryLists: refreshSideStoryLists ?? ((kind, onRefreshed) => calls.refresh.push([kind, onRefreshed])),
   });
   return { calls, emit: (event, data = {}) => handler(event, data) };
 }
@@ -98,8 +107,8 @@ test("sidestory.sync reloads a changed open story, or shows the notice over a dr
   assert.equal(clean.calls.refresh.length, 1);
   const [kind, onRefreshed] = clean.calls.refresh[0];
   assert.equal(kind, undefined, "every loaded kind refreshes");
-  onRefreshed("area", [summary({ kind: "area" })], [summary({ kind: "area", updatedAt: 200 })]);
-  onRefreshed("card", [summary({ id: "102" })], [summary({ id: "102", updatedAt: 200 })]);
+  onRefreshed("area", [summary({ kind: "area" })], [summary({ kind: "area", fetchedEpisodeCount: 2 })]);
+  onRefreshed("card", [summary({ id: "102" })], [summary({ id: "102", fetchedEpisodeCount: 2 })]);
   onRefreshed("card", [summary()], [summary()]);
   assert.equal(clean.calls.loadEntries, 0, "another kind, another story or an unchanged summary is ignored");
   onRefreshed("card", [summary()], [summary({ fetchedEpisodeCount: 2 })]);
@@ -108,10 +117,41 @@ test("sidestory.sync reloads a changed open story, or shows the notice over a dr
 
   const dirty = realtimeHarness({ entryDirty: true });
   dirty.emit("sidestory.sync");
-  dirty.calls.refresh[0][1]("card", [summary()], [summary({ updatedAt: 200 })]);
+  dirty.calls.refresh[0][1]("card", [summary()], [summary({ fetchedEpisodeCount: 2 })]);
   assert.equal(dirty.calls.loadEntries, 0, "the draft is not reloaded away");
   assert.deepEqual(dirty.calls.remoteConflict, [{ key: "1|テスト台詞", user: "后台回填" }]);
   assert.match(dirty.calls.toasts.at(-1)[1], /保存或放弃本地草稿后将自动重新载入/);
+});
+
+test("a save merged into the sync's list load is not taken for a backfill change", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const saved = summary({ translatedCount: 3, untranslatedCount: 7, sourceCounts: { official: 0, llm: 2, human: 1 }, updatedAt: 150 });
+  for (const entryDirty of [false, true]) {
+    const lists = [[summary()], [saved]];
+    const api = {
+      getSideStories: async () => ({ stories: lists.shift() ?? [] }),
+      getSideStorySyncStatus: async () => ({ state: {}, totals: {} }),
+      triggerSideStorySync: async () => ({ started: true, state: {} }),
+    };
+    const { useSideStoryCatalog } = loadSourceModule("components/console/useSideStoryCatalog.ts", {
+      react: createHookRuntime().react, "@/lib/api": api,
+    });
+    const catalog = useSideStoryCatalog({ locale: "zh-CN", show() {} });
+    const harness = realtimeHarness({ entryDirty, refreshSideStoryLists: catalog.refreshLists });
+    const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+    catalog.ensureList("card");
+    await flush();
+    catalog.refreshLists("card");
+    t.mock.timers.tick(700);
+    harness.emit("sidestory.sync");
+    t.mock.timers.tick(1500);
+    await flush();
+    assert.equal(lists.length, 0, "the save and the sync shared one list load");
+    assert.equal(harness.calls.loadEntries, 0);
+    assert.deepEqual(harness.calls.remoteConflict, []);
+    assert.deepEqual(harness.calls.toasts, []);
+  }
 });
 
 test("the console hands setSelectedKey to the realtime hook so a sync reload keeps the line", async () => {
