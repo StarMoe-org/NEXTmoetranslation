@@ -117,7 +117,7 @@ mysekai 的 `tag` → `flavorText` 镜像是另一条独立规则：同名 jp ke
 
 **路由。** 编辑可用 `GET /api/editor/v1/stories`（列表）、`GET /api/editor/v1/story/{kind}/{id}`（详情）、`GET /api/editor/v1/story/{kind}/{id}/{episode}/snapshot`（TXT 导入快照）、`GET /api/editor/v1/stories/sync`（回填状态）和 `PUT /api/editor/v1/story/{kind}/{id}/{episode}`。PUT 走与其他内容写入相同的门禁，每行带 `expectedRevision`，整批全有或全无：未知行返回 `422 unknown_lines`，修订冲突返回 `409 revision_conflict`。管理员另有 `POST /api/editor/v1/story/{kind}/{id}/ai`（producer 任务 `ai-side-story`，只填空行）、`POST /api/editor/v1/story/{kind}/{id}/refresh`（立即重抓）和 `POST /api/editor/v1/stories/sync`（立即跑一轮回填）。agent 用法和每条路由的示例见 [`contracts/editor-api/README.md`](contracts/editor-api/README.md) 第 8 节，合同见 [`PRODUCTION_CONTRACT.md`](PRODUCTION_CONTRACT.md) 的 Card Stories And Area Talk。
 
-**后台回填。** 设置 `side_story_backfill.enabled` 不为 false（未设置即为开，管理设置里可随时暂停）且 `SIDE_STORY_BACKFILL_ENABLED` 不为 false 时，服务进程按轮抓取日文脚本和官方 CN/EN 脚本。它按 TalkData 下标配对写入官方译文，覆盖 `official` 与 `llm` 行，从不改动 `human` 行，也从不调用 LLM。已列出资源路径的官方脚本返回 404 或返回的仍是日文时，该语言保持 `pending`，24 小时后重试；TalkData 条数与日文不同时标为 `mismatch`（脚本内的 ScenarioId 只是标签，不做比较）；`absent` 只表示该服务器没有这一话的资源路径。内容备份恢复后，回填不等 6 小时就重建目录。以下 env 每次启动都校验，非法值会让启动失败（它们和下面 6 个上游 env 都列在 `.env.example` 里）：
+**后台回填。** 设置 `side_story_backfill.enabled` 不为 false（未设置即为开，管理设置里可随时暂停）且 `SIDE_STORY_BACKFILL_ENABLED` 不为 false 时，服务进程按轮抓取日文脚本和官方 CN/EN 脚本。它按 TalkData 下标配对写入官方译文，覆盖文本不同的 `official` 行、接管所有 `llm` 行，从不改动 `human` 行，也从不调用 LLM。请求间隔只约束后台回填，管理员的重抓和 TXT 导入快照不受它限制。已列出资源路径的官方脚本返回 404 或返回的仍是日文时，该语言保持 `pending`，24 小时后重试；TalkData 条数与日文不同时标为 `mismatch`（脚本内的 ScenarioId 只是标签，不做比较）；`absent` 只表示该服务器没有这一话的资源路径。目录每 6 小时刷新一次，也可以在回填面板点「刷新目录」；按上游数据版本刷新要靠只在 `scheduler.enabled` 开启时运行的 upstream watcher，生产上不会发生。内容备份恢复后，回填不等 6 小时就重建目录。以下 env 每次启动都在打开数据库之前校验，非法值会让启动失败，数据库不会先被迁移（它们和下面 6 个上游 env 都列在 `.env.example` 里）：
 
 | env | 默认 | 取值 |
 | --- | --- | --- |
@@ -126,7 +126,7 @@ mysekai 的 `tag` → `flavorText` 镜像是另一条独立规则：同名 jp ke
 | `SIDE_STORY_BACKFILL_BATCH` | `30` | 1–500 的规范整数 |
 | `SIDE_STORY_BACKFILL_REQUEST_DELAY_MS` | `1000` | 100–60000 |
 
-**上游。** 新增 6 个设置，和其他 `upstream.*` 设置一样只在首次启动由 env 写入，之后在管理设置里修改；留空时用默认值：
+**上游。** 新增 6 个设置，和其他 `upstream.*` 设置一样只在首次启动由 env 写入，之后在管理设置里修改；留空时用默认值。这 6 个 env 每次启动、打开数据库之前还会按上游地址规则校验，不安全的地址会让启动失败并报出变量名：
 
 | 设置 | env | 默认 |
 | --- | --- | --- |
@@ -139,6 +139,6 @@ mysekai 的 `tag` → `flavorText` 镜像是另一条独立规则：同名 jp ke
 
 JP 与 CN 的目录沿用现有的 `upstream.jp_masterdata_url`、`upstream.cn_masterdata_url` 链。
 
-**公开文件。** `zh-CN` 发布在 `/files/translation/cardStory/card_<cardId>.json` 与 `/files/translation/areaTalk/group_<n>.json`，`en-US` 发布在 `/files/v2/en-US/translation/` 下的同名路径；`n` 是 JP actionSet ID 整除 100，没有其他语言的镜像。PUT、AI 和 refresh 在响应前重建所涉故事的文件，正在进行的全量重建不会把这次发布或撤下换回去；回填写入后走去抖重建，窗口为 `FILES_REBUILD_DEBOUNCE_MS`（默认 300000 ms），持续有写入时最多等两个窗口。
+**公开文件。** `zh-CN` 发布在 `/files/translation/cardStory/card_<cardId>.json` 与 `/files/translation/areaTalk/group_<n>.json`，`en-US` 发布在 `/files/v2/en-US/translation/` 下的同名路径；`n` 是 JP actionSet ID 整除 100，没有其他语言的镜像。PUT、refresh 和写入了行的 AI（中途失败时也发布已保存的批次）在响应前重建所涉故事的文件，正在进行的全量重建不会把这次发布或撤下换回去；回填每轮结束后逐个重建本轮写过的故事，只有目录变化时才走去抖的全量重建，窗口为 `FILES_REBUILD_DEBOUNCE_MS`（默认 300000 ms），持续有写入时最多等两个窗口。
 
 **备份。** 内容备份的 `translation-content/manifest.json` 升到 `schemaVersion` 2，新增 `translation-content/side-stories.json`，与其他内容在同一个恢复事务里恢复。`schemaVersion` 1 的旧备份仍可恢复，但会清空卡牌剧情与区域对话的四张表；早于 v39 的程序拒绝恢复 `schemaVersion` 2 的备份。Git 目标每次只推一个 `backup.tar.gz`（设置 `MOESEKAI_BACKUP_ENCRYPTION_KEY` 时为 `backup.enc`），GitHub 拒收超过 100 MiB 的文件，所以它必须低于这个上限，体积估算见 [`PRODUCTION_CONTRACT.md`](PRODUCTION_CONTRACT.md) 的 Backup And Restore。回滚与恢复步骤见 [`ROLLBACK_RUNBOOK.md`](ROLLBACK_RUNBOOK.md)。
