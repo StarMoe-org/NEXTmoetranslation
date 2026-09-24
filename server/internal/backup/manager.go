@@ -446,8 +446,9 @@ func (m *Manager) applyRestoreCandidate(ctx context.Context, candidate restoreCa
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := m.store.RestoreBackupContext(ctx, candidate.payload.Categories, candidate.payload.Events,
-		candidate.content.Entries, candidate.content.Events, candidate.content.Lyrics, candidate.contentPresent, actor); err != nil {
+	if err := m.store.RestoreBackupWithSideStoriesContext(ctx, candidate.payload.Categories, candidate.payload.Events,
+		candidate.content.Entries, candidate.content.Events, candidate.content.Lyrics, candidate.content.SideStories,
+		candidate.contentPresent, actor); err != nil {
 		return err
 	}
 	// The restore replaces event stories behind the event store, whose cached

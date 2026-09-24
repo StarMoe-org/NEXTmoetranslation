@@ -434,7 +434,7 @@ func TestTranslationContentPreflightRejectsMatchingExcessiveSmallObjectArray(t *
 		"event-stories.json": []byte(`{"segments":[],"localizations":[],"localeMeta":[],"scenarios":[]}`),
 		"lyrics.json":        []byte(`{"music":[],"performers":[],"documents":[],"lines":[],"segments":[],"publications":[]}`),
 	}
-	manifest := contentManifest{SchemaVersion: translationContentSchemaVersion}
+	manifest := contentManifest{SchemaVersion: translationContentSchemaVersionV1}
 	for _, name := range []string{"entries.json", "event-stories.json", "lyrics.json"} {
 		body := bodies[name]
 		if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {

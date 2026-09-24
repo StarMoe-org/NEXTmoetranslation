@@ -20,12 +20,23 @@ import (
 )
 
 const (
-	translationContentSchemaVersion   = 1
+	// Version 2 adds side-stories.json; version 1 backups carry the other three
+	// files and restore with the side-story tables empty.
+	translationContentSchemaVersion   = 2
+	translationContentSchemaVersionV1 = 1
 	maxTranslationContentManifestSize = 64 << 10
 	// Keep typed restore allocations bounded independently of compressed and
-	// expanded byte limits. Current production data remains well below this.
-	maxTranslationContentRecords = 1_000_000
+	// expanded byte limits. 1M covers the other three files; side-stories.json
+	// holds at most about 710k records for the 2026-09 catalog (4.3k stories,
+	// 5.6k episodes, 232k lines, both locales of every line), so it gets
+	// another 1M.
+	maxTranslationContentRecords = 2_000_000
 )
+
+var translationContentFiles = map[int][]string{
+	translationContentSchemaVersionV1: {"entries.json", "event-stories.json", "lyrics.json"},
+	translationContentSchemaVersion:   {"entries.json", "event-stories.json", "lyrics.json", "side-stories.json"},
+}
 
 var backupSnapshotCreatedHook func() error
 
@@ -42,9 +53,10 @@ type contentManifestFile struct {
 }
 
 type translationContent struct {
-	Entries []store.EntryLocalizationRecord
-	Events  store.EventContentExport
-	Lyrics  store.LyricsContentExport
+	Entries     []store.EntryLocalizationRecord
+	Events      store.EventContentExport
+	Lyrics      store.LyricsContentExport
+	SideStories store.SideStoryContentExport
 }
 
 func (m *Manager) materializeTranslationContent(parent string) (string, error) {
@@ -84,7 +96,15 @@ func materializeTranslationContentFromStoreContext(ctx context.Context, parent s
 	if err != nil {
 		return "", err
 	}
-	totalRecords := len(entries) + eventContentCount(events) + len(events.Scenarios) + lyricsContentCount(lyrics)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	sideStories, err := source.ExportSideStoryContentContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	totalRecords := len(entries) + eventContentCount(events) + len(events.Scenarios) + lyricsContentCount(lyrics) +
+		sideStoryContentCount(sideStories)
 	if totalRecords > maxTranslationContentRecords {
 		return "", fmt.Errorf("translation content exceeds %d records", maxTranslationContentRecords)
 	}
@@ -96,6 +116,7 @@ func materializeTranslationContentFromStoreContext(ctx context.Context, parent s
 		{"entries.json", entries, len(entries)},
 		{"event-stories.json", events, eventContentCount(events)},
 		{"lyrics.json", lyrics, lyricsContentCount(lyrics)},
+		{"side-stories.json", sideStories, sideStoryContentCount(sideStories)},
 	}
 	manifest := contentManifest{SchemaVersion: translationContentSchemaVersion, Files: []contentManifestFile{}}
 	for _, file := range files {
@@ -281,13 +302,18 @@ func readTranslationContentContext(ctx context.Context, dir string) (translation
 	if err := decodeJSONContext(ctx, manifestBytes, &manifest); err != nil {
 		return translationContent{}, true, fmt.Errorf("translation content manifest: %w", err)
 	}
-	if manifest.SchemaVersion != translationContentSchemaVersion {
+	names, ok := translationContentFiles[manifest.SchemaVersion]
+	if !ok {
 		return translationContent{}, true, fmt.Errorf("unsupported translation content schemaVersion %d", manifest.SchemaVersion)
 	}
-	if len(manifest.Files) != 3 {
-		return translationContent{}, true, fmt.Errorf("translation content manifest must contain exactly three files")
+	if len(manifest.Files) != len(names) {
+		return translationContent{}, true, fmt.Errorf("translation content schemaVersion %d manifest must contain exactly %d files, found %d",
+			manifest.SchemaVersion, len(names), len(manifest.Files))
 	}
-	expected := map[string]bool{"entries.json": true, "event-stories.json": true, "lyrics.json": true}
+	expected := make(map[string]bool, len(names))
+	for _, name := range names {
+		expected[name] = true
+	}
 	seen := map[string]bool{}
 	declaredRecords := 0
 	for _, file := range manifest.Files {
@@ -344,6 +370,10 @@ func readTranslationContentContext(ctx context.Context, dir string) (translation
 			}
 		case "lyrics.json":
 			if err := decodeJSONContext(ctx, body, &content.Lyrics); err != nil {
+				return translationContent{}, true, err
+			}
+		case "side-stories.json":
+			if err := decodeJSONContext(ctx, body, &content.SideStories); err != nil {
 				return translationContent{}, true, err
 			}
 		}
@@ -454,6 +484,11 @@ func preflightTranslationContentJSONContext(ctx context.Context, path string, bo
 			counts["recoveryBatches"] + counts["recoveryItems"] + counts["recoverySourceEvidence"] +
 			counts["recoveryArtifacts"] + counts["recoveryArtifactEvidence"] + counts["recoveryContributions"] +
 			counts["availabilityDocuments"] + counts["recoveryTakeovers"], 0, total, nil
+	case "side-stories.json":
+		if rootArray {
+			return 0, 0, 0, fmt.Errorf("top level must be an object")
+		}
+		return counts["stories"] + counts["episodes"] + counts["lines"] + counts["localizations"], 0, total, nil
 	default:
 		return 0, 0, 0, fmt.Errorf("unexpected content path")
 	}
@@ -626,9 +661,14 @@ func lyricsContentCount(content store.LyricsContentExport) int {
 		len(content.RecoveryContributions) + len(content.AvailabilityDocuments) + len(content.RecoveryTakeovers)
 }
 
+func sideStoryContentCount(content store.SideStoryContentExport) int {
+	return len(content.Stories) + len(content.Episodes) + len(content.Lines) + len(content.Localizations)
+}
+
 func (m *Manager) importTranslationContent(content translationContent, present bool) error {
 	if !present {
 		return nil
 	}
-	return m.store.ImportTranslationContent(content.Entries, content.Events, content.Lyrics)
+	return m.store.ImportTranslationContentWithSideStoriesContext(context.Background(),
+		content.Entries, content.Events, content.Lyrics, content.SideStories)
 }

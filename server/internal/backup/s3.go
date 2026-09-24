@@ -31,7 +31,11 @@ const (
 	maxArchiveFileBytes             = 64 << 20
 	maxLyricsContentFileBytes       = 256 << 20
 	maxEventStoriesContentFileBytes = 512 << 20
-	maxArchiveExpandedBytes         = 1 << 30
+	// side-stories.json measured against the 2026-09 catalog (4.3k stories,
+	// 5.6k episodes, 232k lines): 173-192 MiB with the official CN/EN text,
+	// about 218 MiB once every line has both locales.
+	maxSideStoriesContentFileBytes = 256 << 20
+	maxArchiveExpandedBytes        = 1 << 30
 )
 
 // s3Settings is a snapshot of the S3 target config.
@@ -503,6 +507,8 @@ func archiveFileByteLimit(name string) int64 {
 		return maxEventStoriesContentFileBytes
 	case "translation-content/lyrics.json", "translations/translation-content/lyrics.json":
 		return maxLyricsContentFileBytes
+	case "translation-content/side-stories.json", "translations/translation-content/side-stories.json":
+		return maxSideStoriesContentFileBytes
 	default:
 		return maxArchiveFileBytes
 	}
