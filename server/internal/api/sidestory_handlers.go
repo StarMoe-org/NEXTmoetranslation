@@ -243,11 +243,25 @@ func (s *Server) handleSideStoryAI(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	if err != nil {
-		writeSideStoryRunnerError(w, err, http.StatusInternalServerError, "internal_error",
+		status, code := http.StatusInternalServerError, "internal_error"
+		if sideStoryLLMUnavailable(err) {
+			status, code = http.StatusBadGateway, "upstream_unavailable"
+		}
+		writeSideStoryRunnerError(w, err, status, code,
 			fmt.Sprintf("translated lines saved before the failure: %d", result.Translated))
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// sideStoryLLMUnavailable reports a provider failure that exhausted the
+// translator's LLM retries (HTTP error, unusable reply). A missing API key
+// stays internal_error as on the event-story AI route, and so does a
+// cancelled run.
+func sideStoryLLMUnavailable(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "llm failed after ") && !strings.Contains(message, "_API_KEY is not configured") &&
+		!errors.Is(err, context.Canceled)
 }
 
 // POST /api/editor/v1/story/{kind}/{id}/refresh {clientId}
