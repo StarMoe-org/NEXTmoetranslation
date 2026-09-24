@@ -42,6 +42,7 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
   const syncWantedRef = useRef(false);
   const requestRef = useRef<Record<SideStoryKind, number>>({ card: 0, area: 0 });
   const syncRequestRef = useRef(0);
+  const reportingLoadsRef = useRef(0);
   const syncStateRef = useRef<SideStoryBackfillState | undefined>(undefined);
   const syncPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingRef = useRef(new Set<SideStoryKind>());
@@ -75,6 +76,7 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
 
   const loadSyncStatus = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     const request = ++syncRequestRef.current;
+    if (!silent) reportingLoadsRef.current++;
     try {
       const status = await getSideStorySyncStatus();
       if (syncRequestRef.current !== request) return;
@@ -82,6 +84,8 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
       setSyncStatus(status);
     } catch (error) {
       if (!silent && syncRequestRef.current === request) showRef.current(sideStoryErrorMessage(error, "回填进度载入失败"), "err");
+    } finally {
+      if (!silent) reportingLoadsRef.current--;
     }
   }, []);
 
@@ -110,9 +114,12 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
     syncPollRef.current = null;
     if (!watching) return;
     void loadSyncStatus();
-    // A failed poll keeps the last status without a toast, e.g. while the server restarts.
+    // A failed poll keeps the last status without a toast, e.g. while the server restarts. A poll
+    // waits for a load that reports its failure, which it would supersede and so silence.
     syncPollRef.current = setInterval(() => {
-      if (syncStateMayBeStale(syncStateRef.current, Date.now())) void loadSyncStatus({ silent: true });
+      if (reportingLoadsRef.current === 0 && syncStateMayBeStale(syncStateRef.current, Date.now())) {
+        void loadSyncStatus({ silent: true });
+      }
     }, SYNC_POLL_MS);
   }, [loadSyncStatus]);
 

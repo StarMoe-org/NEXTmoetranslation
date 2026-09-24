@@ -56,6 +56,41 @@ test("an idle watched catalog polls only once the next round time has passed", a
   runtime.unmount();
 });
 
+test("a poll waits for a 刷新进度 still under way, so the refresh's failure is still reported", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: NOW });
+  const runtime = createHookRuntime();
+  const waiting = [];
+  const toasts = [];
+  let calls = 0;
+  const running = { state: { enabled: true, running: true, nextRoundAt: "2026-01-01T01:00:00Z", lastRound: idleRound }, totals: {} };
+  const api = {
+    getSideStories: async () => ({ stories: [] }),
+    getSideStorySyncStatus: () => {
+      calls++;
+      return calls === 1 ? Promise.resolve(running) : new Promise((resolve, reject) => waiting.push({ resolve, reject }));
+    },
+    triggerSideStorySync: async () => { throw new Error("unused"); },
+  };
+  const { useSideStoryCatalog } = loadSourceModule("components/console/useSideStoryCatalog.ts", { react: runtime.react, "@/lib/api": api });
+  const catalog = useSideStoryCatalog({ locale: "zh-CN", show: (message, tone) => toasts.push([tone, message]) });
+  runtime.mount();
+  catalog.watchSyncStatus(true);
+  await flush();
+
+  void catalog.loadSyncStatus();
+  t.mock.timers.tick(15_000);
+  assert.equal(calls, 2, "no poll while the refresh is under way");
+  waiting[0].reject(new Error("测试网关超时"));
+  await flush();
+  assert.deepEqual(toasts, [["err", "测试网关超时"]]);
+  t.mock.timers.tick(15_000);
+  assert.equal(calls, 3, "polling resumes after it");
+  waiting[1].resolve(running);
+  await flush();
+  catalog.watchSyncStatus(false);
+  runtime.unmount();
+});
+
 test("a disabled backfill is not polled", async (t) => {
   const { catalog, calls, runtime } = mountCatalog(t, () => ({ enabled: false, running: false, nextRoundAt: "" }));
   catalog.watchSyncStatus(true);
