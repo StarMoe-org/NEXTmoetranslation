@@ -107,6 +107,22 @@ func TestServicesConnectTheSideStoryRunnerAndStopItOnShutdown(t *testing.T) {
 	t.Setenv("LYRICS_DISCOVERY_ENABLED", "false")
 	t.Setenv("LYRICS_FETCH_REVISION_ENABLED", "false")
 	t.Setenv("TRANSLATOR_ACCOUNTS", "")
+	// The worker's first round starts at once; keep it off the public sources.
+	t.Setenv(httpx.UpstreamAllowInsecureLocalEnv, "true")
+	local := make(chan struct{})
+	var localOnce sync.Once
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		localOnce.Do(func() { close(local) })
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer upstream.Close()
+	for _, name := range []string{"UPSTREAM_JP_MASTERDATA_URL", "UPSTREAM_JP_MASTERDATA_FALLBACK_URL",
+		"UPSTREAM_CN_MASTERDATA_URL", "UPSTREAM_CN_MASTERDATA_FALLBACK_URL",
+		"UPSTREAM_EN_MASTERDATA_URL", "UPSTREAM_EN_MASTERDATA_FALLBACK_URL",
+		"UPSTREAM_JP_SCRIPTS_URL", "UPSTREAM_JP_SCRIPTS_FALLBACK_URL", "UPSTREAM_CN_SCRIPTS_URL", "UPSTREAM_EN_SCRIPTS_URL"} {
+		t.Setenv(name, upstream.URL)
+	}
 	database, err := db.Open(filepath.Join(t.TempDir(), "side-story-wiring.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -136,6 +152,11 @@ func TestServicesConnectTheSideStoryRunnerAndStopItOnShutdown(t *testing.T) {
 	}
 
 	svc.sideStory.Start()
+	select {
+	case <-local:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the side story round did not use the local sources")
+	}
 	svc.cancel(newHTTPServer("127.0.0.1:0", mux))
 	done := make(chan struct{})
 	go func() {
