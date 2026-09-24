@@ -45,16 +45,14 @@ type SideStoryBackfill struct {
 	wg        sync.WaitGroup
 	startOnce sync.Once
 
-	mu                 sync.Mutex
-	running            bool
-	forceCatalog       bool
-	nextRoundAt        time.Time
-	lastRoundAt        time.Time
-	lastRoundError     string
-	lastRound          store.SideStoryRoundSummary
-	catalogRefreshedAt time.Time
-	catalogVersion     string
-	catalogFailedAt    time.Time
+	mu             sync.Mutex
+	running        bool
+	forceCatalog   bool
+	nextRoundAt    time.Time
+	lastRoundAt    time.Time
+	lastRoundError string
+	lastRound      store.SideStoryRoundSummary
+	catalogs       map[string]sideStoryCatalogState // by kind
 
 	// lastRequestAt carries the request delay from one round into the next;
 	// only the round goroutine touches it.
@@ -72,8 +70,18 @@ func NewSideStoryBackfill(t *Translator, opts SideStoryBackfillOptions) *SideSto
 	return &SideStoryBackfill{
 		Translator: t, opts: opts, now: time.Now,
 		ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1),
+		catalogs: map[string]sideStoryCatalogState{},
 	}
 }
+
+// sideStoryCatalogState tracks the catalog refresh of one kind.
+type sideStoryCatalogState struct {
+	refreshedAt time.Time
+	version     string // upstream data version at refreshedAt
+	failedAt    time.Time
+}
+
+var sideStoryCatalogKinds = []string{store.SideStoryKindCard, store.SideStoryKindArea}
 
 // Start launches the round loop unless the backfill is disabled by env. The
 // first round runs immediately; the side_story_backfill.enabled setting is
@@ -126,9 +134,21 @@ func (w *SideStoryBackfill) SideStoryBackfillState() store.SideStoryBackfillStat
 	enabled := w.enabled()
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	// The catalog counts as refreshed once every kind is, as of the oldest.
+	var catalogRefreshedAt time.Time
+	for index, kind := range sideStoryCatalogKinds {
+		refreshedAt := w.catalogs[kind].refreshedAt
+		if refreshedAt.IsZero() {
+			catalogRefreshedAt = time.Time{}
+			break
+		}
+		if index == 0 || refreshedAt.Before(catalogRefreshedAt) {
+			catalogRefreshedAt = refreshedAt
+		}
+	}
 	state := store.SideStoryBackfillState{
 		Enabled: enabled, Running: w.running,
-		LastRoundAt: sideStoryTime(w.lastRoundAt), CatalogRefreshedAt: sideStoryTime(w.catalogRefreshedAt),
+		LastRoundAt: sideStoryTime(w.lastRoundAt), CatalogRefreshedAt: sideStoryTime(catalogRefreshedAt),
 		LastRoundError: w.lastRoundError, LastRound: w.lastRound,
 	}
 	if state.Enabled {
@@ -219,8 +239,8 @@ func (w *SideStoryBackfill) round(ctx context.Context, forceCatalog bool) (summa
 		w.lastRequestAt = pacer.last
 	}()
 	var problems []error
-	if w.catalogDue(forceCatalog) {
-		changed, err = w.refreshCatalog(ctx, pacer)
+	if kinds := w.catalogDue(forceCatalog); len(kinds) > 0 {
+		changed, err = w.refreshCatalog(ctx, pacer, kinds)
 		if errors.Is(err, errSideStoryDeferred) || ctx.Err() != nil {
 			return summary, changed, err
 		}
@@ -300,33 +320,41 @@ func sideStoryEpisodeFailed(episode store.SideStoryEpisodeApply) bool {
 	return false
 }
 
-// catalogDue reports a refresh at the first round, after sideStoryCatalogMaxAge,
-// when the upstream watcher recorded a new data version (only while the watcher
-// runs, which needs scheduler.enabled), or on request. A failed refresh is
-// retried after sideStoryCatalogRetryDelay unless requested.
-func (w *SideStoryBackfill) catalogDue(force bool) bool {
+// catalogDue lists the kinds whose catalog is due: at the first round, after
+// sideStoryCatalogMaxAge, when the upstream watcher recorded a new data version
+// (only while the watcher runs, which needs scheduler.enabled), or on request.
+// A kind whose refresh failed is retried after sideStoryCatalogRetryDelay
+// unless requested.
+func (w *SideStoryBackfill) catalogDue(force bool) []string {
 	version := w.cfg.Get(config.KeyUpstreamLastDataVersion)
 	now := w.now()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if force {
-		return true
+	var due []string
+	for _, kind := range sideStoryCatalogKinds {
+		state := w.catalogs[kind]
+		if !force {
+			if !state.failedAt.IsZero() && now.Sub(state.failedAt) < sideStoryCatalogRetryDelay {
+				continue
+			}
+			if !state.refreshedAt.IsZero() && now.Sub(state.refreshedAt) < sideStoryCatalogMaxAge && version == state.version {
+				continue
+			}
+		}
+		due = append(due, kind)
 	}
-	if !w.catalogFailedAt.IsZero() && now.Sub(w.catalogFailedAt) < sideStoryCatalogRetryDelay {
-		return false
-	}
-	return w.catalogRefreshedAt.IsZero() || now.Sub(w.catalogRefreshedAt) >= sideStoryCatalogMaxAge || version != w.catalogVersion
+	return due
 }
 
-// refreshCatalog fetches and writes the card and area catalogs. It reports
-// whether stories or episodes were added, official text requeued or title
+// refreshCatalog fetches and writes the catalogs of kinds. It reports whether
+// stories or episodes were added, official text requeued or title
 // translations written or deleted.
-func (w *SideStoryBackfill) refreshCatalog(ctx context.Context, pacer *sideStoryPacer) (bool, error) {
+func (w *SideStoryBackfill) refreshCatalog(ctx context.Context, pacer *sideStoryPacer, kinds []string) (bool, error) {
 	version := w.cfg.Get(config.KeyUpstreamLastDataVersion)
 	attemptAt := w.now()
 	changed := false
 	var errs []error
-	for _, kind := range []string{store.SideStoryKindCard, store.SideStoryKindArea} {
+	for _, kind := range kinds {
 		stories, err := w.fetchSideStoryCatalogContext(ctx, pacer, kind)
 		if ctx.Err() != nil {
 			return changed, ctx.Err()
@@ -350,18 +378,16 @@ func (w *SideStoryBackfill) refreshCatalog(ctx context.Context, pacer *sideStory
 			w.mu.Unlock()
 			return changed, errSideStoryDeferred
 		}
+		w.mu.Lock()
+		state := w.catalogs[kind]
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s catalog: %w", kind, err))
+			state.failedAt = attemptAt
+		} else {
+			state = sideStoryCatalogState{refreshedAt: attemptAt, version: version}
 		}
+		w.catalogs[kind] = state
+		w.mu.Unlock()
 	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if len(errs) > 0 {
-		w.catalogFailedAt = attemptAt
-		return changed, errors.Join(errs...)
-	}
-	w.catalogFailedAt = time.Time{}
-	w.catalogRefreshedAt = attemptAt
-	w.catalogVersion = version
-	return changed, nil
+	return changed, errors.Join(errs...)
 }

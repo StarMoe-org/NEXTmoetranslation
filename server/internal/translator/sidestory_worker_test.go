@@ -403,6 +403,24 @@ func TestSideStoryBackfillKeepsACatalogRequestMadeWhileDisabled(t *testing.T) {
 	}
 }
 
+func TestSideStoryBackfillRetriesOnlyTheCatalogKindThatFailed(t *testing.T) {
+	h := newSideStoryHarness(t)
+	h.upstream.remove("/en-master/actionSets.json")
+	h.round(t)
+	h.upstream.set("/en-master/actionSets.json", []any{})
+	h.advance(sideStoryCatalogRetryDelay + time.Second)
+	state := h.round(t)
+	if state.LastRoundError != "" || state.CatalogRefreshedAt == "" {
+		t.Fatalf("state after the area catalog retry = %+v", state)
+	}
+	if got := h.upstream.count("/jp-master/actionSets.json"); got != 2 {
+		t.Fatalf("area catalog fetched %d times, want 2", got)
+	}
+	if got := h.upstream.count("/jp-master/cards.json"); got != 1 {
+		t.Fatalf("card catalog that succeeded fetched %d times, want once", got)
+	}
+}
+
 func TestSideStoryBackfillHonoursTheRequestDelay(t *testing.T) {
 	h := newSideStoryHarness(t)
 	const delay = 60 * time.Millisecond
