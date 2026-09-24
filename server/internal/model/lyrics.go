@@ -32,6 +32,8 @@ type CatalogMusicItem struct {
 	IsNewlyWrittenMusic     bool                   `json:"isNewlyWrittenMusic"`
 	LyricsStatus            string                 `json:"lyricsStatus,omitempty"`
 	LyricsAvailabilityState string                 `json:"lyricsAvailabilityState,omitempty"`
+	LyricsWithdrawn         bool                   `json:"lyricsWithdrawn,omitempty"`
+	LyricsSourceV3          bool                   `json:"lyricsSourceV3,omitempty"`
 	RuntimeLyrics           *RuntimeLyricsMetadata `json:"runtimeLyrics,omitempty"`
 }
 

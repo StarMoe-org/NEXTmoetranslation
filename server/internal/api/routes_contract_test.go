@@ -1,10 +1,14 @@
 package api
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"testing"
+
+	"moesekai/server/internal/auth"
 )
 
 // The legacy write routes were deleted in favour of their producer-aware v1
@@ -15,11 +19,8 @@ func TestDeletedLegacyWriteRoutesReturn404(t *testing.T) {
 		method string
 		path   string
 	}{
-		{http.MethodPut, "/api/entry"},
 		{http.MethodPut, "/api/category/batch"},
-		{http.MethodPut, "/api/lyrics/save"},
 		{http.MethodPost, "/api/lyrics/translation-editions"},
-		{http.MethodPost, "/api/lyrics/publish"},
 		{http.MethodPost, "/api/lyrics/unpublish"},
 		{http.MethodPut, "/api/event-story/update"},
 		{http.MethodPost, "/api/event-story/promote-human"},
@@ -38,7 +39,89 @@ func TestDeletedLegacyWriteRoutesReturn404(t *testing.T) {
 	}
 }
 
-func TestStrictLyricsSourceReviewImportRequiresProducerState(t *testing.T) {
+// Agent tooling still posts to /api/entry, /api/lyrics/save and
+// /api/lyrics/publish; each must answer exactly like its v1 twin for every
+// caller and producer-state header.
+func TestAgentAliasRoutesMatchTheirV1Twins(t *testing.T) {
+	h := setupLegacyAPI(t)
+	editor, err := h.api.auth.CreateUser("alias-editor", "strong-password-123", auth.RoleEditor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	editorToken, _, err := h.api.auth.IssueToken(editor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := base64.RawURLEncoding.EncodeToString([]byte("different-process")) + ":0:0"
+	for _, pair := range []struct {
+		method    string
+		alias     string
+		twin      string
+		adminOnly bool
+	}{
+		{http.MethodPut, "/api/entry", "/api/editor/v1/entry", false},
+		{http.MethodPut, "/api/lyrics/save", "/api/editor/v1/lyrics/save", false},
+		{http.MethodPost, "/api/lyrics/publish", "/api/editor/v1/lyrics/publish", true},
+	} {
+		for _, caller := range []struct {
+			name    string
+			token   string
+			headers []string
+			status  int
+		}{
+			{name: "anonymous", status: http.StatusUnauthorized},
+			{name: "editor without header", token: editorToken},
+			{name: "admin without header", token: h.token},
+			{name: "admin with malformed header", token: h.token, headers: []string{"not-a-producer-state"}, status: http.StatusBadRequest},
+			{name: "admin with stale header", token: h.token, headers: []string{restarted}, status: http.StatusConflict},
+		} {
+			twinStatus, twinBody := routeResponse(t, h, pair.method, pair.twin, caller.token, caller.headers)
+			aliasStatus, aliasBody := routeResponse(t, h, pair.method, pair.alias, caller.token, caller.headers)
+			if aliasStatus != twinStatus || !bytes.Equal(aliasBody, twinBody) {
+				t.Fatalf("%s %s (%s) = %d %s, twin %s = %d %s", pair.method, pair.alias, caller.name,
+					aliasStatus, aliasBody, pair.twin, twinStatus, twinBody)
+			}
+			want := caller.status
+			if caller.name == "editor without header" && pair.adminOnly {
+				want = http.StatusForbidden
+			}
+			if want != 0 && aliasStatus != want {
+				t.Fatalf("%s %s (%s) status = %d, want %d: %s", pair.method, pair.alias, caller.name, aliasStatus, want, aliasBody)
+			}
+			if want == 0 && (aliasStatus == http.StatusNotFound || aliasStatus == http.StatusForbidden ||
+				aliasStatus == http.StatusUnauthorized || aliasStatus == http.StatusPreconditionRequired) {
+				t.Fatalf("%s %s (%s) was not admitted: %d %s", pair.method, pair.alias, caller.name, aliasStatus, aliasBody)
+			}
+		}
+	}
+}
+
+func routeResponse(t *testing.T, h *legacyAPIHarness, method, path, token string, headers []string) (int, []byte) {
+	t.Helper()
+	request, err := http.NewRequest(method, h.server.URL+path, bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	for _, value := range headers {
+		request.Header.Add(loadedProducerStateHeader, value)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response.StatusCode, body
+}
+
+func TestStrictLyricsSourceReviewImportRejectsMalformedProducerState(t *testing.T) {
 	h := setupLegacyAPI(t)
 	reviewID := seedArtifactReviewAPI(t, h)
 	approve := authorizedRequest(t, h, http.MethodPut, "/api/admin/lyrics-source-reviews/decision", map[string]any{
@@ -50,11 +133,11 @@ func TestStrictLyricsSourceReviewImportRequiresProducerState(t *testing.T) {
 		t.Fatalf("approve status = %d", approve.StatusCode)
 	}
 
-	missing := strictRequest(t, h, http.MethodPost, "/api/editor/v1/admin/lyrics-source-reviews/import",
-		map[string]any{"reviewId": reviewID}, nil)
-	missing.Body.Close()
-	if missing.StatusCode != http.StatusPreconditionRequired {
-		t.Fatalf("missing producer state status = %d", missing.StatusCode)
+	malformed := strictRequest(t, h, http.MethodPost, "/api/editor/v1/admin/lyrics-source-reviews/import",
+		map[string]any{"reviewId": reviewID}, []string{"not-a-producer-state"})
+	malformed.Body.Close()
+	if malformed.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malformed producer state status = %d", malformed.StatusCode)
 	}
 
 	response := authorizedRequest(t, h, http.MethodPost, "/api/editor/v1/admin/lyrics-source-reviews/import",

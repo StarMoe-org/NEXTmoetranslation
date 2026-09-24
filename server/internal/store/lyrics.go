@@ -177,10 +177,9 @@ func (s *Store) SaveLyricsMutationWithBeforeCommit(
 	return s.saveLyricsMutation(input, user, lyricsSaveOrdinary, nil, beforeCommit)
 }
 
-// SaveImportedLyricsMutation permits complete source provenance on the first
-// save for trusted internal callers and compatibility tests. All
-// provenance-bearing saves require the canonical lowercase 40-hex MediaWiki
-// SHA1 representation.
+// SaveImportedLyricsMutation is the first save of a verified source preview:
+// it refuses to write over an existing document. All provenance-bearing saves
+// require the canonical lowercase 40-hex MediaWiki SHA1 representation.
 func (s *Store) SaveImportedLyricsMutation(input model.SongLyrics, user string) (model.SongLyrics, bool, error) {
 	return s.saveLyricsMutation(input, user, lyricsSaveVerifiedImport, nil, nil)
 }
@@ -287,18 +286,6 @@ func (s *Store) saveLyricsMutationLocked(
 		if normalized.Revision != 0 {
 			return model.SongLyrics{}, false, &LyricsContractError{Code: "revision_conflict"}
 		}
-		if mode == lyricsSaveOrdinary {
-			if sourceFetchedAt > 0 {
-				return model.SongLyrics{}, false, &LyricsContractError{
-					Code: "source_drift", Details: []string{"new source provenance requires a verified server preview"},
-				}
-			}
-			if isManagedLyricsSourceURL(normalized.SourceURL) {
-				return model.SongLyrics{}, false, &LyricsContractError{
-					Code: "source_drift", Details: []string{"the managed lyrics source requires a verified server preview"},
-				}
-			}
-		}
 	} else {
 		if mode == lyricsSaveVerifiedImport && (current.lyrics.Status != "draft" || current.lyrics.SourceURL != "") {
 			return model.SongLyrics{}, false, &LyricsContractError{
@@ -308,18 +295,6 @@ func (s *Store) saveLyricsMutationLocked(
 		if normalized.Revision != current.lyrics.Revision {
 			copy := current.lyrics
 			return model.SongLyrics{}, false, &LyricsContractError{Code: "revision_conflict", Current: &copy}
-		}
-		if lyricsProvenanceChanged(normalized, current.lyrics) {
-			return model.SongLyrics{}, false, &LyricsContractError{
-				Code: "source_drift", Details: []string{"source page, revision, SHA1, fetched timestamp, and URL are immutable after first save"},
-			}
-		}
-		if mode == lyricsSaveOrdinary && (lyricsSourceStructureChanged(normalized.Lines, current.lyrics.Lines) || sourceHash != current.sourceHash) {
-			if !(current.lyrics.Status == "draft" && current.lyrics.SourceURL == "") {
-				return model.SongLyrics{}, false, &LyricsContractError{
-					Code: "source_drift", Details: []string{"ordered line IDs, numeric order values, or Japanese source text changed"},
-				}
-			}
 		}
 		inheritedRuby, missingRubyDetails := preserveOmittedLyricsRuby(&normalized, requested, current.lyrics)
 		if len(missingRubyDetails) > 0 {
@@ -889,6 +864,21 @@ func lyricsSourceOnlyPublicationAllowed(lyrics model.SongLyrics) bool {
 	return strings.TrimSpace(lyrics.ProofreadingCredit) == "" && lyricsHasSourceAttribution(lyrics)
 }
 
+// lyricsV1SourceOnlyPublicationAllowed additionally requires the source card
+// the served v1 detail derives from the source: with neither an attribution
+// nor attributions pjsk.moe rejects the detail. v2 details attribute their
+// source bundle instead.
+func lyricsV1SourceOnlyPublicationAllowed(lyrics model.SongLyrics) bool {
+	if !lyricsSourceOnlyPublicationAllowed(lyrics) {
+		return false
+	}
+	licenseName, licenseURL := publicLyricsV1SourceLicense(lyrics.SourceURL)
+	return len(publicLyricsV1Attributions(model.PublicSongLyrics{
+		SourceURL: lyrics.SourceURL, SourcePageID: lyrics.SourcePageID, SourceRevisionID: lyrics.SourceRevisionID,
+		LicenseName: licenseName, LicenseURL: licenseURL,
+	})) > 0
+}
+
 func validateLyrics(lyrics model.SongLyrics, performers map[int]bool, publishing bool) (string, []string, string) {
 	if lyrics.MusicID <= 0 {
 		return "source_drift", []string{"musicId must be positive"}, ""
@@ -906,7 +896,7 @@ func validateLyrics(lyrics model.SongLyrics, performers map[int]bool, publishing
 	totalBytes := len(lyrics.Attribution) + len(lyrics.TranslationCredit) + len(lyrics.ProofreadingCredit) +
 		len(lyrics.SourceNote) + len(lyrics.LicenseNote) + len(lyrics.SourceURL) + len(lyrics.SourceSHA1)
 	var segmentDetails, performerDetails, publicationDetails []string
-	if publishing && !lyricsHasTranslationCredit(lyrics) && !lyricsSourceOnlyPublicationAllowed(lyrics) {
+	if publishing && !lyricsHasTranslationCredit(lyrics) && !lyricsV1SourceOnlyPublicationAllowed(lyrics) {
 		publicationDetails = append(publicationDetails, "translation credit is required for publication")
 	}
 	lineIDs := map[string]bool{}
@@ -988,27 +978,6 @@ func validateLyrics(lyrics model.SongLyrics, performers map[int]bool, publishing
 	return "", nil, lyricsSourceHash(lyrics.Lines)
 }
 
-func lyricsProvenanceChanged(left, right model.SongLyrics) bool {
-	if right.SourceURL == "" && right.SourcePageID == 0 && right.SourceRevisionID == 0 && right.SourceSHA1 == "" {
-		return false
-	}
-	return left.SourcePageID != right.SourcePageID || left.SourceRevisionID != right.SourceRevisionID ||
-		left.SourceSHA1 != right.SourceSHA1 || left.SourceFetchedAt != right.SourceFetchedAt ||
-		left.SourceURL != right.SourceURL
-}
-
-func lyricsSourceStructureChanged(left, right []model.LyricLine) bool {
-	if len(left) != len(right) {
-		return true
-	}
-	for index := range left {
-		if left[index].ID != right[index].ID || left[index].Order != right[index].Order || left[index].Japanese != right[index].Japanese {
-			return true
-		}
-	}
-	return false
-}
-
 func validateLyricsProvenance(lyrics model.SongLyrics) (int64, error) {
 	provenanceSet := lyrics.SourcePageID != 0 || lyrics.SourceRevisionID != 0 ||
 		strings.TrimSpace(lyrics.SourceSHA1) != "" || strings.TrimSpace(lyrics.SourceFetchedAt) != ""
@@ -1067,8 +1036,8 @@ func hasCanonicalLyricsSourceSHA1(value string) bool {
 // ValidateLyricsSourceURL applies the transport policy for every persisted
 // lyrics source URL. External absolute HTTP(S) references remain supported,
 // while managed Wiki hostnames require HTTPS and the default port. A trailing
-// DNS root dot is classified as managed here so it cannot bypass ordinary-save
-// protection, but it is not accepted as a canonical verified revision URL.
+// DNS root dot is classified as managed here so it cannot bypass the HTTPS
+// rule, but it is not accepted as a canonical verified revision URL.
 func ValidateLyricsSourceURL(value string) error {
 	parsed, err := parseLyricsSourceURL(value)
 	if err != nil {

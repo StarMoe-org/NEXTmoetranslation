@@ -162,7 +162,9 @@ func publicLyricsPayloadVersion(payload string) (int, error) {
 // publicLyricsV1Attributions derives the public source card from a legacy v1
 // payload that carries extraction-source fields. Sekaipedia sources receive
 // their canonical CC BY-SA 4.0 license pair; unrecognized sources stay
-// unattributed instead of manufacturing provider metadata.
+// unattributed instead of manufacturing provider metadata. pjsk.moe rejects
+// the whole song for a non-canonical revision URL, so a source that fails the
+// public v3 revision URL rules keeps only the plain attribution.
 func publicLyricsV1Attributions(public model.PublicSongLyrics) []PublicLyricsAttribution {
 	provider := model.LyricsSourceProvider("")
 	if strings.Contains(public.SourceURL, "sekaipedia.org/") {
@@ -191,6 +193,11 @@ func publicLyricsV1Attributions(public model.PublicSongLyrics) []PublicLyricsAtt
 			u.RawQuery = q.Encode()
 		}
 		revisionURL = u.String()
+	}
+	if title == "" || !validPublicV3RevisionURL(PublicLyricsV3ComponentAttribution{
+		Provider: provider, RevisionID: public.SourceRevisionID, RevisionURL: revisionURL,
+	}) {
+		return nil
 	}
 	return []PublicLyricsAttribution{{
 		Provider:    provider,

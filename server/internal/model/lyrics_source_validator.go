@@ -117,17 +117,9 @@ func ValidateLyricsSourceFixedIdentity(identity LyricsSourceFixedIdentity) error
 	if !IsValidLyricsSourceProvider(identity.Provider) {
 		return fmt.Errorf("invalid lyrics source provider %q", identity.Provider)
 	}
-	wantOrigin := LyricsSourceOriginVocaloidFandom
-	switch identity.Provider {
-	case LyricsSourceProviderMoegirl:
-		wantOrigin = LyricsSourceOriginMoegirl
-	case LyricsSourceProviderMoegirlPublicExact:
-		wantOrigin = LyricsSourceOriginMoegirlPublicExact
-	case LyricsSourceProviderSekaipedia:
-		wantOrigin = LyricsSourceOriginSekaipedia
-	}
-	if identity.Origin != wantOrigin {
-		return fmt.Errorf("lyrics source provider %q requires origin %q", identity.Provider, wantOrigin)
+	if !LyricsSourceProviderAcceptsOrigin(identity.Provider, identity.Origin) {
+		return fmt.Errorf("lyrics source provider %q requires one of the origins %q, not %q",
+			identity.Provider, LyricsSourceProviderOrigins(identity.Provider), identity.Origin)
 	}
 	if identity.PageID <= 0 || identity.RevisionID <= 0 || !canonicalLyricsSourceSHA1.MatchString(identity.SHA1) {
 		return errors.New("lyrics source fixed identity has an invalid page, revision, or SHA1")

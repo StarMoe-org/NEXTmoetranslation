@@ -229,10 +229,11 @@ func (s *Server) handleLyricsSave(w http.ResponseWriter, r *http.Request) {
 	var changed bool
 	var err error
 	if strings.TrimSpace(request.SourceImportToken) != "" {
+		// Without a loaded-state header the request was admitted leniently; the
+		// grant then has to match the producer state observed now.
 		producerStatus, strict := acceptedEditorStatus(r)
 		if !strict {
-			writeErr(w, http.StatusPreconditionRequired, "verified source imports require the producer-aware editor route")
-			return
+			producerStatus = s.editorGate.Status()
 		}
 		if !currentUserIsAdmin(r) {
 			writeContractError(w, http.StatusForbidden, "admin_required", []string{"only administrators can import an external lyrics source"}, nil)
@@ -434,9 +435,20 @@ func (s *Server) handleLyricsPublication(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if _, pluralErr := s.store.GetLyricsRenditionDocument(request.MusicID); pluralErr == nil {
-		writeContractError(w, http.StatusUnprocessableEntity, "unsupported_publication", []string{
-			"source-v3 rendition publication is batch-bound to recovery Public v3 and cannot use the legacy publish route",
-		}, nil)
+		// Source-v3 songs are served from the reviewed bundle and their
+		// localizations; unpublish withdraws them and publish lifts that.
+		document, changed, err := s.store.SetSourceV3LyricsWithdrawn(request.MusicID, request.Revision, !publish, currentUser(r))
+		if err != nil {
+			writeLyricsError(w, err)
+			return
+		}
+		if changed {
+			s.broadcastLyricsDocumentUpdated(document.MusicID, document.Revision, request.ClientID, currentUser(r))
+			if s.fileService != nil {
+				s.fileService.PublishNow()
+			}
+		}
+		writeJSON(w, http.StatusOK, document)
 		return
 	} else if !errors.Is(pluralErr, store.ErrLyricsNotFound) {
 		writeContractError(w, http.StatusInternalServerError, "internal_error", nil, nil)

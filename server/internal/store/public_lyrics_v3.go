@@ -302,18 +302,14 @@ func buildRecoveryPublicLyricsV3Candidate(content LyricsContentExport, batchSHA2
 	for _, document := range content.Documents {
 		legacyEditableDocuments[document.MusicID]++
 	}
-	sourceRecords := make(map[int]LyricsSourceDocumentBackupRecord)
-	for _, record := range content.SourceDocuments {
-		if record.ManifestBatchSHA256 != batchSHA256 {
-			continue
+	sourceRecords, superseded, err := recoveryBatchSourceRecords(content, batchSHA256)
+	if err != nil {
+		return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 %w", err)
+	}
+	for musicID := range sourceRecords {
+		if _, found := itemMusicIDs[musicID]; !found {
+			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 source document %d is outside the batch catalog", musicID)
 		}
-		if _, found := itemMusicIDs[record.MusicID]; !found {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 source document %d is outside the batch catalog", record.MusicID)
-		}
-		if _, duplicate := sourceRecords[record.MusicID]; duplicate {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 source document %d is duplicated", record.MusicID)
-		}
-		sourceRecords[record.MusicID] = record
 	}
 	publicV3SourceCount := 0
 	for _, record := range sourceRecords {
@@ -321,7 +317,8 @@ func buildRecoveryPublicLyricsV3Candidate(content LyricsContentExport, batchSHA2
 		if err != nil {
 			return RecoveryPublicLyricsV3Candidate{}, err
 		}
-		if document.SchemaVersion == model.LyricsSourceDocumentSchemaVersionV3 && legacyEditableDocuments[record.MusicID] != 0 {
+		if superseded[record.MusicID] == nil && document.SchemaVersion == model.LyricsSourceDocumentSchemaVersionV3 &&
+			legacyEditableDocuments[record.MusicID] != 0 {
 			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf(
 				"lyrics recovery v3 music %d has mixed source-v3 and legacy editable ownership", record.MusicID,
 			)
@@ -408,7 +405,7 @@ func buildRecoveryPublicLyricsV3Candidate(content LyricsContentExport, batchSHA2
 			}
 			detail, err := buildRecoveryPublicLyricsV3SourceDetail(
 				item, sourceRecord, document, contributions[item.MusicID],
-				artifacts[item.MusicID], content,
+				artifacts[item.MusicID], content, superseded[item.MusicID],
 			)
 			if err != nil {
 				return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("build public v3 music %d: %w", item.MusicID, err)
@@ -436,6 +433,50 @@ func buildRecoveryPublicLyricsV3Candidate(content LyricsContentExport, batchSHA2
 		candidate.Index.Songs = append(candidate.Index.Songs, indexItem)
 	}
 	return candidate, validatePublicLyricsV3Candidate(candidate)
+}
+
+// recoveryBatchSourceRecords returns the batch's source documents by song. A
+// recovery takeover deleted the document it superseded, so its verbatim copy
+// stands in: a candidate represents the ledger, not the editor document that
+// replaced it. The copy has document ID 0, and superseded maps its song to the
+// localization and translation-edition rows the takeover kept, keyed to that
+// ID; no row or editable document of the replacing document attaches to it.
+func recoveryBatchSourceRecords(content LyricsContentExport, batchSHA256 string) (map[int]LyricsSourceDocumentBackupRecord, map[int]*LyricsContentExport, error) {
+	records := make(map[int]LyricsSourceDocumentBackupRecord)
+	for _, record := range content.SourceDocuments {
+		if record.ManifestBatchSHA256 != batchSHA256 {
+			continue
+		}
+		if _, duplicate := records[record.MusicID]; duplicate {
+			return nil, nil, fmt.Errorf("source document %d is duplicated", record.MusicID)
+		}
+		records[record.MusicID] = record
+	}
+	superseded := make(map[int]*LyricsContentExport)
+	for _, takeover := range content.RecoveryTakeovers {
+		if takeover.BatchSHA256 != batchSHA256 || takeover.SupersededDocument == nil {
+			continue
+		}
+		if _, duplicate := records[takeover.MusicID]; duplicate {
+			return nil, nil, fmt.Errorf("source document %d is both current and superseded", takeover.MusicID)
+		}
+		document := takeover.SupersededDocument
+		records[takeover.MusicID] = LyricsSourceDocumentBackupRecord{
+			MusicID: takeover.MusicID, SchemaVersion: document.SchemaVersion, ReasonCode: document.ReasonCode,
+			DocumentJSON: document.DocumentJSON, DocumentSHA256: document.DocumentSHA256,
+			ManifestBatchSHA256: takeover.BatchSHA256, CreatedAt: document.CreatedAt,
+		}
+		rows := &LyricsContentExport{}
+		if document.LocalizationsJSON != "" {
+			localizations, err := decodeLyricsRecoverySupersededLocalizations(document.LocalizationsJSON)
+			if err != nil {
+				return nil, nil, fmt.Errorf("superseded localizations of music %d: %w", takeover.MusicID, err)
+			}
+			*rows = localizations.contentRows(0)
+		}
+		superseded[takeover.MusicID] = rows
+	}
+	return records, superseded, nil
 }
 
 func publicV3SourceDocument(document model.LyricsSourceDocument) (model.LyricsSourceDocument, error) {
@@ -485,6 +526,7 @@ func buildRecoveryPublicLyricsV3SourceDetail(
 	storedContributions map[string]string,
 	artifacts map[string]LyricsRecoveryArtifactBackupRecord,
 	content LyricsContentExport,
+	superseded *LyricsContentExport,
 ) (PublicLyricsV3DetailDocument, error) {
 	document, err := publicV3SourceDocument(rawDocument)
 	if err != nil {
@@ -496,8 +538,12 @@ func buildRecoveryPublicLyricsV3SourceDetail(
 	}
 	localizations := content.RenditionLocalizations
 	translationLines := content.RenditionTranslationLines
+	if superseded != nil {
+		localizations, translationLines = superseded.RenditionLocalizations, superseded.RenditionTranslationLines
+	}
 	var legacyLines []LyricsLineBackupRecord
-	if rawDocument.SchemaVersion == model.LyricsSourceDocumentSchemaVersionV2 {
+	// A takeover deleted the editable rows a superseded v2 document carried.
+	if rawDocument.SchemaVersion == model.LyricsSourceDocumentSchemaVersionV2 && superseded == nil {
 		localization, lines, err := publicV3LegacyLocalization(
 			content, sourceRecord, document,
 		)
@@ -682,15 +728,9 @@ func buildRecoveryPublicLyricsV2CompatibilityCandidate(content LyricsContentExpo
 	if err := addAuditedExternalLyricsPerformerAliases(&catalogPerformers); err != nil {
 		return RecoveryPublicLyricsCandidate{}, err
 	}
-	sourceRecords := make(map[int]LyricsSourceDocumentBackupRecord)
-	for _, record := range content.SourceDocuments {
-		if record.ManifestBatchSHA256 != v3Candidate.BatchSHA256 {
-			continue
-		}
-		if _, duplicate := sourceRecords[record.MusicID]; duplicate {
-			return RecoveryPublicLyricsCandidate{}, fmt.Errorf("public v2 compatibility source document %d is duplicated", record.MusicID)
-		}
-		sourceRecords[record.MusicID] = record
+	sourceRecords, _, err := recoveryBatchSourceRecords(content, v3Candidate.BatchSHA256)
+	if err != nil {
+		return RecoveryPublicLyricsCandidate{}, fmt.Errorf("public v2 compatibility %w", err)
 	}
 	candidate := RecoveryPublicLyricsCandidate{
 		BatchSHA256: v3Candidate.BatchSHA256,
@@ -1601,20 +1641,7 @@ func validPublicV3RevisionURL(attribution PublicLyricsV3ComponentAttribution) bo
 		parsed.Opaque != "" || parsed.Host == "" || parsed.Path == "" || parsed.ForceQuery {
 		return false
 	}
-	origin := ""
-	switch attribution.Provider {
-	case model.LyricsSourceProviderVocaloidFandom:
-		origin = model.LyricsSourceOriginVocaloidFandom
-	case model.LyricsSourceProviderMoegirl:
-		origin = model.LyricsSourceOriginMoegirl
-	case model.LyricsSourceProviderMoegirlPublicExact:
-		origin = model.LyricsSourceOriginMoegirlPublicExact
-	case model.LyricsSourceProviderSekaipedia:
-		origin = model.LyricsSourceOriginSekaipedia
-	default:
-		return false
-	}
-	if parsed.Scheme+"://"+parsed.Host != origin {
+	if !model.LyricsSourceProviderAcceptsOrigin(attribution.Provider, parsed.Scheme+"://"+parsed.Host) {
 		return false
 	}
 	if attribution.Provider == model.LyricsSourceProviderMoegirlPublicExact {

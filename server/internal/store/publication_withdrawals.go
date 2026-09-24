@@ -1,6 +1,10 @@
 package store
 
-import "database/sql"
+import (
+	"database/sql"
+	"fmt"
+	"time"
+)
 
 // Public lyrics withdrawals are the positive record that an operator took a
 // song off the public site. Deleting the song_lyrics_publications row is not
@@ -26,6 +30,52 @@ func clearPublicLyricsWithdrawalTx(tx *sql.Tx, musicID int) (bool, error) {
 	}
 	removed, err := result.RowsAffected()
 	return removed == 1, err
+}
+
+// SetSourceV3LyricsWithdrawn withdraws a source-v3 song from the public site or
+// lifts its withdrawal. Source-v3 songs have no publication row, so the marker
+// alone decides whether the projection serves them. revision must match the
+// default translation edition document the editor loaded.
+func (s *Store) SetSourceV3LyricsWithdrawn(musicID, revision int, withdrawn bool, users ...string) (LyricsRenditionDocument, bool, error) {
+	unlock := s.lockLyrics(musicID)
+	defer unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return LyricsRenditionDocument{}, false, err
+	}
+	defer tx.Rollback()
+	_, _, current, err := loadLyricsRenditionMutationTx(tx, LyricsRenditionDocument{MusicID: musicID})
+	if err != nil {
+		return LyricsRenditionDocument{}, false, err
+	}
+	if revision != current.Revision {
+		copy := current
+		return LyricsRenditionDocument{}, false, &LyricsRenditionContractError{Code: "revision_conflict", Current: &copy}
+	}
+	now := time.Now().Unix()
+	action := "lyrics.publish"
+	var changed bool
+	if withdrawn {
+		action = "lyrics.unpublish"
+		changed, err = recordPublicLyricsWithdrawalTx(tx, musicID, optionalActor(users), now)
+	} else {
+		changed, err = clearPublicLyricsWithdrawalTx(tx, musicID)
+	}
+	if err != nil {
+		return LyricsRenditionDocument{}, false, err
+	}
+	if !changed {
+		return current, false, nil
+	}
+	if _, err := tx.Exec(`INSERT INTO audit_log(ts, user, action, detail) VALUES (?, ?, ?, ?)`,
+		now, optionalActor(users), action, fmt.Sprintf("musicId=%d revision=%d sourceV3=true", musicID, revision)); err != nil {
+		return LyricsRenditionDocument{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return LyricsRenditionDocument{}, false, err
+	}
+	s.NotifyChange()
+	return current, true, nil
 }
 
 // PublicLyricsWithdrawals returns the music IDs the public projection must omit

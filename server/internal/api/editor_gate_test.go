@@ -40,24 +40,36 @@ func TestEditorGateStatusAndStrictHeaderContract(t *testing.T) {
 		t.Fatalf("initial gate status = %+v", status)
 	}
 
+	// Content mutations without the header fall back to the lenient admission
+	// and reach their handler; the producer-only backup push still requires it.
 	aliases := []struct {
 		method string
 		path   string
+		strict bool
 	}{
-		{http.MethodPut, "/api/editor/v1/entry"},
-		{http.MethodPut, "/api/editor/v1/category/batch"},
-		{http.MethodPut, "/api/editor/v1/event-story/update"},
-		{http.MethodPost, "/api/editor/v1/event-story/promote-human"},
-		{http.MethodPut, "/api/editor/v1/lyrics/save"},
-		{http.MethodPost, "/api/editor/v1/lyrics/publish"},
-		{http.MethodPost, "/api/editor/v1/lyrics/unpublish"},
-		{http.MethodPost, "/api/editor/v1/backup/push"},
+		{http.MethodPut, "/api/editor/v1/entry", false},
+		{http.MethodPut, "/api/editor/v1/category/batch", false},
+		{http.MethodPut, "/api/editor/v1/event-story/update", false},
+		{http.MethodPost, "/api/editor/v1/event-story/promote-human", false},
+		{http.MethodPut, "/api/editor/v1/lyrics/save", false},
+		{http.MethodPost, "/api/editor/v1/lyrics/publish", false},
+		{http.MethodPost, "/api/editor/v1/lyrics/unpublish", false},
+		{http.MethodPost, "/api/editor/v1/backup/push", true},
 	}
 	for _, alias := range aliases {
 		response := strictRequest(t, h, alias.method, alias.path, nil, nil)
+		var body map[string]any
+		_ = json.NewDecoder(response.Body).Decode(&body)
 		response.Body.Close()
-		if response.StatusCode != http.StatusPreconditionRequired {
-			t.Fatalf("missing header %s status = %d", alias.path, response.StatusCode)
+		if alias.strict {
+			if response.StatusCode != http.StatusPreconditionRequired {
+				t.Fatalf("missing header %s status = %d", alias.path, response.StatusCode)
+			}
+			continue
+		}
+		if response.StatusCode == http.StatusPreconditionRequired || body["error"] == "loaded producer state required" ||
+			body["error"] == "invalid loaded producer state" {
+			t.Fatalf("missing header %s was rejected by the gate: status=%d body=%v", alias.path, response.StatusCode, body)
 		}
 	}
 
@@ -97,6 +109,70 @@ func TestEditorGateStatusAndStrictHeaderContract(t *testing.T) {
 	success.Body.Close()
 	if success.StatusCode != http.StatusOK {
 		t.Fatalf("strict success status = %d", success.StatusCode)
+	}
+}
+
+func TestStrictContentMutationWithoutHeaderUsesLenientAdmission(t *testing.T) {
+	h := setupLegacyAPI(t)
+	entryText := func() string {
+		t.Helper()
+		var text string
+		if err := h.db.QueryRow(`SELECT cn_text FROM entries WHERE category='cards' AND field='prefix' AND jp_key='cn-key'`).Scan(&text); err != nil {
+			t.Fatal(err)
+		}
+		return text
+	}
+	edit := func(text string, headerValues []string) *http.Response {
+		t.Helper()
+		return strictRequest(t, h, http.MethodPut, "/api/editor/v1/entry", map[string]string{
+			"category": "cards", "field": "prefix", "key": "cn-key", "text": text, "source": model.SourceHuman,
+		}, headerValues)
+	}
+
+	idle := edit("agent edit", nil)
+	idle.Body.Close()
+	if idle.StatusCode != http.StatusOK || entryText() != "agent edit" {
+		t.Fatalf("headerless edit while idle status=%d text=%q", idle.StatusCode, entryText())
+	}
+
+	releaseProducer, err := h.api.editorGate.BeginProducer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	running := edit("must not persist", nil)
+	var runningBody map[string]any
+	if err := json.NewDecoder(running.Body).Decode(&runningBody); err != nil {
+		running.Body.Close()
+		t.Fatal(err)
+	}
+	running.Body.Close()
+	if running.StatusCode != http.StatusConflict || runningBody["error"] != "producer is running; reload before saving" ||
+		entryText() != "agent edit" {
+		t.Fatalf("headerless edit while producing status=%d body=%v text=%q", running.StatusCode, runningBody, entryText())
+	}
+	stale := h.api.editorGate.Status()
+	releaseProducer()
+
+	malformed := edit("must not persist", []string{"not-a-producer-state"})
+	malformed.Body.Close()
+	if malformed.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malformed header status=%d", malformed.StatusCode)
+	}
+	staleResponse := edit("must not persist", []string{loadedState(stale)})
+	var current editorgate.Status
+	if err := json.NewDecoder(staleResponse.Body).Decode(&current); err != nil {
+		staleResponse.Body.Close()
+		t.Fatal(err)
+	}
+	staleResponse.Body.Close()
+	if staleResponse.StatusCode != http.StatusConflict || current != h.api.editorGate.Status() || entryText() != "agent edit" {
+		t.Fatalf("stale header status=%d body=%+v text=%q", staleResponse.StatusCode, current, entryText())
+	}
+
+	after := edit("agent edit after producer", nil)
+	after.Body.Close()
+	if after.StatusCode != http.StatusOK || entryText() != "agent edit after producer" {
+		t.Fatalf("headerless edit after producer status=%d text=%q", after.StatusCode, entryText())
 	}
 }
 

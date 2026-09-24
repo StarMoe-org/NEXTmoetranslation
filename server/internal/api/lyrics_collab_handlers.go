@@ -105,6 +105,10 @@ func (s *Server) handleLyricsCheckpoint(w http.ResponseWriter, r *http.Request) 
 			s.broadcastLyricsDocumentUpdated(value.MusicID, value.Revision, request.ClientID, currentUser(r))
 		case store.LyricsRenditionDocument:
 			s.broadcastLyricsDocumentUpdated(value.MusicID, value.Revision, request.ClientID, currentUser(r))
+			// A source-v3 save is served at once, as a rendition save is.
+			if s.fileService != nil {
+				s.fileService.PublishNow()
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, document)

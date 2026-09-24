@@ -307,6 +307,7 @@ type LyricsContentExport struct {
 	RecoveryArtifactEvidence        []LyricsRecoveryArtifactEvidenceBackupRecord       `json:"recoveryArtifactEvidence,omitempty"`
 	RecoveryContributions           []LyricsRecoveryContributionBackupRecord           `json:"recoveryContributions,omitempty"`
 	AvailabilityDocuments           []LyricsAvailabilityDocumentBackupRecord           `json:"availabilityDocuments,omitempty"`
+	RecoveryTakeovers               []LyricsRecoveryTakeoverBackupRecord               `json:"recoveryTakeovers,omitempty"`
 }
 
 type LegacyEventRestore struct {
@@ -541,6 +542,7 @@ func (s *Store) exportLyricsContentSnapshot(ctx context.Context, afterDocuments 
 		RecoveryArtifactEvidence:  []LyricsRecoveryArtifactEvidenceBackupRecord{},
 		RecoveryContributions:     []LyricsRecoveryContributionBackupRecord{},
 		AvailabilityDocuments:     []LyricsAvailabilityDocumentBackupRecord{},
+		RecoveryTakeovers:         []LyricsRecoveryTakeoverBackupRecord{},
 	}
 	translationLinesQuery := `SELECT document_id,rendition_key,'' AS side,locale,position,text
 		FROM song_lyrics_rendition_translation_lines
@@ -1640,6 +1642,9 @@ type sourceArtifactIdentity struct {
 // repairMissingExportArtifactEvidenceLinks completes evidence links that are
 // derivable from each artifact's own fixed identity. It runs inside the
 // read-only export transaction and therefore only repairs the exported result.
+// A reference whose parent row does not exist gets no link: the embedded editor
+// seed and the lyrics document route store artifacts without raw provider
+// evidence, and the link table cannot hold a row without its parent.
 func repairMissingExportArtifactEvidenceLinks(ctx context.Context, tx *sql.Tx, lyrics *LyricsContentExport) error {
 	existingLinks := make(map[sourceArtifactIdentity]map[int]bool)
 	for _, record := range lyrics.SourceArtifactEvidence {
@@ -1663,35 +1668,24 @@ func repairMissingExportArtifactEvidenceLinks(ctx context.Context, tx *sql.Tx, l
 			if existingLinks[id] != nil && existingLinks[id][position] {
 				continue
 			}
-			linkRecord := LyricsSourceArtifactEvidenceBackupRecord{
-				DocumentID:   artifact.DocumentID,
-				RenditionKey: artifact.RenditionKey,
-				Position:     position,
-				Provider:     string(identity.Provider),
-				EvidenceID:   ref.EvidenceID,
-				SHA256:       ref.SHA256,
-			}
-			lyrics.SourceArtifactEvidence = append(lyrics.SourceArtifactEvidence, linkRecord)
-			if existingLinks[id] == nil {
-				existingLinks[id] = make(map[int]bool)
-			}
-			existingLinks[id][position] = true
-
 			evID := sourceEvidenceIdentity{provider: identity.Provider, evidenceID: ref.EvidenceID}
 			if !loadedEvidence[evID] && tx != nil {
+				// Looked up without the digest so a present parent with different
+				// bytes still reaches the exact-parent check in validation.
 				var record LyricsSourceIndexEvidenceBackupRecord
 				var pageID, revisionID sql.NullInt64
 				err := tx.QueryRowContext(ctx, `SELECT provider,evidence_id,sha256,kind,origin,page_id,revision_id,
 					revision_timestamp,mediawiki_sha1,page_title,canonical_revision_url,categories_json,
 					canonical_request_url,fetched_at,raw_bytes,raw_byte_count,raw_sha256,created_at
 					FROM lyrics_source_index_evidence
-					WHERE provider=? AND evidence_id=? AND sha256=?`,
-					linkRecord.Provider, linkRecord.EvidenceID, linkRecord.SHA256).Scan(
+					WHERE provider=? AND evidence_id=?`,
+					string(identity.Provider), ref.EvidenceID).Scan(
 					&record.Provider, &record.EvidenceID, &record.SHA256, &record.Kind, &record.Origin,
 					&pageID, &revisionID, &record.RevisionTimestamp, &record.MediaWikiSHA1, &record.PageTitle,
 					&record.CanonicalRevisionURL, &record.CategoriesJSON, &record.CanonicalRequestURL, &record.FetchedAt,
 					&record.RawBytes, &record.RawByteCount, &record.RawSHA256, &record.CreatedAt)
-				if err == nil {
+				switch {
+				case err == nil:
 					if pageID.Valid {
 						record.PageID = int(pageID.Int64)
 					}
@@ -1701,8 +1695,25 @@ func repairMissingExportArtifactEvidenceLinks(ctx context.Context, tx *sql.Tx, l
 					record.RawBytes = append([]byte(nil), record.RawBytes...)
 					lyrics.SourceIndexEvidence = append(lyrics.SourceIndexEvidence, record)
 					loadedEvidence[evID] = true
+				case !errors.Is(err, sql.ErrNoRows):
+					return err
 				}
 			}
+			if !loadedEvidence[evID] {
+				continue
+			}
+			lyrics.SourceArtifactEvidence = append(lyrics.SourceArtifactEvidence, LyricsSourceArtifactEvidenceBackupRecord{
+				DocumentID:   artifact.DocumentID,
+				RenditionKey: artifact.RenditionKey,
+				Position:     position,
+				Provider:     string(identity.Provider),
+				EvidenceID:   ref.EvidenceID,
+				SHA256:       ref.SHA256,
+			})
+			if existingLinks[id] == nil {
+				existingLinks[id] = make(map[int]bool)
+			}
+			existingLinks[id][position] = true
 		}
 	}
 	return nil
@@ -1874,9 +1885,17 @@ func validateRestoredLyricsSourceProvenance(lyrics LyricsContentExport, document
 		artifactEvidencePositions[artifactIdentity][record.Position] = true
 		referencedEvidence[evidenceIdentity] = true
 	}
+	// A reference may stay unlinked only when its parent is absent from the
+	// backup, which is how seed and document-route artifacts are stored.
 	for artifactIdentity, references := range artifactEvidenceRefs {
-		if len(artifactEvidencePositions[artifactIdentity]) != len(references) {
-			return fmt.Errorf("lyrics source artifact %d/%s has incomplete evidence links", artifactIdentity.documentID, artifactIdentity.renditionKey)
+		provider := artifactIdentities[artifactIdentity].Provider
+		for position, reference := range references {
+			if artifactEvidencePositions[artifactIdentity][position] {
+				continue
+			}
+			if _, present := evidenceByIdentity[sourceEvidenceIdentity{provider: provider, evidenceID: reference.EvidenceID}]; present {
+				return fmt.Errorf("lyrics source artifact %d/%s has incomplete evidence links", artifactIdentity.documentID, artifactIdentity.renditionKey)
+			}
 		}
 	}
 	if len(referencedEvidence) != len(evidenceByIdentity) {
@@ -1895,6 +1914,9 @@ func validateRestoredLyricsSourceProvenance(lyrics LyricsContentExport, document
 	hydratedCandidates := make([]lyricssource.Candidate, 0, len(artifactIdentities))
 	for _, artifactIdentity := range artifactOrder {
 		identity := artifactIdentities[artifactIdentity]
+		if len(artifactEvidencePositions[artifactIdentity]) != len(identity.IndexEvidenceRefs) {
+			continue
+		}
 		versionReason := identity.VersionReason
 		if versionReason == "" {
 			versionReason = model.LyricsSourceVersionReasonCode(provenanceByID[artifactIdentity.documentID].ReasonCode)
@@ -2819,7 +2841,13 @@ func canonicalizeRestoredPublicationWithSource(record *LyricsPublicationBackupRe
 			Attribution: public.Attribution, SourceURL: public.SourceURL, SourcePageID: public.SourcePageID,
 			SourceRevisionID: public.SourceRevisionID, SourceSHA1: public.SourceSHA1,
 			SourceFetchedAt: public.SourceFetchedAt, Lines: public.Lines})
-		if code, details, _ := validateLyrics(lyrics, performerIDs, true); code != "" {
+		// Stored v1 rows keep the source-only rule they were published under;
+		// the served-attribution requirement applies to new publications only.
+		code, details, _ := validateLyrics(lyrics, performerIDs, false)
+		if code == "" && !lyricsHasTranslationCredit(lyrics) && !lyricsSourceOnlyPublicationAllowed(lyrics) {
+			code, details = "incomplete_publication", []string{"translation credit is required for publication"}
+		}
+		if code != "" {
 			return fmt.Errorf("lyrics publication %d violates %s: %s", record.MusicID, code, strings.Join(details, "; "))
 		}
 		publicV1 := publicLyricsV1(lyrics)

@@ -427,29 +427,38 @@ func TestPrivateLyricsDetailAvoidsHTMLExpansionBeyondSekaiTextBodyCap(t *testing
 	}
 }
 
-func TestLyricsAPIOrdinarySaveRejectsManagedSourceURLWithoutImportGrant(t *testing.T) {
-	h := setupLegacyAPI(t)
-	seedLyricsCatalog(t, h)
+func TestLyricsAPIOrdinarySaveAcceptsManagedSourceURLWithoutImportGrant(t *testing.T) {
 	for _, sourceURL := range []string{
 		"https://vocaloid.fandom.com/wiki/Song",
 		"https://vocaloid.fandom.com/wiki/Song?oldid=123",
 		"https://vocaloid.wikia.com/wiki/Song",
-		"HTTP://VOCALOID.WIKIA.COM./wiki/Song",
 	} {
+		h := setupLegacyAPI(t)
+		seedLyricsCatalog(t, h)
 		draft := apiLyrics()
 		draft.SourceURL = sourceURL
 		response := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", draft)
-		defer response.Body.Close()
-		if response.StatusCode != http.StatusUnprocessableEntity {
-			body, _ := io.ReadAll(response.Body)
-			t.Fatalf("managed source URL %q status=%d body=%s", sourceURL, response.StatusCode, body)
+		var saved model.SongLyrics
+		if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&saved) != nil ||
+			saved.Revision != 1 || saved.SourceURL != sourceURL {
+			response.Body.Close()
+			t.Fatalf("managed source URL %q status=%d saved=%+v", sourceURL, response.StatusCode, saved)
 		}
-		var contract struct {
-			Error string `json:"error"`
-		}
-		if err := json.NewDecoder(response.Body).Decode(&contract); err != nil || contract.Error != "source_drift" {
-			t.Fatalf("managed source URL %q body=%+v err=%v", sourceURL, contract, err)
-		}
+		response.Body.Close()
+	}
+
+	h := setupLegacyAPI(t)
+	seedLyricsCatalog(t, h)
+	insecure := apiLyrics()
+	insecure.SourceURL = "HTTP://VOCALOID.WIKIA.COM./wiki/Song"
+	rejected := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", insecure)
+	defer rejected.Body.Close()
+	var contract struct {
+		Error string `json:"error"`
+	}
+	if rejected.StatusCode != http.StatusUnprocessableEntity || json.NewDecoder(rejected.Body).Decode(&contract) != nil ||
+		contract.Error != "source_drift" {
+		t.Fatalf("managed source over HTTP status=%d body=%+v", rejected.StatusCode, contract)
 	}
 
 	external := apiLyrics()
@@ -596,15 +605,19 @@ func TestLyricsSourcePreviewContract(t *testing.T) {
 	if replay.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("consumed import token replay status = %d", replay.StatusCode)
 	}
-	frozen := saved
-	frozen.SourceRevisionID++
-	frozen.Lines[0].ID = "replacement-line"
-	frozen.Lines[0].Japanese = "別の歌詞"
-	frozen.Lines[0].Segments[0].Text = "別の歌詞"
-	frozenSave := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", frozen)
-	defer frozenSave.Body.Close()
-	if frozenSave.StatusCode != http.StatusUnprocessableEntity {
-		t.Fatalf("saved source identity was not frozen, status=%d", frozenSave.StatusCode)
+	edited := saved
+	edited.SourceURL = "https://vocaloid.fandom.com/wiki/Song?oldid=35"
+	edited.SourceRevisionID = 35
+	edited.Lines = []model.LyricLine{{
+		ID: "replacement-line", Order: 0, Japanese: "別の歌詞",
+		Segments: []model.LyricSegment{{Text: "別の歌詞", PerformerIDs: []int{}, Ruby: []model.LyricRubySpan{{Text: "別の歌詞"}}}},
+	}}
+	editedSave := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", edited)
+	defer editedSave.Body.Close()
+	var editedResult model.SongLyrics
+	if editedSave.StatusCode != http.StatusOK || json.NewDecoder(editedSave.Body).Decode(&editedResult) != nil ||
+		editedResult.Revision != saved.Revision+1 || editedResult.SourceRevisionID != 35 || editedResult.Lines[0].Japanese != "別の歌詞" {
+		t.Fatalf("edit of saved source identity status=%d result=%+v", editedSave.StatusCode, editedResult)
 	}
 	var auditCount int
 	if err := h.db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE user='alice' AND action IN ('lyrics.source.search', 'lyrics.source.preview')`).Scan(&auditCount); err != nil {
@@ -747,7 +760,7 @@ func TestLyricsSourcePreviewRejectsNoncanonicalFakeSHA1BeforeGrant(t *testing.T)
 	}
 }
 
-func TestLyricsSaveRejectsUnverifiedOrTamperedSourceProvenance(t *testing.T) {
+func TestLyricsSaveRejectsInvalidOrTamperedSourceProvenance(t *testing.T) {
 	const sourceSHA1 = "0123456789abcdef0123456789abcdef01234567"
 	h := setupLegacyAPI(t)
 	if err := h.store.UpsertMusicCatalog([]store.MusicCatalogRecord{{
@@ -766,11 +779,6 @@ func TestLyricsSaveRejectsUnverifiedOrTamperedSourceProvenance(t *testing.T) {
 	draft.SourceSHA1 = sourceSHA1
 	draft.SourceFetchedAt = "2026-07-22T12:00:00Z"
 	draft.Lines = []model.LyricLine{{ID: "wiki-12-34-1", Order: 0, Japanese: "歌詞", Segments: []model.LyricSegment{{Text: "歌詞", Ruby: []model.LyricRubySpan{{Text: "歌詞"}}}}}}
-	unverified := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", draft)
-	unverified.Body.Close()
-	if unverified.StatusCode != http.StatusUnprocessableEntity {
-		t.Fatalf("unverified source save status = %d", unverified.StatusCode)
-	}
 	for _, fetchedAt := range []string{"1970-01-01T00:00:00Z", "1969-12-31T23:59:59Z"} {
 		bypass := draft
 		bypass.SourceFetchedAt = fetchedAt
@@ -840,6 +848,15 @@ func TestLyricsSaveRejectsUnverifiedOrTamperedSourceProvenance(t *testing.T) {
 	h.api.lyricsImportMu.Unlock()
 	if noncanonicalGrantStillPresent {
 		t.Fatal("deterministic noncanonical source drift did not consume import grant")
+	}
+
+	// Complete, well-formed provenance no longer needs a verified preview.
+	ordinary := authorizedRequest(t, h, http.MethodPut, "/api/editor/v1/lyrics/save", draft)
+	defer ordinary.Body.Close()
+	var ordinarySaved model.SongLyrics
+	if ordinary.StatusCode != http.StatusOK || json.NewDecoder(ordinary.Body).Decode(&ordinarySaved) != nil ||
+		ordinarySaved.Revision != 1 || ordinarySaved.SourceRevisionID != 34 || ordinarySaved.SourceSHA1 != sourceSHA1 {
+		t.Fatalf("ordinary provenance save status=%d saved=%+v", ordinary.StatusCode, ordinarySaved)
 	}
 }
 

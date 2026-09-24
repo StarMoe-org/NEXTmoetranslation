@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -61,6 +62,23 @@ func TestMigrationsAfterV34MustNotMutateContentTables(t *testing.T) {
 		"song_lyrics_publications",
 		"song_lyrics_source_documents",
 		"catalog_music",
+		// Prefix of the immutable recovery import ledger and its takeover rows.
+		"lyrics_recovery_",
+	}
+	// The patterns below match by prefix, so they also cover tables such as
+	// song_lyrics_source_artifacts that only share a content-table name. A
+	// migration may rebuild one of those listed here, and only as a verbatim
+	// copy: INSERT INTO <table> (<columns>) SELECT <same columns> FROM
+	// <renamed predecessor>, then DROP TABLE <renamed predecessor>.
+	// TestMigrationV37RebuildsSongLyricsSourceArtifactsVerbatim compares every
+	// row before and after.
+	verbatimRebuilds := map[int]map[string]string{
+		37: {"SONG_LYRICS_SOURCE_ARTIFACTS": "SONG_LYRICS_SOURCE_ARTIFACTS_V36"},
+	}
+	// These migrations may only create the named table with its indexes and
+	// RAISE-only triggers.
+	createOnly := map[int]string{
+		38: "LYRICS_RECOVERY_TAKEOVERS",
 	}
 
 	for _, m := range migrations {
@@ -75,6 +93,18 @@ func TestMigrationsAfterV34MustNotMutateContentTables(t *testing.T) {
 		}
 		upper := strings.ToUpper(m.sql)
 		normalized := strings.Join(strings.Fields(upper), " ")
+		if table, ok := createOnly[m.version]; ok {
+			statements := migrationSQLStatements(m.sql)
+			if len(statements) == 0 {
+				t.Fatalf("migration %d (%s) has no statements", m.version, m.name)
+			}
+			for _, statement := range statements {
+				if !isCreateOnlyStatement(statement, table) {
+					t.Fatalf("migration %d (%s) may only create %s, its indexes and RAISE-only triggers; found %q",
+						m.version, m.name, table, statement)
+				}
+			}
+		}
 		for _, table := range contentTables {
 			tableUpper := strings.ToUpper(table)
 			patterns := []string{
@@ -92,12 +122,149 @@ func TestMigrationsAfterV34MustNotMutateContentTables(t *testing.T) {
 				"DROP TABLE " + tableUpper,
 			}
 			for _, pattern := range patterns {
-				if strings.Contains(normalized, pattern) {
+				for offset := 0; ; {
+					index := strings.Index(normalized[offset:], pattern)
+					if index < 0 {
+						break
+					}
+					statement := normalized[offset+index:]
+					offset += index + len(pattern)
+					if end := strings.IndexByte(statement, ';'); end >= 0 {
+						statement = statement[:end]
+					}
+					if isVerbatimRebuildStatement(strings.TrimSpace(statement), verbatimRebuilds[m.version]) {
+						continue
+					}
 					t.Fatalf("migration %d (%s) modifies content table %q via %q; content mutations must go through /api/editor/v1/lyrics/save or /api/editor/v1/lyrics/translation-editions, not schema migrations",
 						m.version, m.name, table, pattern)
 				}
 			}
 		}
+	}
+}
+
+var verbatimRebuildCopyStatement = regexp.MustCompile(`^INSERT INTO ([A-Z0-9_]+) \(([^)]*)\) SELECT (.*) FROM ([A-Z0-9_]+)( ORDER BY [A-Z0-9_]+(, ?[A-Z0-9_]+)*)?$`)
+
+// isVerbatimRebuildStatement reports whether a normalized statement is the
+// column-for-column copy into a rebuilt table from its renamed predecessor, or
+// the drop of that predecessor.
+func isVerbatimRebuildStatement(statement string, rebuilds map[string]string) bool {
+	if match := verbatimRebuildCopyStatement.FindStringSubmatch(statement); match != nil {
+		predecessor, ok := rebuilds[match[1]]
+		return ok && match[4] == predecessor &&
+			strings.ReplaceAll(match[2], " ", "") == strings.ReplaceAll(match[3], " ", "")
+	}
+	if dropped, ok := strings.CutPrefix(statement, "DROP TABLE "); ok {
+		for _, predecessor := range rebuilds {
+			if dropped == predecessor {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// migrationSQLStatements splits migration SQL into normalized upper-case
+// statements, dropping -- comments and keeping each trigger body whole.
+func migrationSQLStatements(sqlText string) []string {
+	var lines []string
+	for _, line := range strings.Split(sqlText, "\n") {
+		if index := strings.Index(line, "--"); index >= 0 {
+			line = line[:index]
+		}
+		lines = append(lines, line)
+	}
+	rest := strings.Join(strings.Fields(strings.ToUpper(strings.Join(lines, "\n"))), " ")
+	var statements []string
+	for {
+		rest = strings.TrimSpace(rest)
+		if rest == "" {
+			return statements
+		}
+		end := strings.IndexByte(rest, ';')
+		if strings.HasPrefix(rest, "CREATE TRIGGER ") {
+			if bodyEnd := strings.Index(rest, "; END;"); bodyEnd >= 0 {
+				end = bodyEnd + len("; END")
+			}
+		}
+		if end < 0 {
+			return append(statements, rest)
+		}
+		statements = append(statements, strings.TrimSpace(rest[:end]))
+		rest = rest[end+1:]
+	}
+}
+
+var (
+	createOnlyTableStatement   = regexp.MustCompile(`^CREATE TABLE ([A-Z0-9_]+) \(`)
+	createOnlyIndexStatement   = regexp.MustCompile(`^CREATE INDEX [A-Z0-9_]+ ON ([A-Z0-9_]+) ?\([A-Z0-9_, ]+\)$`)
+	createOnlyTriggerStatement = regexp.MustCompile(`^CREATE TRIGGER [A-Z0-9_]+ BEFORE (?:INSERT|UPDATE|DELETE) ON ([A-Z0-9_]+) (?:WHEN .* )?BEGIN SELECT RAISE\(ABORT, '[^';]*'\); END$`)
+)
+
+// isCreateOnlyStatement reports whether a normalized statement creates table,
+// an index on it, or a trigger on it whose body only raises.
+func isCreateOnlyStatement(statement, table string) bool {
+	if strings.Contains(statement, "INSERT INTO") || strings.Contains(statement, "DELETE FROM") ||
+		strings.Contains(statement, "UPDATE ") && !strings.Contains(statement, "BEFORE UPDATE ON ") {
+		return false
+	}
+	for _, pattern := range []*regexp.Regexp{createOnlyTableStatement, createOnlyIndexStatement, createOnlyTriggerStatement} {
+		if match := pattern.FindStringSubmatch(statement); match != nil {
+			return match[1] == table
+		}
+	}
+	return false
+}
+
+func TestCreateOnlyStatementAllowsOnlyTheNamedTableIndexAndRaiseTriggers(t *testing.T) {
+	statements := migrationSQLStatements(migrationV38LyricsRecoveryTakeoversSQL)
+	if len(statements) != 5 {
+		t.Fatalf("v38 statements=%d: %q", len(statements), statements)
+	}
+	for statement, want := range map[string]bool{
+		"CREATE TABLE LYRICS_RECOVERY_TAKEOVERS (MUSIC_ID INTEGER PRIMARY KEY)":                                                                   true,
+		"CREATE INDEX IDX_T ON LYRICS_RECOVERY_TAKEOVERS(BATCH_SHA256,MUSIC_ID)":                                                                  true,
+		"CREATE TRIGGER T_U BEFORE UPDATE ON LYRICS_RECOVERY_TAKEOVERS BEGIN SELECT RAISE(ABORT, 'IMMUTABLE'); END":                               true,
+		"CREATE TRIGGER T_D BEFORE DELETE ON LYRICS_RECOVERY_TAKEOVERS WHEN EXISTS (SELECT 1 FROM X) BEGIN SELECT RAISE(ABORT, 'IMMUTABLE'); END": true,
+		"CREATE TABLE LYRICS_RECOVERY_IMPORT_ITEMS (MUSIC_ID INTEGER)":                                                                            false,
+		"CREATE INDEX IDX_T ON LYRICS_RECOVERY_IMPORT_ITEMS(MUSIC_ID)":                                                                            false,
+		"CREATE TRIGGER T_I AFTER INSERT ON LYRICS_RECOVERY_TAKEOVERS BEGIN DELETE FROM LYRICS_RECOVERY_IMPORT_ITEMS; END":                        false,
+		"CREATE TRIGGER T_I BEFORE INSERT ON LYRICS_RECOVERY_TAKEOVERS BEGIN UPDATE SONG_LYRICS SET REVISION=1; END":                              false,
+		"CREATE TRIGGER T_I BEFORE INSERT ON LYRICS_RECOVERY_TAKEOVERS BEGIN SELECT RAISE(ABORT, 'X'); DELETE FROM X; END":                        false,
+		"INSERT INTO LYRICS_RECOVERY_TAKEOVERS SELECT * FROM LYRICS_RECOVERY_IMPORT_ITEMS":                                                        false,
+		"DROP TRIGGER LYRICS_RECOVERY_IMPORT_ITEMS_IMMUTABLE_UPDATE":                                                                              false,
+		"ALTER TABLE LYRICS_RECOVERY_TAKEOVERS ADD COLUMN X TEXT":                                                                                 false,
+	} {
+		if got := isCreateOnlyStatement(statement, "LYRICS_RECOVERY_TAKEOVERS"); got != want {
+			t.Errorf("isCreateOnlyStatement(%q)=%v want %v", statement, got, want)
+		}
+	}
+}
+
+func TestVerbatimRebuildStatementAllowsOnlyTheColumnForColumnCopy(t *testing.T) {
+	rebuilds := map[string]string{"SONG_LYRICS_SOURCE_ARTIFACTS": "SONG_LYRICS_SOURCE_ARTIFACTS_V36"}
+	for statement, want := range map[string]bool{
+		"INSERT INTO SONG_LYRICS_SOURCE_ARTIFACTS (DOCUMENT_ID,PROVIDER, ORIGIN) SELECT DOCUMENT_ID,PROVIDER,ORIGIN FROM SONG_LYRICS_SOURCE_ARTIFACTS_V36 ORDER BY DOCUMENT_ID,RENDITION_KEY": true,
+		"INSERT INTO SONG_LYRICS_SOURCE_ARTIFACTS (DOCUMENT_ID,PROVIDER) SELECT DOCUMENT_ID,PROVIDER FROM SONG_LYRICS_SOURCE_ARTIFACTS_V36":                                                   true,
+		"DROP TABLE SONG_LYRICS_SOURCE_ARTIFACTS_V36": true,
+		"INSERT INTO SONG_LYRICS_SOURCE_ARTIFACTS (DOCUMENT_ID,ORIGIN) SELECT DOCUMENT_ID,'HTTPS://EVIL.FANDOM.COM' FROM SONG_LYRICS_SOURCE_ARTIFACTS_V36": false,
+		"INSERT INTO SONG_LYRICS_SOURCE_ARTIFACTS (DOCUMENT_ID,PROVIDER) SELECT PROVIDER,DOCUMENT_ID FROM SONG_LYRICS_SOURCE_ARTIFACTS_V36":                false,
+		"INSERT INTO SONG_LYRICS_SOURCE_ARTIFACTS (DOCUMENT_ID) SELECT DOCUMENT_ID FROM SONG_LYRICS_SOURCE_DOCUMENTS":                                      false,
+		"INSERT INTO SONG_LYRICS_SOURCE_ARTIFACTS (DOCUMENT_ID) SELECT DOCUMENT_ID FROM SONG_LYRICS_SOURCE_ARTIFACTS_V36 ORDER BY DOCUMENT_ID LIMIT 1":     false,
+		"INSERT INTO SONG_LYRICS_SOURCE_ARTIFACTS (DOCUMENT_ID) VALUES (1)":                                                                                false,
+		"INSERT INTO SONG_LYRICS (MUSIC_ID) SELECT MUSIC_ID FROM SONG_LYRICS_SOURCE_ARTIFACTS_V36":                                                         false,
+		"INSERT INTO SONG_LYRICS_RENDITION_SIDE_TRANSLATION_LINES (TEXT) SELECT TEXT FROM SONG_LYRICS_SOURCE_ARTIFACTS_V36":                                false,
+		"DROP TABLE SONG_LYRICS_SOURCE_ARTIFACTS":            false,
+		"DROP TABLE SONG_LYRICS_SOURCE_DOCUMENTS":            false,
+		"DELETE FROM SONG_LYRICS_SOURCE_ARTIFACTS":           false,
+		"UPDATE SONG_LYRICS_SOURCE_ARTIFACTS SET ORIGIN='X'": false,
+	} {
+		if got := isVerbatimRebuildStatement(statement, rebuilds); got != want {
+			t.Errorf("isVerbatimRebuildStatement(%q)=%t want %t", statement, got, want)
+		}
+	}
+	if isVerbatimRebuildStatement("DROP TABLE SONG_LYRICS_SOURCE_ARTIFACTS_V36", nil) {
+		t.Fatal("a migration without a declared rebuild may not drop a content-prefixed table")
 	}
 }
 

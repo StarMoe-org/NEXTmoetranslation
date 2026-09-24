@@ -1273,6 +1273,57 @@ func TestPublishNowBypassesDebounce(t *testing.T) {
 	}
 }
 
+func TestAwaitPublishedPublishesADebouncedRequestAtOnce(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "await-published.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	s := store.New(database)
+	es := store.NewEventStore(database)
+	svc := New(s, es, files.NewGenerator(s, es, ""))
+	svc.SetDebounce(time.Hour)
+
+	// Without a worker there is nothing to wait for: nothing pending answers
+	// true, a pending request answers false at once.
+	if !svc.AwaitPublished(context.Background(), time.Minute) {
+		t.Fatal("nothing pending was not reported as published")
+	}
+	svc.Trigger()
+	started := time.Now()
+	if svc.AwaitPublished(context.Background(), time.Minute) || time.Since(started) > time.Second {
+		t.Fatalf("a request without a worker waited %s or was reported as published", time.Since(started))
+	}
+
+	svc.Start()
+	defer func() {
+		svc.Stop()
+		svc.Wait()
+	}()
+	if !svc.AwaitPublished(context.Background(), 10*time.Second) {
+		t.Fatal("the initial generation was not awaited")
+	}
+	generation := svc.Status().Generation
+	// A debounced request would wait an hour; the await publishes it at once.
+	svc.Trigger()
+	if status := svc.Status(); !status.Pending {
+		t.Fatalf("the debounced request is not pending: %+v", status)
+	}
+	if !svc.AwaitPublished(context.Background(), 10*time.Second) {
+		t.Fatal("the debounced request was not published")
+	}
+	if status := svc.Status(); status.Generation <= generation || status.Pending {
+		t.Fatalf("status after the await = %+v, generation before %d", status, generation)
+	}
+
+	svc.Trigger()
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if svc.AwaitPublished(canceled, 10*time.Second) {
+		t.Fatal("a canceled wait reported the pending request as published")
+	}
+}
+
 func TestThreeLayerOverlayProvenanceTracking(t *testing.T) {
 	database, err := db.Open(filepath.Join(t.TempDir(), "provenance-test.db"))
 	if err != nil {

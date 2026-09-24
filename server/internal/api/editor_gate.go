@@ -32,8 +32,11 @@ func (s *Server) handleEditorGateStatus(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, s.editorGate.Status())
 }
 
+// strictContentMutation checks the loaded producer state when the client sends
+// it. Requests without the header (agent scripts) get the lenient content
+// admission instead; a malformed or stale header is still rejected.
 func (s *Server) strictContentMutation(next http.HandlerFunc) http.HandlerFunc {
-	return s.strictEditorMutation(func(w http.ResponseWriter, r *http.Request) {
+	strict := s.strictEditorMutation(func(w http.ResponseWriter, r *http.Request) {
 		release, err := s.store.LockContentSharedContext(r.Context())
 		if err != nil {
 			writeErr(w, http.StatusServiceUnavailable, "request canceled")
@@ -42,6 +45,14 @@ func (s *Server) strictContentMutation(next http.HandlerFunc) http.HandlerFunc {
 		defer release()
 		next(w, r)
 	})
+	lenient := s.contentMutation(next)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if len(r.Header.Values(loadedProducerStateHeader)) == 0 {
+			lenient(w, r)
+			return
+		}
+		strict(w, r)
+	}
 }
 
 func (s *Server) strictEditorMutation(next http.HandlerFunc) http.HandlerFunc {

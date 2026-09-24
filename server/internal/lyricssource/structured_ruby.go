@@ -107,30 +107,7 @@ func generateRubySpansWithUniqueStandaloneDictionary(
 		}
 		spans := []RubySpan{{Text: surface}}
 		if containsKanji(surface) {
-			features := token.Features()
-			candidate := ""
-			if len(features) >= 8 && features[7] != "*" {
-				candidate = katakanaToHiragana(features[7])
-			}
-			aligned, ok := rubySpansFromKanaReading(surface, []rune(candidate))
-			if validGeneratedRubyReading(candidate) && ok {
-				aligned = markRubyReadingEvidence(
-					aligned, model.LyricsSourceReadingEvidenceDeterministicDictionary, rubyGeneratorVersion,
-				)
-			} else {
-				aligned, ok = kagomeNormalizedRubySpans(surface)
-				if ok {
-					aligned = markRubyReadingEvidence(
-						aligned, model.LyricsSourceReadingEvidenceDeterministicDictionary, rubyGeneratorVersion,
-					)
-				}
-			}
-			if !ok {
-				aligned, ok = deterministicStandaloneHanRubySpans(surface)
-			}
-			if !ok && allowUniqueStandaloneDictionary {
-				aligned, ok = kagomeUniqueStandaloneHanRubySpans(surface)
-			}
+			aligned, ok := tokenRubySpans(token, allowUniqueStandaloneDictionary)
 			if !ok {
 				return nil, unresolvedGeneratedRubyError()
 			}
@@ -143,6 +120,62 @@ func generateRubySpansWithUniqueStandaloneDictionary(
 	}
 	if !rubySpansValidForText(text, result) {
 		return nil, unresolvedGeneratedRubyError()
+	}
+	return result, nil
+}
+
+// tokenRubySpans resolves the ruby of one Kagome token that contains Han.
+func tokenRubySpans(token tokenizer.Token, allowUniqueStandaloneDictionary bool) ([]RubySpan, bool) {
+	surface := token.Surface
+	features := token.Features()
+	candidate := ""
+	if len(features) >= 8 && features[7] != "*" {
+		candidate = katakanaToHiragana(features[7])
+	}
+	aligned, ok := rubySpansFromKanaReading(surface, []rune(candidate))
+	if validGeneratedRubyReading(candidate) && ok {
+		return markRubyReadingEvidence(
+			aligned, model.LyricsSourceReadingEvidenceDeterministicDictionary, rubyGeneratorVersion,
+		), true
+	}
+	if aligned, ok = kagomeNormalizedRubySpans(surface); ok {
+		return markRubyReadingEvidence(
+			aligned, model.LyricsSourceReadingEvidenceDeterministicDictionary, rubyGeneratorVersion,
+		), true
+	}
+	if aligned, ok = deterministicStandaloneHanRubySpans(surface); ok {
+		return aligned, true
+	}
+	if allowUniqueStandaloneDictionary {
+		return kagomeUniqueStandaloneHanRubySpans(surface)
+	}
+	return nil, false
+}
+
+// SuggestRubySpans returns the dictionary ruby of text token by token, as
+// GenerateDeterministicRubySpans would with the unique standalone-Han
+// fallback, but a token it cannot resolve stays plain text instead of failing
+// the whole text. The spans always cover text exactly. Its readings are
+// dictionary suggestions for an editor to review, not source evidence.
+func SuggestRubySpans(text string) ([]RubySpan, error) {
+	if err := initializeFuriganaTokenizer(); err != nil {
+		return nil, err
+	}
+	result := make([]RubySpan, 0, len(text))
+	for _, token := range furiganaTokenizer.Tokenize(text) {
+		if token.Surface == "" {
+			continue
+		}
+		spans := []RubySpan{{Text: token.Surface}}
+		if containsKanji(token.Surface) {
+			if aligned, ok := tokenRubySpans(token, true); ok {
+				spans = aligned
+			}
+		}
+		result = appendRubySpans(result, spans...)
+	}
+	if rubySpansText(result) != text {
+		return []RubySpan{{Text: text}}, nil
 	}
 	return result, nil
 }

@@ -21,7 +21,7 @@ import (
 
 const (
 	ManifestFilename = "web-workspace-manifest.json"
-	SchemaVersion    = 3
+	SchemaVersion    = 4
 	MaxManifestBytes = 1 << 20
 	MaxFiles         = 4096
 	MaxFileBytes     = 128 << 20
@@ -29,6 +29,15 @@ const (
 
 	ModeDisabled = "disabled"
 	ModeExternal = "external"
+
+	// Route.ProducerProof states how a route treats the mutation header. Every
+	// proof route rejects a malformed header (400) and a stale header or a
+	// running producer (409). Only required routes answer 428 without it;
+	// optional routes admit a request without it leniently, which still
+	// answers 409 while the producer runs.
+	ProducerProofNone     = "none"
+	ProducerProofOptional = "optional"
+	ProducerProofRequired = "required"
 
 	producerRepository = "https://github.com/SnowGlow-aww/SekaiText-Moe"
 	artifactName       = "sekaitext-moe-web-workspace"
@@ -107,7 +116,7 @@ type Route struct {
 	Method         string   `json:"method"`
 	Path           string   `json:"path"`
 	Authentication string   `json:"authentication"`
-	ProducerProof  bool     `json:"producerProof"`
+	ProducerProof  string   `json:"producerProof"`
 	AllowedRoles   []string `json:"allowedRoles"`
 }
 
@@ -123,7 +132,7 @@ var expectedSourceContract = SourceContract{
 
 var expectedEditorGateContract = EditorGateContract{
 	Name:    "sekaitext-moe-editor-gate",
-	Version: 2,
+	Version: 3,
 	Status: EditorGateStatus{
 		Method:          "GET",
 		Path:            "/api/editor-gate/status",
@@ -134,6 +143,7 @@ var expectedEditorGateContract = EditorGateContract{
 	},
 	MutationHeader: "X-Moe-Loaded-Producer-State",
 	MutationFormat: "<base64url-instanceId>:<revision>:<completedGeneration>",
+	// Missing applies to ProducerProofRequired routes only.
 	MutationRejections: MutationRejections{
 		Missing: 428, Malformed: 400, StaleOrRunning: 409,
 	},
@@ -146,38 +156,38 @@ var (
 )
 
 var requiredRoutes = []Route{
-	{Method: "GET", Path: "/api/admin/lyrics-source-reviews", Authentication: "bearer", AllowedRoles: adminRoles},
-	{Method: "GET", Path: "/api/admin/lyrics-source-reviews/detail", Authentication: "bearer", AllowedRoles: adminRoles},
-	{Method: "GET", Path: "/api/auth/me", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/api/backup/status", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/api/catalog/characters", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/api/catalog/music", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/api/categories", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/api/category/snapshot", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/api/editor-gate/status", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/api/entries", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/api/event-associations", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/api/event-stories", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/api/event-story", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/api/event-story/episode-snapshot", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/api/lyrics", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/api/lyrics/detail", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/api/lyrics/source/search", Authentication: "bearer", AllowedRoles: adminRoles},
-	{Method: "GET", Path: "/api/projection/status", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "GET", Path: "/sse", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "POST", Path: "/api/admin/lyrics-source-reviews/import", Authentication: "bearer", AllowedRoles: adminRoles},
-	{Method: "POST", Path: "/api/auth/login", Authentication: "none", AllowedRoles: noRoles},
-	{Method: "POST", Path: "/api/auth/refresh", Authentication: "bearer", AllowedRoles: editorRoles},
-	{Method: "POST", Path: "/api/editor/v1/backup/push", Authentication: "bearer", ProducerProof: true, AllowedRoles: adminRoles},
-	{Method: "POST", Path: "/api/editor/v1/lyrics/publish", Authentication: "bearer", ProducerProof: true, AllowedRoles: adminRoles},
-	{Method: "POST", Path: "/api/editor/v1/lyrics/unpublish", Authentication: "bearer", ProducerProof: true, AllowedRoles: adminRoles},
-	{Method: "POST", Path: "/api/lyrics/source/preview", Authentication: "bearer", AllowedRoles: adminRoles},
-	{Method: "PUT", Path: "/api/admin/lyrics-source-reviews/candidate-selection", Authentication: "bearer", AllowedRoles: adminRoles},
-	{Method: "PUT", Path: "/api/admin/lyrics-source-reviews/decision", Authentication: "bearer", AllowedRoles: adminRoles},
-	{Method: "PUT", Path: "/api/editor/v1/category/batch", Authentication: "bearer", ProducerProof: true, AllowedRoles: editorRoles},
-	{Method: "PUT", Path: "/api/editor/v1/entry", Authentication: "bearer", ProducerProof: true, AllowedRoles: editorRoles},
-	{Method: "PUT", Path: "/api/editor/v1/event-story/update", Authentication: "bearer", ProducerProof: true, AllowedRoles: editorRoles},
-	{Method: "PUT", Path: "/api/editor/v1/lyrics/save", Authentication: "bearer", ProducerProof: true, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/admin/lyrics-source-reviews", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: adminRoles},
+	{Method: "GET", Path: "/api/admin/lyrics-source-reviews/detail", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: adminRoles},
+	{Method: "GET", Path: "/api/auth/me", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/backup/status", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/catalog/characters", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/catalog/music", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/categories", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/category/snapshot", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/editor-gate/status", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/entries", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/event-associations", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/event-stories", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/event-story", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/event-story/episode-snapshot", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/lyrics", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/lyrics/detail", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/api/lyrics/source/search", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: adminRoles},
+	{Method: "GET", Path: "/api/projection/status", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "GET", Path: "/sse", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "POST", Path: "/api/admin/lyrics-source-reviews/import", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: adminRoles},
+	{Method: "POST", Path: "/api/auth/login", Authentication: "none", ProducerProof: ProducerProofNone, AllowedRoles: noRoles},
+	{Method: "POST", Path: "/api/auth/refresh", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: editorRoles},
+	{Method: "POST", Path: "/api/editor/v1/backup/push", Authentication: "bearer", ProducerProof: ProducerProofRequired, AllowedRoles: adminRoles},
+	{Method: "POST", Path: "/api/editor/v1/lyrics/publish", Authentication: "bearer", ProducerProof: ProducerProofOptional, AllowedRoles: adminRoles},
+	{Method: "POST", Path: "/api/editor/v1/lyrics/unpublish", Authentication: "bearer", ProducerProof: ProducerProofOptional, AllowedRoles: adminRoles},
+	{Method: "POST", Path: "/api/lyrics/source/preview", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: adminRoles},
+	{Method: "PUT", Path: "/api/admin/lyrics-source-reviews/candidate-selection", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: adminRoles},
+	{Method: "PUT", Path: "/api/admin/lyrics-source-reviews/decision", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: adminRoles},
+	{Method: "PUT", Path: "/api/editor/v1/category/batch", Authentication: "bearer", ProducerProof: ProducerProofOptional, AllowedRoles: editorRoles},
+	{Method: "PUT", Path: "/api/editor/v1/entry", Authentication: "bearer", ProducerProof: ProducerProofOptional, AllowedRoles: editorRoles},
+	{Method: "PUT", Path: "/api/editor/v1/event-story/update", Authentication: "bearer", ProducerProof: ProducerProofOptional, AllowedRoles: editorRoles},
+	{Method: "PUT", Path: "/api/editor/v1/lyrics/save", Authentication: "bearer", ProducerProof: ProducerProofOptional, AllowedRoles: editorRoles},
 }
 
 // RequiredRoutes returns a copy of the server-owned direct-client capability contract.
@@ -200,7 +210,7 @@ func Verify(config Config) (*Manifest, error) {
 
 // VerifyRuntime applies the server-runtime workspace policy. Production
 // requires an explicitly disabled workspace; nonproduction runtime may omit the
-// workspace entirely or explicitly disable it. External schema-v3 artifacts
+// workspace entirely or explicitly disable it. External schema-v4 artifacts
 // remain available only to verifier tooling through Verify, never to a running
 // server process.
 func VerifyRuntime(config Config) (*Manifest, error) {
@@ -513,14 +523,15 @@ func validateRoutes(routes []Route) error {
 			!oneOf(route.Authentication, "none", "bearer") ||
 			!oneOf(strings.Join(route.AllowedRoles, ","), "", "editor,admin", "admin") ||
 			(route.Authentication == "none") != (len(route.AllowedRoles) == 0) ||
-			(route.ProducerProof && route.Authentication != "bearer") {
+			!oneOf(route.ProducerProof, ProducerProofNone, ProducerProofOptional, ProducerProofRequired) ||
+			(route.ProducerProof != ProducerProofNone && route.Authentication != "bearer") {
 			return fmt.Errorf("required route %d is invalid", index)
 		}
 		identity := route.Method + "\x00" + route.Path
 		if _, duplicate := seen[identity]; duplicate {
 			return fmt.Errorf("duplicate required route %s %s", route.Method, route.Path)
 		}
-		key := identity + "\x00" + route.Authentication + "\x00" + fmt.Sprint(route.ProducerProof) + "\x00" + strings.Join(route.AllowedRoles, ",")
+		key := identity + "\x00" + route.Authentication + "\x00" + route.ProducerProof + "\x00" + strings.Join(route.AllowedRoles, ",")
 		if index > 0 && key <= previous {
 			return errors.New("required routes are not in canonical authorization order")
 		}

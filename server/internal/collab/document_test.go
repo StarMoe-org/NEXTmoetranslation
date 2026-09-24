@@ -7,6 +7,7 @@ import (
 
 	"github.com/reearth/ygo/crdt"
 	"moesekai/server/internal/model"
+	"moesekai/server/internal/store"
 )
 
 func TestDocumentUpdateUsesNestedYTypesAndRoundTrips(t *testing.T) {
@@ -220,15 +221,29 @@ func testSegment(txn *crdt.Transaction, id, generation, origin string) *crdt.YMa
 	return segment
 }
 
-func TestValidateImmutableDraftRejectsLegacySourceMutation(t *testing.T) {
+func TestValidateImmutableDraftAllowsSavedLegacySourceEdits(t *testing.T) {
 	current := model.SongLyrics{
 		MusicID: 9, Status: "draft", Revision: 1,
 		SourceURL: "https://example.com/source", Lines: []model.LyricLine{{ID: "a", Order: 0, Japanese: "A", Segments: []model.LyricSegment{}}},
 	}
 	draft := current
-	draft.Lines = append([]model.LyricLine(nil), current.Lines...)
-	draft.Lines[0].Japanese = "B"
-	if err := validateImmutableDraft(current, draft); err == nil {
-		t.Fatal("immutable Japanese mutation was accepted")
+	draft.SourceURL = "https://example.com/other"
+	draft.SourceRevisionID = 7
+	draft.Lines = []model.LyricLine{
+		{ID: "b", Order: 0, Japanese: "B", Segments: []model.LyricSegment{}},
+		{ID: "a", Order: 1, Japanese: "A2", Segments: []model.LyricSegment{}},
+	}
+	if err := validateImmutableDraft(current, draft); err != nil {
+		t.Fatalf("saved legacy provenance, Japanese and line structure edit rejected: %v", err)
+	}
+
+	var conflict *CheckpointConflict
+	otherSong := draft
+	otherSong.MusicID = 10
+	if err := validateImmutableDraft(current, otherSong); !errors.As(err, &conflict) || conflict.Code != "source_drift" {
+		t.Fatalf("musicId change error=%v", err)
+	}
+	if err := validateImmutableDraft(current, store.LyricsRenditionDocument{MusicID: 9}); !errors.As(err, &conflict) || conflict.Code != "source_drift" {
+		t.Fatalf("document kind change error=%v", err)
 	}
 }

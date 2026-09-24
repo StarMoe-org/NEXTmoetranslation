@@ -27,10 +27,40 @@ const (
 	LyricsSourceProviderSekaipedia         LyricsSourceProvider = "sekaipedia"
 
 	LyricsSourceOriginVocaloidFandom     = "https://vocaloid.fandom.com"
+	LyricsSourceOriginProjectSekaiFandom = "https://projectsekai.fandom.com"
 	LyricsSourceOriginMoegirl            = "https://moegirl.icu"
 	LyricsSourceOriginMoegirlPublicExact = "https://zh.moegirl.org.cn"
 	LyricsSourceOriginSekaipedia         = "https://www.sekaipedia.org"
 )
+
+// LyricsSourceProviderOrigins lists the origins whose revision URLs a provider
+// accepts, primary origin first. The Project SEKAI Fandom wiki shares the
+// vocaloid_fandom provider and license with the VOCALOID Fandom wiki.
+func LyricsSourceProviderOrigins(provider LyricsSourceProvider) []string {
+	switch provider {
+	case LyricsSourceProviderVocaloidFandom:
+		return []string{LyricsSourceOriginVocaloidFandom, LyricsSourceOriginProjectSekaiFandom}
+	case LyricsSourceProviderMoegirl:
+		return []string{LyricsSourceOriginMoegirl}
+	case LyricsSourceProviderMoegirlPublicExact:
+		return []string{LyricsSourceOriginMoegirlPublicExact}
+	case LyricsSourceProviderSekaipedia:
+		return []string{LyricsSourceOriginSekaipedia}
+	default:
+		return nil
+	}
+}
+
+// LyricsSourceProviderAcceptsOrigin reports whether origin is one of the
+// provider's accepted revision origins.
+func LyricsSourceProviderAcceptsOrigin(provider LyricsSourceProvider, origin string) bool {
+	for _, accepted := range LyricsSourceProviderOrigins(provider) {
+		if origin == accepted {
+			return true
+		}
+	}
+	return false
+}
 
 // LyricsSourceIndexEvidenceRef points at immutable evidence used to select a
 // provider page before its revision is fetched. EvidenceID is an opaque stable

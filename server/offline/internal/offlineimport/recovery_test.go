@@ -3,6 +3,7 @@ package offlineimport
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,73 +12,47 @@ import (
 
 	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/model"
+	"moesekai/server/internal/store"
 	"moesekai/server/offline/internal/lyricsrecoveryimport"
 )
 
-func TestLyricsImportRuntimeSchemasAllowReviewedV27ThroughV36Contiguously(t *testing.T) {
+func TestLyricsImportRuntimeSchemasAllowReviewedV27ThroughV38Contiguously(t *testing.T) {
 	validators := map[string]func(context.Context, *sql.Tx) error{
 		"recovery": validateRecoveryImportRuntimeSchema,
 		"staged":   validateStagedImportRuntimeSchema,
+	}
+	deleteVersionsFrom := func(first int) func(*testing.T, *sql.Tx) {
+		return func(t *testing.T, tx *sql.Tx) {
+			if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version>=?`, first); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	cases := []struct {
 		name      string
 		mutate    func(*testing.T, *sql.Tx)
 		wantError bool
 	}{
-		{name: "current v36"},
-		{name: "v35 input runtime", mutate: func(t *testing.T, tx *sql.Tx) {
-			if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version=36`); err != nil {
+		{name: "current v38"},
+		{name: "v37 input runtime", mutate: deleteVersionsFrom(38)},
+		{name: "v36 input runtime", mutate: deleteVersionsFrom(37)},
+		{name: "v35 input runtime", mutate: deleteVersionsFrom(36)},
+		{name: "v34 input runtime", mutate: deleteVersionsFrom(35)},
+		{name: "v33 input runtime", mutate: deleteVersionsFrom(34)},
+		{name: "v32 input runtime", mutate: deleteVersionsFrom(33)},
+		{name: "v31 input runtime", mutate: deleteVersionsFrom(32)},
+		{name: "v30 input runtime", mutate: deleteVersionsFrom(31)},
+		{name: "v29 input runtime", mutate: deleteVersionsFrom(30)},
+		{name: "v28 input runtime", mutate: deleteVersionsFrom(29)},
+		{name: "v27 input runtime", mutate: deleteVersionsFrom(28)},
+		{name: "gap before v38", wantError: true, mutate: func(t *testing.T, tx *sql.Tx) {
+			if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version=37`); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{name: "v34 input runtime", mutate: func(t *testing.T, tx *sql.Tx) {
-			if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version IN (35,36)`); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "v33 input runtime", mutate: func(t *testing.T, tx *sql.Tx) {
-			if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version IN (34,35,36)`); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "v32 input runtime", mutate: func(t *testing.T, tx *sql.Tx) {
-			if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version IN (33,34,35,36)`); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "v31 input runtime", mutate: func(t *testing.T, tx *sql.Tx) {
-			if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version IN (32,33,34,35,36)`); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "v30 input runtime", mutate: func(t *testing.T, tx *sql.Tx) {
-			if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version IN (31,32,33,34,35,36)`); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "v29 input runtime", mutate: func(t *testing.T, tx *sql.Tx) {
-			if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version IN (30,31,32,33,34,35,36)`); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "v28 input runtime", mutate: func(t *testing.T, tx *sql.Tx) {
-			if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version IN (29,30,31,32,33,34,35,36)`); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "v27 input runtime", mutate: func(t *testing.T, tx *sql.Tx) {
-			if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version IN (28,29,30,31,32,33,34,35,36)`); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "gap before v36", wantError: true, mutate: func(t *testing.T, tx *sql.Tx) {
-			if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version=35`); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "unreviewed v37", wantError: true, mutate: func(t *testing.T, tx *sql.Tx) {
+		{name: "unreviewed v39", wantError: true, mutate: func(t *testing.T, tx *sql.Tx) {
 			if _, err := tx.Exec(`INSERT INTO schema_migrations(version,name,checksum,applied_at)
-				VALUES (37,'future_migration',?,1)`, strings.Repeat("f", 64)); err != nil {
+				VALUES (39,'future_migration',?,1)`, strings.Repeat("f", 64)); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -96,7 +71,7 @@ func TestLyricsImportRuntimeSchemasAllowReviewedV27ThroughV36Contiguously(t *tes
 				}
 				err = validate(context.Background(), tx)
 				if test.wantError {
-					if err == nil || !strings.Contains(err.Error(), "contiguous schema-v27 through schema-v36 runtime") {
+					if err == nil || !strings.Contains(err.Error(), "contiguous schema-v27 through schema-v38 runtime") {
 						t.Fatalf("runtime schema gate error=%v", err)
 					}
 					return
@@ -316,4 +291,146 @@ func openImportTestDatabase(t *testing.T) *db.DB {
 	}
 	t.Cleanup(func() { database.Close() })
 	return database
+}
+
+func TestNewRecoveryBatchRefusesSongsTakenOverByADocumentPublish(t *testing.T) {
+	database := openImportTestDatabase(t)
+	h := func(character string) string { return strings.Repeat(character, 64) }
+	batchSHA := h("a")
+	coverage := `{"total":2,"complete":0,"satisfiedNoLyrics":0,"catalogReview":0,"gameSizeEvidence":0,"ambiguous":0,"missing":2,"incomplete":0,"failed":0,"providerOutcomeRefCount":0,"selectionRefCount":0,"uniqueAcquisitionCount":0,"uniqueEvidenceCount":0}`
+	availabilityJSON := `{"schemaVersion":1,"state":"missing","reasonCode":"version_conflict","fixedIdentities":[],"provenance":{}}`
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO catalog_music(music_id,title_ja) VALUES (1,'合成接管曲'),(2,'合成未接管曲')`, nil},
+		{`INSERT INTO lyrics_recovery_import_batches
+			(batch_sha256,schema_version,root_schema_version,root_id,root_sha256,catalog_count,music_ids_sha256,
+			 coverage_json,evidence_receipt_sha256,pack_sha256,selection_sha256,evidence_count,shard_count,
+			 raw_byte_count,encoded_byte_count,actor,created_at)
+			VALUES (?,1,2,'root-takeover',?,2,?,?,?,?,?,0,0,0,0,'import-test',1)`,
+			[]any{batchSHA, h("b"), h("c"), coverage, h("d"), h("e"), h("f")}},
+		{`INSERT INTO lyrics_recovery_import_items
+			(batch_sha256,music_id,japanese_title,catalog_fingerprint,target_music_id,association_music_ids_json,
+			 state,result_sha256,draft_sha256,document_sha256,availability_document_sha256,created_at)
+			VALUES (?,1,'合成接管曲',?,1,'[]','missing',?,'','',?,1),(?,2,'合成未接管曲',?,2,'[]','missing',?,'','',?,1)`,
+			[]any{batchSHA, h("1"), h("2"), h("3"), batchSHA, h("4"), h("5"), h("6")}},
+		{`INSERT INTO song_lyrics_availability_documents
+			(batch_sha256,music_id,schema_version,state,reason_code,no_lyrics_reason,document_json,document_sha256,result_sha256,created_at)
+			VALUES (?,1,1,'missing','version_conflict','',?,?,?,1),(?,2,1,'missing','version_conflict','',?,?,?,1)`,
+			[]any{batchSHA, availabilityJSON, h("3"), h("2"), batchSHA, availabilityJSON, h("6"), h("5")}},
+		{`INSERT INTO lyrics_recovery_takeovers(music_id,batch_sha256,item_state,taken_over_at,taken_over_by)
+			VALUES (1,?,'missing',2,'document-admin')`, []any{batchSHA}},
+	} {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed taken-over recovery ledger: %v", err)
+		}
+	}
+	manifest := func(musicIDs ...int) lyricsrecoveryimport.Manifest {
+		var result lyricsrecoveryimport.Manifest
+		for _, musicID := range musicIDs {
+			result.Items = append(result.Items, lyricsrecoveryimport.Item{MusicID: musicID, State: lyricscontract.CoverageMissing})
+		}
+		return result
+	}
+	tx, err := database.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	err = refuseRecoveryItemsForTakenOverSongs(context.Background(), tx, manifest(2, 1))
+	if !errors.Is(err, store.ErrLyricsRecoveryImportConflict) || !strings.Contains(err.Error(), "music 1 was taken over") {
+		t.Fatalf("taken-over song error=%v", err)
+	}
+	if err := refuseRecoveryItemsForTakenOverSongs(context.Background(), tx, manifest(2)); err != nil {
+		t.Fatalf("song without a takeover: %v", err)
+	}
+	// A v37 runtime has no takeover table and so no takeovers.
+	if _, err := tx.Exec(`DROP TABLE lyrics_recovery_takeovers`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version=38`); err != nil {
+		t.Fatal(err)
+	}
+	if err := refuseRecoveryItemsForTakenOverSongs(context.Background(), tx, manifest(1, 2)); err != nil {
+		t.Fatalf("v37 runtime: %v", err)
+	}
+}
+
+func TestNewRecoveryBatchRefusesSongsWithEditorOwnedSourceDocuments(t *testing.T) {
+	database := openImportTestDatabase(t)
+	h := func(character string) string { return strings.Repeat(character, 64) }
+	recoveryBatchSHA, seedSHA, stagedBatchSHA := h("a"), h("b"), h("c")
+	coverage := `{"total":5,"complete":0,"satisfiedNoLyrics":0,"catalogReview":0,"gameSizeEvidence":0,"ambiguous":0,"missing":5,"incomplete":0,"failed":0,"providerOutcomeRefCount":0,"selectionRefCount":0,"uniqueAcquisitionCount":0,"uniqueEvidenceCount":0}`
+	insertSourceDocument := `INSERT INTO song_lyrics_source_documents
+		(music_id,schema_version,reason_code,document_json,document_sha256,manifest_batch_sha256,created_at)
+		VALUES (?,3,'','{}',?,?,1)`
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO catalog_music(music_id,title_ja) VALUES
+			(1,'合成编辑器曲'),(2,'合成种子曲'),(3,'合成恢复曲'),(4,'合成暂存曲'),(5,'合成空曲')`, nil},
+		{`INSERT INTO lyrics_recovery_import_batches
+			(batch_sha256,schema_version,root_schema_version,root_id,root_sha256,catalog_count,music_ids_sha256,
+			 coverage_json,evidence_receipt_sha256,pack_sha256,selection_sha256,evidence_count,shard_count,
+			 raw_byte_count,encoded_byte_count,actor,created_at)
+			VALUES (?,1,2,'root-editor-owned',?,5,?,?,?,?,?,0,0,0,0,'import-test',1)`,
+			[]any{recoveryBatchSHA, h("d"), h("e"), coverage, h("f"), h("1"), h("2")}},
+		{`INSERT INTO embedded_lyrics_editor_seed_batches
+			(seed_sha256,archive_sha256,release_id,schema_version,source_batch_sha256,root_sha256,
+			 catalog_policy_version,catalog_count,music_ids_sha256,catalog_fingerprints_sha256,created_at)
+			VALUES (?,?,'synthetic-seed',1,?,?,'synthetic-policy',5,?,?,1)`,
+			[]any{seedSHA, h("3"), recoveryBatchSHA, h("d"), h("e"), h("4")}},
+		{insertSourceDocument, []any{1, h("5"), lyricsEditorManifestBatchSHA256}},
+		{insertSourceDocument, []any{2, h("6"), seedSHA}},
+		{insertSourceDocument, []any{3, h("7"), recoveryBatchSHA}},
+		{insertSourceDocument, []any{4, h("8"), stagedBatchSHA}},
+	} {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed source documents: %v", err)
+		}
+	}
+	manifest := func(musicIDs ...int) lyricsrecoveryimport.Manifest {
+		var result lyricsrecoveryimport.Manifest
+		for _, musicID := range musicIDs {
+			result.Items = append(result.Items, lyricsrecoveryimport.Item{MusicID: musicID, State: lyricscontract.CoverageMissing})
+		}
+		return result
+	}
+	tx, err := database.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	err = refuseRecoveryItemsForEditorOwnedSongs(context.Background(), tx, manifest(5, 1))
+	if !errors.Is(err, store.ErrLyricsRecoveryImportConflict) ||
+		!strings.Contains(err.Error(), "music 1 already has a source document published by the lyrics editor") {
+		t.Fatalf("editor-published song error=%v", err)
+	}
+	err = refuseRecoveryItemsForEditorOwnedSongs(context.Background(), tx, manifest(5, 2))
+	if !errors.Is(err, store.ErrLyricsRecoveryImportConflict) ||
+		!strings.Contains(err.Error(), "music 2 already has a source document from embedded lyrics editor seed "+seedSHA) {
+		t.Fatalf("seeded song error=%v", err)
+	}
+	// Recovery-batch and staged-import documents are left to the per-item checks.
+	if err := refuseRecoveryItemsForEditorOwnedSongs(context.Background(), tx, manifest(3, 4, 5)); err != nil {
+		t.Fatalf("recovery, staged and document-free songs: %v", err)
+	}
+	// A v27 runtime has no seed tables.
+	for _, statement := range []string{
+		`DROP TABLE embedded_lyrics_editor_seed_items`,
+		`DROP TABLE embedded_lyrics_editor_seed_batches`,
+		`DELETE FROM schema_migrations WHERE version>=28`,
+	} {
+		if _, err := tx.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := refuseRecoveryItemsForEditorOwnedSongs(context.Background(), tx, manifest(2, 3, 4, 5)); err != nil {
+		t.Fatalf("v27 runtime: %v", err)
+	}
+	if err := refuseRecoveryItemsForEditorOwnedSongs(context.Background(), tx, manifest(1)); !errors.Is(err, store.ErrLyricsRecoveryImportConflict) {
+		t.Fatalf("v27 runtime editor-published song error=%v", err)
+	}
 }

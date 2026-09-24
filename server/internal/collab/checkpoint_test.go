@@ -161,3 +161,93 @@ func TestRepeatedCheckpointsKeepDurableRevisionAuthoritative(t *testing.T) {
 		t.Fatalf("reloaded checkpoint saved=%#v changed=%v", saved, changed)
 	}
 }
+
+type draftLineSpec struct {
+	id, japanese, chinese string
+}
+
+func replaceDraftLines(t *testing.T, service *Service, room string, specs []draftLineSpec) {
+	t.Helper()
+	if err := service.server.Apply(context.Background(), room, func(_ *crdt.Doc, transact func(func(*crdt.Transaction))) {
+		transact(func(txn *crdt.Transaction) {
+			lines := crdt.NewArrayPrelim()
+			for order, spec := range specs {
+				line := crdt.NewMapPrelim()
+				line.Set(txn, "id", spec.id)
+				line.Set(txn, "order", order)
+				line.Set(txn, "japanese", newText(txn, spec.japanese))
+				line.Set(txn, "zh-CN", newText(txn, spec.chinese))
+				line.Set(txn, "en-US", newText(txn, ""))
+				segments := crdt.NewArrayPrelim()
+				segment := crdt.NewMapPrelim()
+				segment.Set(txn, "text", newText(txn, spec.japanese))
+				segment.Set(txn, "performerIds", crdt.NewArrayPrelim())
+				ruby := crdt.NewArrayPrelim()
+				span := crdt.NewMapPrelim()
+				span.Set(txn, "text", newText(txn, spec.japanese))
+				ruby.PushType(txn, span)
+				segment.Set(txn, "ruby", ruby)
+				segments.PushType(txn, segment)
+				line.Set(txn, "segments", segments)
+				lines.PushType(txn, line)
+			}
+			txn.GetMap("lyrics").Set(txn, "lines", lines)
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckpointCommitsSavedLegacyJapaneseAndLineStructureEdits(t *testing.T) {
+	fixture := setupContractService(t)
+	ticket, err := fixture.service.IssueTicket(t.Context(), fixture.claims, fixture.bearer, 42, fixture.service.gate.Status())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedDraftLine(t, fixture.service, ticket.Room, "初稿")
+	if _, _, err := fixture.service.Checkpoint(t.Context(), 42, fixture.claims.Username); err != nil {
+		t.Fatal(err)
+	}
+	epoch, err := fixture.service.persistence.currentEpoch(t.Context(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	room := roomName(42, epoch)
+
+	steps := []struct {
+		revision int
+		lines    []draftLineSpec
+	}{
+		// Changed Japanese plus an added line.
+		{2, []draftLineSpec{{"line-1", "詩", "诗"}, {"line-2", "声", "声音"}}},
+		// Reordered, inserted and removed lines.
+		{3, []draftLineSpec{{"line-3", "空", "天空"}, {"line-1", "詩", "诗"}}},
+	}
+	for _, step := range steps {
+		replaceDraftLines(t, fixture.service, room, step.lines)
+		saved, changed, err := fixture.service.Checkpoint(t.Context(), 42, fixture.claims.Username)
+		if err != nil {
+			t.Fatalf("checkpoint revision %d: %v", step.revision, err)
+		}
+		lyrics, ok := saved.(model.SongLyrics)
+		if !ok || !changed || lyrics.Revision != step.revision || len(lyrics.Lines) != len(step.lines) {
+			t.Fatalf("checkpoint revision %d saved=%#v changed=%v", step.revision, saved, changed)
+		}
+		stored, err := fixture.service.store.GetLyrics(42)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.Revision != step.revision || len(stored.Lines) != len(step.lines) {
+			t.Fatalf("stored revision=%d lines=%d want %d/%d", stored.Revision, len(stored.Lines), step.revision, len(step.lines))
+		}
+		for index, want := range step.lines {
+			line := stored.Lines[index]
+			if line.ID != want.id || line.Order != index || line.Japanese != want.japanese || line.Chinese != want.chinese {
+				t.Fatalf("revision %d line %d=%+v want %+v", step.revision, index, line, want)
+			}
+		}
+		if durable := durableDraft(t, fixture.service, room); durable.Revision != step.revision {
+			t.Fatalf("durable collaborative revision=%d want %d", durable.Revision, step.revision)
+		}
+	}
+}

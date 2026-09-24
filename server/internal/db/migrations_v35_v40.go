@@ -109,4 +109,14 @@ INSERT INTO lyrics_provider_contributor_aliases(provider,music_id,catalog_contri
     ('sekaipedia',789,'卯花ロク','Uka Roku',1790000000,'migration-v36');
 `,
 	},
+	{
+		version: 37,
+		name:    "lyrics_source_artifacts_projectsekai_fandom_origin",
+		sql:     migrationV37ProjectSekaiFandomOriginSQL,
+	},
+	{
+		version: 38,
+		name:    "lyrics_recovery_takeovers",
+		sql:     migrationV38LyricsRecoveryTakeoversSQL,
+	},
 }

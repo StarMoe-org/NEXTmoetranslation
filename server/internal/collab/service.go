@@ -423,17 +423,48 @@ func (s *Service) ReplaceFromAuthoritative(ctx context.Context, musicID int) err
 }
 
 func (s *Service) replaceFromAuthoritativeLocked(ctx context.Context, musicID int) error {
-	oldRoom, _, err := s.persistence.replaceFromAuthoritative(ctx, musicID)
+	oldRoom, newRoom, err := s.persistence.replaceFromAuthoritative(ctx, musicID)
 	if err != nil {
 		return err
 	}
 	s.invalidateTickets(musicID)
-	if oldRoom != "" {
-		if closeErr := s.closeRetiredRoom(oldRoom); closeErr != nil {
-			return closeErr
+	// A caller may already have fenced the epoch in its own transaction, so the
+	// live room can be older than oldRoom. Close every room of the song except
+	// the reseeded one.
+	var firstErr error
+	for _, room := range s.musicRooms(musicID, oldRoom) {
+		if room == newRoom {
+			continue
+		}
+		if closeErr := s.closeRetiredRoom(room); closeErr != nil && firstErr == nil {
+			firstErr = closeErr
 		}
 	}
-	return nil
+	return firstErr
+}
+
+// musicRooms lists the song's rooms known to the connection and residency
+// registries, plus extra when it names a room.
+func (s *Service) musicRooms(musicID int, extra string) []string {
+	s.activeMu.Lock()
+	roomSet := make(map[string]struct{}, len(s.active)+len(s.resident)+1)
+	for room := range s.active {
+		roomSet[room] = struct{}{}
+	}
+	for room := range s.resident {
+		roomSet[room] = struct{}{}
+	}
+	s.activeMu.Unlock()
+	if extra != "" {
+		roomSet[extra] = struct{}{}
+	}
+	rooms := make([]string, 0, len(roomSet))
+	for room := range roomSet {
+		if identity, err := parseRoom(room); err == nil && identity.musicID == musicID {
+			rooms = append(rooms, room)
+		}
+	}
+	return rooms
 }
 
 func (s *Service) invalidateTickets(musicID int) {

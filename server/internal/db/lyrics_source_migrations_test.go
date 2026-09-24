@@ -34,9 +34,11 @@ func TestLyricsSourceMigrationsAppendAfterPinnedV12(t *testing.T) {
 		34: "song_682_translation_mirror_sync",
 		35: "song_lyrics_public_withdrawals",
 		36: "lyrics_provider_page_targets",
+		37: "lyrics_source_artifacts_projectsekai_fandom_origin",
+		38: "lyrics_recovery_takeovers",
 	}
-	if latest := migrations[len(migrations)-1]; latest.version != 36 || latest.name != wantNames[36] {
-		t.Fatalf("latest migration=%d/%q want=36/%q", latest.version, latest.name, wantNames[36])
+	if latest := migrations[len(migrations)-1]; latest.version != 38 || latest.name != wantNames[38] {
+		t.Fatalf("latest migration=%d/%q want=38/%q", latest.version, latest.name, wantNames[38])
 	}
 	for version, name := range wantNames {
 		migration := migrations[version-1]

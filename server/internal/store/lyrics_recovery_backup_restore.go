@@ -102,6 +102,26 @@ func restoreLyricsRecoveryContentTx(ctx context.Context, tx *sql.Tx, lyrics Lyri
 			return fmt.Errorf("restore lyrics availability document %s/%d: %w", record.BatchSHA256, record.MusicID, err)
 		}
 	}
+	for _, record := range lyrics.RecoveryTakeovers {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var schemaVersion, reasonCode, documentJSON, documentSHA, createdAt, localizationsJSON any
+		if document := record.SupersededDocument; document != nil {
+			schemaVersion, reasonCode, documentJSON = document.SchemaVersion, document.ReasonCode, document.DocumentJSON
+			documentSHA, createdAt = document.DocumentSHA256, document.CreatedAt
+			if document.LocalizationsJSON != "" {
+				localizationsJSON = document.LocalizationsJSON
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO lyrics_recovery_takeovers
+			(music_id,batch_sha256,item_state,schema_version,reason_code,document_json,document_sha256,
+			 document_created_at,localizations_json,taken_over_at,taken_over_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			record.MusicID, record.BatchSHA256, record.ItemState, schemaVersion, reasonCode, documentJSON,
+			documentSHA, createdAt, localizationsJSON, record.TakenOverAt, record.TakenOverBy); err != nil {
+			return fmt.Errorf("restore lyrics recovery takeover %d: %w", record.MusicID, err)
+		}
+	}
 	return nil
 }
 

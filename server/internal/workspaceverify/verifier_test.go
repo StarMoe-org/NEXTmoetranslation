@@ -28,11 +28,11 @@ func TestCheckedInProducerContractFixtureVerifies(t *testing.T) {
 		t.Fatalf("fixture routes do not match server contract")
 	}
 	expected := []Route{
-		{Method: "GET", Path: "/api/admin/lyrics-source-reviews", Authentication: "bearer", AllowedRoles: []string{"admin"}},
-		{Method: "GET", Path: "/api/admin/lyrics-source-reviews/detail", Authentication: "bearer", AllowedRoles: []string{"admin"}},
-		{Method: "POST", Path: "/api/admin/lyrics-source-reviews/import", Authentication: "bearer", AllowedRoles: []string{"admin"}},
-		{Method: "PUT", Path: "/api/admin/lyrics-source-reviews/candidate-selection", Authentication: "bearer", AllowedRoles: []string{"admin"}},
-		{Method: "PUT", Path: "/api/admin/lyrics-source-reviews/decision", Authentication: "bearer", AllowedRoles: []string{"admin"}},
+		{Method: "GET", Path: "/api/admin/lyrics-source-reviews", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: []string{"admin"}},
+		{Method: "GET", Path: "/api/admin/lyrics-source-reviews/detail", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: []string{"admin"}},
+		{Method: "POST", Path: "/api/admin/lyrics-source-reviews/import", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: []string{"admin"}},
+		{Method: "PUT", Path: "/api/admin/lyrics-source-reviews/candidate-selection", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: []string{"admin"}},
+		{Method: "PUT", Path: "/api/admin/lyrics-source-reviews/decision", Authentication: "bearer", ProducerProof: ProducerProofNone, AllowedRoles: []string{"admin"}},
 	}
 	var reviewRoutes []Route
 	for _, route := range manifest.RequiredRoutes {
@@ -42,6 +42,31 @@ func TestCheckedInProducerContractFixtureVerifies(t *testing.T) {
 	}
 	if !equalRoutes(reviewRoutes, expected) {
 		t.Fatalf("fixture review routes=%+v, want %+v", reviewRoutes, expected)
+	}
+}
+
+func TestContractStatesLenientContentAdmissionAndRequiredBackupProof(t *testing.T) {
+	proofs := make(map[string]string)
+	for _, route := range RequiredRoutes() {
+		if route.ProducerProof != ProducerProofNone {
+			proofs[route.Method+" "+route.Path] = route.ProducerProof
+		}
+	}
+	want := map[string]string{
+		"POST /api/editor/v1/backup/push":       ProducerProofRequired,
+		"POST /api/editor/v1/lyrics/publish":    ProducerProofOptional,
+		"POST /api/editor/v1/lyrics/unpublish":  ProducerProofOptional,
+		"PUT /api/editor/v1/category/batch":     ProducerProofOptional,
+		"PUT /api/editor/v1/entry":              ProducerProofOptional,
+		"PUT /api/editor/v1/event-story/update": ProducerProofOptional,
+		"PUT /api/editor/v1/lyrics/save":        ProducerProofOptional,
+	}
+	if !reflect.DeepEqual(proofs, want) {
+		t.Fatalf("producer proof policy = %v, want %v", proofs, want)
+	}
+	rejections := expectedEditorGateContract.MutationRejections
+	if expectedEditorGateContract.Version != 3 || rejections.Missing != 428 || rejections.Malformed != 400 || rejections.StaleOrRunning != 409 {
+		t.Fatalf("editor gate contract = %+v", expectedEditorGateContract)
 	}
 }
 
@@ -147,12 +172,12 @@ func TestManifestRejectsUnknownDuplicateAndUnsupportedContracts(t *testing.T) {
 	}{
 		{"unknown field", func(t *testing.T, root string) {
 			mutateRawManifest(t, root, func(contents string) string {
-				return strings.Replace(contents, "  \"schemaVersion\": 3,", "  \"schemaVersion\": 3,\n  \"unknown\": true,", 1)
+				return strings.Replace(contents, "  \"schemaVersion\": 4,", "  \"schemaVersion\": 4,\n  \"unknown\": true,", 1)
 			})
 		}, "must contain exactly"},
 		{"duplicate key", func(t *testing.T, root string) {
 			mutateRawManifest(t, root, func(contents string) string {
-				return strings.Replace(contents, "  \"schemaVersion\": 3,", "  \"schemaVersion\": 3,\n  \"schemaVersion\": 3,", 1)
+				return strings.Replace(contents, "  \"schemaVersion\": 4,", "  \"schemaVersion\": 4,\n  \"schemaVersion\": 4,", 1)
 			})
 		}, "duplicate object key"},
 		{"unsupported schema", func(t *testing.T, root string) {
@@ -175,6 +200,19 @@ func TestManifestRejectsUnknownDuplicateAndUnsupportedContracts(t *testing.T) {
 			manifest.EditorGateContract.MutationFormat = "<base64url-instanceId>:<completedGeneration>"
 			writeTypedManifest(t, root, manifest)
 		}, "editor gate contract is unsupported"},
+		{"editor gate contract requiring the header on content routes", func(t *testing.T, root string) {
+			manifest := readTypedManifest(t, root)
+			manifest.EditorGateContract.Version = 2
+			writeTypedManifest(t, root, manifest)
+		}, "editor gate contract is unsupported"},
+		{"schema 3 boolean producer proof", func(t *testing.T, root string) {
+			mutateRawManifest(t, root, func(contents string) string {
+				contents = strings.Replace(contents, "  \"schemaVersion\": 4,", "  \"schemaVersion\": 3,", 1)
+				contents = strings.ReplaceAll(contents, "\"producerProof\": \"none\"", "\"producerProof\": false")
+				contents = strings.ReplaceAll(contents, "\"producerProof\": \"optional\"", "\"producerProof\": true")
+				return strings.ReplaceAll(contents, "\"producerProof\": \"required\"", "\"producerProof\": true")
+			})
+		}, "decode workspace manifest"},
 		{"unsupported editor gate rejection", func(t *testing.T, root string) {
 			manifest := readTypedManifest(t, root)
 			manifest.EditorGateContract.MutationRejections.Missing = 400
@@ -207,8 +245,36 @@ func TestManifestRejectsNoncanonicalAndMismatchedRoutes(t *testing.T) {
 		}, "duplicate required route"},
 		{"missing capability", func(routes []Route) []Route { return routes[:len(routes)-1] }, "does not match the server contract"},
 		{"extra capability", func(routes []Route) []Route {
-			return append(routes, Route{Method: "PUT", Path: "/api/editor/v1/other", Authentication: "bearer", ProducerProof: true, AllowedRoles: []string{"editor", "admin"}})
+			return append(routes, Route{Method: "PUT", Path: "/api/editor/v1/other", Authentication: "bearer", ProducerProof: ProducerProofOptional, AllowedRoles: []string{"editor", "admin"}})
 		}, "does not match the server contract"},
+		{"content route claims the header is required", func(routes []Route) []Route {
+			for index := range routes {
+				if routes[index].Path == "/api/editor/v1/entry" {
+					routes[index].ProducerProof = ProducerProofRequired
+				}
+			}
+			return routes
+		}, "does not match the server contract"},
+		{"backup push claims the header is optional", func(routes []Route) []Route {
+			for index := range routes {
+				if routes[index].Path == "/api/editor/v1/backup/push" {
+					routes[index].ProducerProof = ProducerProofOptional
+				}
+			}
+			return routes
+		}, "does not match the server contract"},
+		{"unknown producer proof policy", func(routes []Route) []Route {
+			routes[0].ProducerProof = "sometimes"
+			return routes
+		}, "required route 0 is invalid"},
+		{"public route with producer proof", func(routes []Route) []Route {
+			for index := range routes {
+				if routes[index].Authentication == "none" {
+					routes[index].ProducerProof = ProducerProofOptional
+				}
+			}
+			return routes
+		}, "is invalid"},
 		{"query token authentication", func(routes []Route) []Route {
 			for index := range routes {
 				if routes[index].Path == "/sse" {

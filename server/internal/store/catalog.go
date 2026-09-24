@@ -219,17 +219,20 @@ func (s *Store) CatalogMusic(query string, newlyWrittenOnly bool, limit, cursor 
 	if limit <= 0 {
 		limit = 50
 	}
+	// A recovery takeover supersedes the song's ledger availability state.
 	sqlQuery := `SELECT m.music_id, m.title_ja,
 		COALESCE(NULLIF(zh.cn_text, ''), m.title_zh), COALESCE(NULLIF(en.text, ''), m.title_en), m.jacket_url,
-		m.newly_written, l.revision, p.revision, d.document_id,
+		m.newly_written, l.revision, p.revision, d.document_id, COALESCE(d.schema_version=3, 0),
 		COALESCE(
 			(SELECT availability.state FROM song_lyrics_availability_documents AS availability
 			 WHERE availability.music_id=m.music_id
+			 AND NOT EXISTS (SELECT 1 FROM lyrics_recovery_takeovers AS takeover WHERE takeover.music_id=m.music_id)
 			 ORDER BY availability.created_at DESC,availability.batch_sha256 DESC LIMIT 1),
 			(SELECT seed.state FROM embedded_lyrics_editor_seed_items AS seed
 			 WHERE seed.music_id=m.music_id AND seed.seed_kind='availability' AND seed.apply_status='inserted'
 			 ORDER BY seed.created_at DESC,seed.seed_sha256 DESC LIMIT 1)
-		)
+		),
+		EXISTS (SELECT 1 FROM song_lyrics_public_withdrawals AS withdrawal WHERE withdrawal.music_id=m.music_id)
 		FROM catalog_music m
 		LEFT JOIN entries zh ON zh.category='music' AND zh.field='title' AND zh.jp_key=m.title_ja
 		LEFT JOIN entry_localizations en ON en.category='music' AND en.field='title'
@@ -262,7 +265,8 @@ func (s *Store) CatalogMusic(query string, newlyWrittenOnly bool, limit, cursor 
 		var revision, publishedRevision, sourceDocumentID sql.NullInt64
 		var availabilityState sql.NullString
 		if err := rows.Scan(&item.MusicID, &item.Title.Japanese, &item.Title.Chinese, &item.Title.English,
-			&item.JacketURL, &newlyWritten, &revision, &publishedRevision, &sourceDocumentID, &availabilityState); err != nil {
+			&item.JacketURL, &newlyWritten, &revision, &publishedRevision, &sourceDocumentID, &item.LyricsSourceV3, &availabilityState,
+			&item.LyricsWithdrawn); err != nil {
 			return model.CatalogMusicResponse{}, err
 		}
 		item.IsNewlyWrittenMusic = newlyWritten == 1

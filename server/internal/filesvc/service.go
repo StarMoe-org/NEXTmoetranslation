@@ -106,6 +106,8 @@ type Service struct {
 	requested   uint64
 	published   uint64
 	running     bool
+	// started is set once Start has launched the publication worker.
+	started bool
 
 	rebuildCh       chan struct{}
 	immediateCh     chan struct{}
@@ -191,6 +193,7 @@ func (svc *Service) Start() {
 		if svc.requested <= svc.published {
 			svc.requested = svc.published + 1
 		}
+		svc.started = true
 		svc.statusMu.Unlock()
 		svc.wg.Add(1)
 		go func() {
@@ -245,6 +248,51 @@ func (svc *Service) PublishNow() {
 	}
 }
 
+// AwaitPublished waits until every publication requested before the call has
+// been published, and reports whether it was. A request still inside its
+// debounce window is published at once. It gives up after timeout, when ctx
+// ends, or at once when the publication worker is not running.
+func (svc *Service) AwaitPublished(ctx context.Context, timeout time.Duration) bool {
+	svc.statusMu.RLock()
+	target, published, started := svc.requested, svc.published, svc.started
+	svc.statusMu.RUnlock()
+	if published >= target {
+		return true
+	}
+	if !started || svc.ctx.Err() != nil {
+		return false
+	}
+	select {
+	case svc.immediateCh <- struct{}{}:
+	default:
+	}
+	select {
+	case svc.rebuildCh <- struct{}{}:
+	default:
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	poll := time.NewTicker(20 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-svc.ctx.Done():
+			return false
+		case <-deadline.C:
+			return false
+		case <-poll.C:
+			svc.statusMu.RLock()
+			published = svc.published
+			svc.statusMu.RUnlock()
+			if published >= target {
+				return true
+			}
+		}
+	}
+}
+
 // Status returns a race-safe projection publication snapshot.
 func (svc *Service) Status() ProjectionStatus {
 	svc.statusMu.RLock()
@@ -268,6 +316,18 @@ func (svc *Service) SongProvenance(musicID int) (SongProvenance, bool) {
 	}
 	p.AvailableVersions = append([]string(nil), p.AvailableVersions...)
 	return p, true
+}
+
+// PublicLyricsDetail returns a copy of the bytes currently served at
+// /files/translation/lyrics/music_<musicID>.json.
+func (svc *Service) PublicLyricsDetail(musicID int) ([]byte, bool) {
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+	a, ok := svc.assets[fmt.Sprintf("translation/lyrics/music_%d.json", musicID)]
+	if !ok {
+		return nil, false
+	}
+	return bytes.Clone(a.body), true
 }
 
 func (svc *Service) loop() {

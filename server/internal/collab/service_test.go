@@ -366,3 +366,78 @@ func TestRevokeUserClosesLiveConnectionAndReleasesEditorGate(t *testing.T) {
 		t.Fatal("revoked collaboration connection kept the editor gate slot")
 	}
 }
+
+func TestDocumentPublishClosesTheLiveRoomOfTheFencedEpoch(t *testing.T) {
+	fixture := setupContractService(t)
+	ticket, err := fixture.service.IssueTicket(t.Context(), fixture.claims, fixture.bearer, 42, fixture.service.gate.Status())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/yjs/lyrics/{musicId}", fixture.service)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/yjs/lyrics/42?ticket=" + url.QueryEscape(ticket.Ticket)
+	connection, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		if response != nil {
+			response.Body.Close()
+		}
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for fixture.service.server.GetDoc(ticket.Room) == nil && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if fixture.service.server.GetDoc(ticket.Room) == nil {
+		t.Fatal("active WebSocket did not register its collaboration room")
+	}
+
+	// The document route fences the epoch inside its own transaction and then
+	// reseeds, exactly as handleLyricsDocument does.
+	if _, err := fixture.service.store.PublishLyricsDocument(t.Context(), store.LyricsDocumentRequest{
+		MusicID:           42,
+		Source:            store.LyricsDocumentSource{URL: "https://www.sekaipedia.org/wiki/Synthetic_Song?oldid=4242"},
+		TranslationCredit: "合成译者",
+		Renditions: []store.LyricsDocumentRendition{{
+			Key: "sekai", PerformerIDs: []int{1},
+			Lines: []store.LyricsDocumentLine{{Japanese: "らららと{歌|うた}う", Chinese: "啦啦啦地唱"}},
+		}},
+	}, 0, "document-admin"); err != nil {
+		t.Fatalf("publish lyrics document: %v", err)
+	}
+	if err := fixture.service.ReplaceFromAuthoritative(t.Context(), 42); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := connection.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, _, err := connection.ReadMessage(); err != nil {
+			var readErr net.Error
+			if errors.As(err, &readErr) && readErr.Timeout() {
+				t.Fatal("the pre-publish collaboration room stayed open after the document replace")
+			}
+			break
+		}
+	}
+	if fixture.service.server.GetDoc(ticket.Room) != nil {
+		t.Fatal("the pre-publish collaboration room is still resident")
+	}
+	epoch, err := fixture.service.persistence.currentEpoch(t.Context(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ticket.Room != "lyrics-42-e1" || epoch != 3 {
+		t.Fatalf("room=%q reseeded epoch=%d want lyrics-42-e1 and 3", ticket.Room, epoch)
+	}
+	next, err := fixture.service.IssueTicket(t.Context(), fixture.claims, fixture.bearer, 42, fixture.service.gate.Status())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Room != "lyrics-42-e3" {
+		t.Fatalf("post-publish ticket room=%q want lyrics-42-e3", next.Room)
+	}
+}

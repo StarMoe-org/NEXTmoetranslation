@@ -236,11 +236,11 @@ func TestLoginRejectsInjectedUnknownRole(t *testing.T) {
 func TestWorkspaceCapabilityContractIsMountedByTheServer(t *testing.T) {
 	h := setupLegacyAPI(t)
 	expectedReviewRoutes := map[string]workspaceverify.Route{
-		http.MethodGet + " /api/admin/lyrics-source-reviews":                     {Method: http.MethodGet, Path: "/api/admin/lyrics-source-reviews", Authentication: "bearer", ProducerProof: false, AllowedRoles: []string{auth.RoleAdmin}},
-		http.MethodGet + " /api/admin/lyrics-source-reviews/detail":              {Method: http.MethodGet, Path: "/api/admin/lyrics-source-reviews/detail", Authentication: "bearer", ProducerProof: false, AllowedRoles: []string{auth.RoleAdmin}},
-		http.MethodPost + " /api/admin/lyrics-source-reviews/import":             {Method: http.MethodPost, Path: "/api/admin/lyrics-source-reviews/import", Authentication: "bearer", ProducerProof: false, AllowedRoles: []string{auth.RoleAdmin}},
-		http.MethodPut + " /api/admin/lyrics-source-reviews/candidate-selection": {Method: http.MethodPut, Path: "/api/admin/lyrics-source-reviews/candidate-selection", Authentication: "bearer", ProducerProof: false, AllowedRoles: []string{auth.RoleAdmin}},
-		http.MethodPut + " /api/admin/lyrics-source-reviews/decision":            {Method: http.MethodPut, Path: "/api/admin/lyrics-source-reviews/decision", Authentication: "bearer", ProducerProof: false, AllowedRoles: []string{auth.RoleAdmin}},
+		http.MethodGet + " /api/admin/lyrics-source-reviews":                     {Method: http.MethodGet, Path: "/api/admin/lyrics-source-reviews", Authentication: "bearer", ProducerProof: workspaceverify.ProducerProofNone, AllowedRoles: []string{auth.RoleAdmin}},
+		http.MethodGet + " /api/admin/lyrics-source-reviews/detail":              {Method: http.MethodGet, Path: "/api/admin/lyrics-source-reviews/detail", Authentication: "bearer", ProducerProof: workspaceverify.ProducerProofNone, AllowedRoles: []string{auth.RoleAdmin}},
+		http.MethodPost + " /api/admin/lyrics-source-reviews/import":             {Method: http.MethodPost, Path: "/api/admin/lyrics-source-reviews/import", Authentication: "bearer", ProducerProof: workspaceverify.ProducerProofNone, AllowedRoles: []string{auth.RoleAdmin}},
+		http.MethodPut + " /api/admin/lyrics-source-reviews/candidate-selection": {Method: http.MethodPut, Path: "/api/admin/lyrics-source-reviews/candidate-selection", Authentication: "bearer", ProducerProof: workspaceverify.ProducerProofNone, AllowedRoles: []string{auth.RoleAdmin}},
+		http.MethodPut + " /api/admin/lyrics-source-reviews/decision":            {Method: http.MethodPut, Path: "/api/admin/lyrics-source-reviews/decision", Authentication: "bearer", ProducerProof: workspaceverify.ProducerProofNone, AllowedRoles: []string{auth.RoleAdmin}},
 	}
 	seenReviewRoutes := make(map[string]workspaceverify.Route)
 	editor, err := h.api.auth.CreateUser("route-editor", "strong-password-123", auth.RoleEditor)
@@ -281,16 +281,12 @@ func TestWorkspaceCapabilityContractIsMountedByTheServer(t *testing.T) {
 			t.Fatalf("workspace capability accepted missing %s auth: %s %s status=%d", route.Authentication, route.Method, route.Path, response.StatusCode)
 		}
 
-		if route.ProducerProof {
+		if route.ProducerProof != workspaceverify.ProducerProofNone {
 			token := currentEditorToken()
 			if len(route.AllowedRoles) == 1 && route.AllowedRoles[0] == auth.RoleAdmin {
 				token = h.token
 			}
-			withoutProof := doJSON(t, route.Method, h.server.URL+route.Path, token, nil)
-			withoutProof.Body.Close()
-			if withoutProof.StatusCode != http.StatusPreconditionRequired {
-				t.Fatalf("workspace producer proof policy mismatch: %s %s status=%d", route.Method, route.Path, withoutProof.StatusCode)
-			}
+			assertWorkspaceProducerProofPolicy(t, h, route, token)
 			continue
 		}
 		if len(route.AllowedRoles) == 1 && route.AllowedRoles[0] == auth.RoleAdmin {
@@ -316,6 +312,51 @@ func TestWorkspaceCapabilityContractIsMountedByTheServer(t *testing.T) {
 		if actual := seenReviewRoutes[key]; !reflect.DeepEqual(actual, expected) {
 			t.Fatalf("workspace review route %s=%+v, want %+v", key, actual, expected)
 		}
+	}
+}
+
+// assertWorkspaceProducerProofPolicy checks one proof route: a present header is
+// always checked strictly, only required routes reject its absence, and
+// optional routes admit it leniently unless the producer is running.
+func assertWorkspaceProducerProofPolicy(t *testing.T, h *legacyAPIHarness, route workspaceverify.Route, token string) {
+	t.Helper()
+	for _, test := range []struct {
+		header string
+		want   int
+	}{
+		{header: "not-a-producer-state", want: http.StatusBadRequest},
+		{header: "c3RhbGU:0:0", want: http.StatusConflict},
+	} {
+		response := strictRequestAs(t, h, route.Method, route.Path, token, nil, []string{test.header})
+		response.Body.Close()
+		if response.StatusCode != test.want {
+			t.Fatalf("workspace producer proof %q: %s %s status=%d, want %d", test.header, route.Method, route.Path, response.StatusCode, test.want)
+		}
+	}
+	withoutProof := doJSON(t, route.Method, h.server.URL+route.Path, token, nil)
+	withoutProof.Body.Close()
+	switch route.ProducerProof {
+	case workspaceverify.ProducerProofRequired:
+		if withoutProof.StatusCode != http.StatusPreconditionRequired {
+			t.Fatalf("workspace required producer proof: %s %s status=%d", route.Method, route.Path, withoutProof.StatusCode)
+		}
+	case workspaceverify.ProducerProofOptional:
+		switch withoutProof.StatusCode {
+		case http.StatusPreconditionRequired, http.StatusConflict, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+			t.Fatalf("workspace optional producer proof was not admitted: %s %s status=%d", route.Method, route.Path, withoutProof.StatusCode)
+		}
+		release, err := h.api.editorGate.BeginProducer()
+		if err != nil {
+			t.Fatal(err)
+		}
+		running := doJSON(t, route.Method, h.server.URL+route.Path, token, nil)
+		running.Body.Close()
+		release()
+		if running.StatusCode != http.StatusConflict {
+			t.Fatalf("workspace optional producer proof while the producer runs: %s %s status=%d", route.Method, route.Path, running.StatusCode)
+		}
+	default:
+		t.Fatalf("workspace route %s %s has unknown producer proof %q", route.Method, route.Path, route.ProducerProof)
 	}
 }
 

@@ -390,12 +390,12 @@ func TestTranslationContentPreflightCountsRecoveryAndRenditionLyricsGraph(t *tes
 		`"translationEditionLocalizations":[{}],"translationEditionLines":[{}],` +
 		`"recoveryBatches":[{}],"recoveryItems":[{}],"recoverySourceEvidence":[{}],` +
 		`"recoveryArtifacts":[{}],"recoveryArtifactEvidence":[{}],"recoveryContributions":[{}],` +
-		`"availabilityDocuments":[{}]}`)
+		`"availabilityDocuments":[{}],"recoveryTakeovers":[{}]}`)
 	count, scenarios, total, err := preflightTranslationContentJSON("lyrics.json", body, maxTranslationContentRecords)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 14 || scenarios != 0 || total != 14 {
+	if count != 15 || scenarios != 0 || total != 15 {
 		t.Fatalf("recovery/rendition/edition lyrics preflight count=%d scenarios=%d total=%d", count, scenarios, total)
 	}
 	if got := lyricsContentCount(store.LyricsContentExport{
@@ -405,8 +405,21 @@ func TestTranslationContentPreflightCountsRecoveryAndRenditionLyricsGraph(t *tes
 		TranslationEditions:             make([]store.LyricsTranslationEditionBackupRecord, 1),
 		TranslationEditionLocalizations: make([]store.LyricsTranslationEditionLocalizationBackupRecord, 1),
 		TranslationEditionLines:         make([]store.LyricsTranslationEditionLineBackupRecord, 1),
-	}); got != 9 {
-		t.Fatalf("lyrics content rendition/edition record count=%d want=9", got)
+		RecoveryTakeovers:               make([]store.LyricsRecoveryTakeoverBackupRecord, 2),
+	}); got != 11 {
+		t.Fatalf("lyrics content rendition/edition/takeover record count=%d want=11", got)
+	}
+	takeovers := store.LyricsContentExport{RecoveryTakeovers: make([]store.LyricsRecoveryTakeoverBackupRecord, 2)}
+	takeoverBody, err := json.Marshal(takeovers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared, _, _, err := preflightTranslationContentJSON("lyrics.json", takeoverBody, maxTranslationContentRecords)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if declared != lyricsContentCount(takeovers) || declared != 2 {
+		t.Fatalf("takeover preflight count=%d written count=%d want=2", declared, lyricsContentCount(takeovers))
 	}
 }
 
@@ -452,15 +465,29 @@ func TestTranslationContentPreflightRejectsMatchingExcessiveSmallObjectArray(t *
 	}
 }
 
+// canceledAfterChecks reports cancellation from its checks-th Err call on, so
+// a cancellation lands in the middle of a scan whatever the machine's speed.
+type canceledAfterChecks struct {
+	context.Context
+	checks, calls int
+}
+
+func (c *canceledAfterChecks) Err() error {
+	c.calls++
+	if c.calls >= c.checks {
+		return context.Canceled
+	}
+	return nil
+}
+
 func TestLargeTranslationContentPreflightHonorsCancellation(t *testing.T) {
 	body := []byte("[" + strings.Repeat("{},", 200_000) + "{}]")
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(time.Millisecond)
-		cancel()
-	}()
+	ctx := &canceledAfterChecks{Context: context.Background(), checks: 1000}
 	if _, _, _, err := topLevelJSONArraysContext(ctx, body, maxTranslationContentRecords); !errors.Is(err, context.Canceled) {
 		t.Fatalf("large preflight cancellation error = %v", err)
+	}
+	if ctx.calls != ctx.checks {
+		t.Fatalf("the preflight checked the context %d times after the cancellation at check %d", ctx.calls-ctx.checks, ctx.checks)
 	}
 }
 

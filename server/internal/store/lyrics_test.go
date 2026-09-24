@@ -302,19 +302,6 @@ func TestLyricsCRUDRevisionDriftAndPublication(t *testing.T) {
 		t.Fatalf("stale save error = %#v", err)
 	}
 
-	drift := saved
-	drift.Lines[0].Japanese = "初音が歌う"
-	drift.Lines[0].Segments[1].Text = "が歌う"
-	drift.Lines[0].Segments[1].Ruby = []model.LyricRubySpan{{Text: "が歌う"}}
-	_, err = s.SaveLyrics(drift, "editor")
-	if !errors.As(err, &contractErr) || contractErr.Code != "source_drift" {
-		t.Fatalf("source drift error = %#v", err)
-	}
-	saved, err = s.GetLyrics(10)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	published, err := s.PublishLyrics(10, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -363,6 +350,18 @@ func TestLyricsCRUDRevisionDriftAndPublication(t *testing.T) {
 	unpublished, err = s.UnpublishLyrics(10, 2)
 	if err != nil || unpublished.Status != "draft" {
 		t.Fatalf("idempotent unpublish = %+v err=%v", unpublished, err)
+	}
+
+	japanese, err := s.GetLyrics(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	japanese.Lines[0].Japanese = "初音が歌う"
+	japanese.Lines[0].Segments[1].Text = "が歌う"
+	japanese.Lines[0].Segments[1].Ruby = []model.LyricRubySpan{{Text: "が歌う"}}
+	japanese, err = s.SaveLyrics(japanese, "editor")
+	if err != nil || japanese.Revision != 3 || japanese.Lines[0].Japanese != "初音が歌う" {
+		t.Fatalf("Japanese edit after publication = %+v err=%v", japanese, err)
 	}
 }
 
@@ -525,17 +524,20 @@ func TestSavedLyricsAllowEquivalentResegmentationWithExplicitRuby(t *testing.T) 
 	}
 }
 
-func TestSavedLyricsRejectNumericOrderDrift(t *testing.T) {
+func TestSavedLyricsAcceptNumericOrderChange(t *testing.T) {
 	s := setupLyricsStore(t)
 	saved, err := s.SaveLyrics(validLyrics(), "editor")
 	if err != nil {
 		t.Fatal(err)
 	}
 	saved.Lines[0].Order = 10
-	_, err = s.SaveLyrics(saved, "editor")
-	var contractErr *LyricsContractError
-	if !errors.As(err, &contractErr) || contractErr.Code != "source_drift" {
-		t.Fatalf("numeric order drift error = %#v", err)
+	updated, err := s.SaveLyrics(saved, "editor")
+	if err != nil || updated.Revision != 2 || updated.Lines[0].Order != 10 {
+		t.Fatalf("numeric order change = %+v err=%v", updated, err)
+	}
+	reloaded, err := s.GetLyrics(10)
+	if err != nil || reloaded.Lines[0].Order != 10 {
+		t.Fatalf("reloaded order = %+v err=%v", reloaded, err)
 	}
 }
 
@@ -549,15 +551,15 @@ func TestOrdinaryLyricsFirstSaveSourceURLPolicy(t *testing.T) {
 		{name: "external reference", sourceURL: "https://example.invalid/source"},
 		{name: "other Fandom origin", sourceURL: "https://projectsekai.fandom.com/wiki/Song"},
 		{name: "other Wiki origin", sourceURL: "https://en.wikipedia.org/wiki/Song"},
-		{name: "managed origin", sourceURL: "https://vocaloid.fandom.com/wiki/Song", wantDrift: true},
-		{name: "managed origin with oldid", sourceURL: "https://vocaloid.fandom.com/wiki/Song?oldid=123", wantDrift: true},
-		{name: "managed origin case insensitive", sourceURL: "HTTPS://VOCALOID.FANDOM.COM/wiki/Song", wantDrift: true},
-		{name: "managed origin with explicit default port", sourceURL: "https://vocaloid.fandom.com:443/wiki/Song", wantDrift: true},
-		{name: "managed origin with trailing dot", sourceURL: "https://vocaloid.fandom.com./wiki/Song", wantDrift: true},
+		{name: "managed origin", sourceURL: "https://vocaloid.fandom.com/wiki/Song"},
+		{name: "managed origin with oldid", sourceURL: "https://vocaloid.fandom.com/wiki/Song?oldid=123"},
+		{name: "managed origin case insensitive", sourceURL: "HTTPS://VOCALOID.FANDOM.COM/wiki/Song"},
+		{name: "managed origin with explicit default port", sourceURL: "https://vocaloid.fandom.com:443/wiki/Song"},
+		{name: "managed origin with trailing dot", sourceURL: "https://vocaloid.fandom.com./wiki/Song"},
 		{name: "managed hostname with non-default port", sourceURL: "https://vocaloid.fandom.com:444/wiki/Song", wantDrift: true},
 		{name: "managed hostname over HTTP", sourceURL: "http://vocaloid.fandom.com/wiki/Song", wantDrift: true},
-		{name: "managed legacy alias", sourceURL: "https://vocaloid.wikia.com/wiki/Song", wantDrift: true},
-		{name: "managed legacy alias case insensitive", sourceURL: "HTTPS://VOCALOID.WIKIA.COM./wiki/Song", wantDrift: true},
+		{name: "managed legacy alias", sourceURL: "https://vocaloid.wikia.com/wiki/Song"},
+		{name: "managed legacy alias case insensitive", sourceURL: "HTTPS://VOCALOID.WIKIA.COM./wiki/Song"},
 		{name: "managed legacy alias with non-default port", sourceURL: "https://vocaloid.wikia.com:444/wiki/Song", wantDrift: true},
 		{name: "managed legacy alias over HTTP", sourceURL: "http://vocaloid.wikia.com/wiki/Song", wantDrift: true},
 		{name: "managed-looking subdomain is external", sourceURL: "https://vocaloid.fandom.com.example.invalid/wiki/Song"},
@@ -583,7 +585,7 @@ func TestOrdinaryLyricsFirstSaveSourceURLPolicy(t *testing.T) {
 	}
 }
 
-func TestLegacyURLOnlyManagedLyricsDraftCanEditOnlyWithoutSourceDrift(t *testing.T) {
+func TestLegacyURLOnlyManagedLyricsDraftCanEditSourceAndStructure(t *testing.T) {
 	s := setupLyricsStore(t)
 	input := validLyrics()
 	input.SourceURL = "https://vocaloid.fandom.com/wiki/Legacy_Song?oldid=123"
@@ -631,32 +633,45 @@ func TestLegacyURLOnlyManagedLyricsDraftCanEditOnlyWithoutSourceDrift(t *testing
 	tests := []struct {
 		name   string
 		mutate func(*model.SongLyrics)
+		check  func(model.SongLyrics) bool
 	}{
 		{name: "source URL", mutate: func(candidate *model.SongLyrics) {
 			candidate.SourceURL = "https://vocaloid.fandom.com/wiki/Legacy_Song?oldid=124"
+		}, check: func(saved model.SongLyrics) bool {
+			return saved.SourceURL == "https://vocaloid.fandom.com/wiki/Legacy_Song?oldid=124"
 		}},
 		{name: "provenance", mutate: func(candidate *model.SongLyrics) {
+			candidate.SourceURL = "https://vocaloid.fandom.com/wiki/Legacy_Song?oldid=125"
 			candidate.SourcePageID = 123
-			candidate.SourceRevisionID = 124
+			candidate.SourceRevisionID = 125
 			candidate.SourceSHA1 = validSourceSHA1
 			candidate.SourceFetchedAt = "2026-07-22T12:34:56Z"
+		}, check: func(saved model.SongLyrics) bool {
+			return saved.SourcePageID == 123 && saved.SourceRevisionID == 125 && saved.SourceSHA1 == validSourceSHA1 &&
+				saved.SourceFetchedAt == "2026-07-22T12:34:56Z"
 		}},
 		{name: "Japanese source structure", mutate: func(candidate *model.SongLyrics) {
 			candidate.Lines[0].Japanese = "初音が歌う"
 			candidate.Lines[0].Segments[1].Text = "が歌う"
 			candidate.Lines[0].Segments[1].Ruby = []model.LyricRubySpan{{Text: "が歌う"}}
+		}, check: func(saved model.SongLyrics) bool {
+			return saved.Lines[0].Japanese == "初音が歌う" && saved.Lines[0].Segments[1].Text == "が歌う"
 		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			candidate := updated
-			candidate.Lines = append([]model.LyricLine(nil), updated.Lines...)
-			candidate.Lines[0].Segments = append([]model.LyricSegment(nil), updated.Lines[0].Segments...)
+			candidate, err := s.GetLyrics(input.MusicID)
+			if err != nil {
+				t.Fatal(err)
+			}
 			test.mutate(&candidate)
-			_, err := s.SaveLyrics(candidate, "editor")
-			var contractErr *LyricsContractError
-			if !errors.As(err, &contractErr) || contractErr.Code != "source_drift" {
-				t.Fatalf("legacy %s drift error = %#v", test.name, err)
+			saved, err := s.SaveLyrics(candidate, "editor")
+			if err != nil || saved.Revision != candidate.Revision+1 || !test.check(saved) {
+				t.Fatalf("legacy %s edit saved=%+v err=%v", test.name, saved, err)
+			}
+			reloaded, err := s.GetLyrics(input.MusicID)
+			if err != nil || !test.check(reloaded) {
+				t.Fatalf("legacy %s edit reloaded=%+v err=%v", test.name, reloaded, err)
 			}
 		})
 	}
@@ -1249,7 +1264,7 @@ func TestLyricsPublicationRejectsEncodedArtifactOverConsumerLimit(t *testing.T) 
 	}
 }
 
-func TestLyricsPublicationAllowsEmptyPerformersAndFreezesProvenance(t *testing.T) {
+func TestLyricsPublicationAllowsEmptyPerformersAndLaterProvenanceEdits(t *testing.T) {
 	s := setupLyricsStore(t)
 	input := validLyrics()
 	input.SourcePageID = 10
@@ -1275,13 +1290,13 @@ func TestLyricsPublicationAllowsEmptyPerformersAndFreezesProvenance(t *testing.T
 		t.Fatalf("empty performer public detail = %+v", detail)
 	}
 
-	drift := saved
-	drift.SourceRevisionID++
-	drift.SourceSHA1 = "1123456789abcdef0123456789abcdef01234567"
-	_, err = s.SaveLyrics(drift, "editor")
-	var contractErr *LyricsContractError
-	if !errors.As(err, &contractErr) || contractErr.Code != "source_drift" {
-		t.Fatalf("provenance drift error = %#v", err)
+	edited := published
+	edited.SourceRevisionID++
+	edited.SourceSHA1 = "1123456789abcdef0123456789abcdef01234567"
+	edited, err = s.SaveLyrics(edited, "editor")
+	if err != nil || edited.Revision != saved.Revision+1 || edited.SourceRevisionID != saved.SourceRevisionID+1 ||
+		edited.SourceSHA1 != "1123456789abcdef0123456789abcdef01234567" || edited.Status != "draft-published" {
+		t.Fatalf("provenance edit after publication = %+v err=%v", edited, err)
 	}
 }
 
@@ -1495,13 +1510,12 @@ func TestUnprovenancedDraftCanUpdateLinesAndBindProvenance(t *testing.T) {
 		t.Fatalf("saved2 mismatch: %+v", saved2)
 	}
 
-	// Once provenanced, subsequent line changes without import token must be rejected
-	drift := saved2
-	drift.Lines = []model.LyricLine{saved2.Lines[0]}
-	_, err = s.SaveLyrics(drift, "editor")
-	var contractErr *LyricsContractError
-	if !errors.As(err, &contractErr) || contractErr.Code != "source_drift" {
-		t.Fatalf("provenanced line change should fail, got: %v", err)
+	// Line structure stays editable after provenance is bound.
+	removed := saved2
+	removed.Lines = []model.LyricLine{saved2.Lines[0]}
+	saved3, err := s.SaveLyrics(removed, "editor")
+	if err != nil || saved3.Revision != saved2.Revision+1 || len(saved3.Lines) != 1 {
+		t.Fatalf("provenanced line removal = %+v err=%v", saved3, err)
 	}
 }
 

@@ -187,11 +187,9 @@ func buildRecoveryPublicLyricsV4Candidate(content LyricsContentExport, batchSHA2
 		}
 		return RecoveryPublicLyricsV4Candidate{}, err
 	}
-	records := make(map[int]LyricsSourceDocumentBackupRecord)
-	for _, record := range content.SourceDocuments {
-		if record.ManifestBatchSHA256 == batchSHA256 {
-			records[record.MusicID] = record
-		}
+	records, superseded, err := recoveryBatchSourceRecords(content, batchSHA256)
+	if err != nil {
+		return RecoveryPublicLyricsV4Candidate{}, fmt.Errorf("public v4 %w", err)
 	}
 	candidate := RecoveryPublicLyricsV4Candidate{
 		BatchSHA256: v3.BatchSHA256,
@@ -212,7 +210,11 @@ func buildRecoveryPublicLyricsV4Candidate(content LyricsContentExport, batchSHA2
 		if err != nil {
 			return RecoveryPublicLyricsV4Candidate{}, err
 		}
-		detail, err := buildPublicLyricsV4Detail(content, record, document, v3Detail)
+		editionRows := content
+		if rows := superseded[musicID]; rows != nil {
+			editionRows = *rows
+		}
+		detail, err := buildPublicLyricsV4Detail(editionRows, record, document, v3Detail)
 		if err != nil {
 			return RecoveryPublicLyricsV4Candidate{}, fmt.Errorf("build public v4 music %d: %w", musicID, err)
 		}

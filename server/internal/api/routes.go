@@ -83,6 +83,10 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/editor/v1/lyrics/translation-editions", s.auth.RequireAuth(s.strictContentMutation(s.handleLyricsTranslationEditions)))
 	mux.HandleFunc("/api/editor/v1/lyrics/publish", s.auth.RequireAdmin(s.strictContentMutation(s.handleLyricsPublish)))
 	mux.HandleFunc("/api/editor/v1/lyrics/unpublish", s.auth.RequireAdmin(s.strictContentMutation(s.handleLyricsUnpublish)))
+	mux.HandleFunc("/api/editor/v1/lyrics/document", s.auth.RequireAdmin(s.awaitServedLyrics(s.strictContentMutation(s.handleLyricsDocument))))
+	mux.HandleFunc("GET /api/editor/v1/lyrics/document", s.auth.RequireAuth(s.awaitServedLyrics(s.handleLyricsDocumentExport)))
+	mux.HandleFunc("POST /api/editor/v1/lyrics/document/takeover", s.auth.RequireAdmin(s.awaitServedLyrics(s.strictContentMutation(s.handleLyricsDocumentTakeover))))
+	mux.HandleFunc("POST /api/editor/v1/lyrics/document/ruby", s.auth.RequireAuth(s.handleLyricsDocumentRuby))
 	mux.HandleFunc("/api/editor/v1/admin/lyrics-source-reviews/import", s.auth.RequireAdmin(s.strictContentMutation(s.handleLyricsSourceReviewImport)))
 	if s.collab != nil {
 		mux.HandleFunc("/api/editor/v1/lyrics/{musicId}/collab-ticket", s.auth.RequireAuth(s.strictEditorMutation(s.handleLyricsCollabTicket)))
@@ -90,6 +94,11 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		mux.Handle("/yjs/lyrics/{musicId}", s.collab)
 	}
 	mux.HandleFunc("/api/editor/v1/backup/push", s.auth.RequireAdmin(s.strictEditorMutation(s.handleBackupPush)))
+	// Agent tooling still posts to these pre-v1 paths; they share the v1 twin's
+	// wrapper, which admits requests without the producer-state header.
+	mux.HandleFunc("/api/entry", s.auth.RequireAuth(s.strictContentMutation(s.handleUpdateEntry)))
+	mux.HandleFunc("/api/lyrics/save", s.auth.RequireAuth(s.strictContentMutation(s.handleLyricsSave)))
+	mux.HandleFunc("/api/lyrics/publish", s.auth.RequireAdmin(s.strictContentMutation(s.handleLyricsPublish)))
 
 	// Realtime: SSE stream authenticated with the normal session bearer JWT.
 	if s.hub != nil {

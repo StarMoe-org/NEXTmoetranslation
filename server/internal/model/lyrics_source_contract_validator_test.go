@@ -239,6 +239,57 @@ func TestValidateLyricsSourceFixedIdentityAcceptsSekaipediaAuthority(t *testing.
 	}
 }
 
+func TestValidateLyricsSourceFixedIdentityAcceptsProjectSekaiFandomForVocaloidFandom(t *testing.T) {
+	projectSekai := func() LyricsSourceFixedIdentity {
+		identity := validProviderFixedIdentity(LyricsSourceProviderVocaloidFandom, "full-sekai")
+		identity.Origin = LyricsSourceOriginProjectSekaiFandom
+		identity.RevisionID = 375274
+		identity.CanonicalURL = "https://projectsekai.fandom.com/wiki/Synthetic_(Song)?oldid=375274"
+		return identity
+	}
+	if err := ValidateLyricsSourceFixedIdentity(projectSekai()); err != nil {
+		t.Fatalf("projectsekai canonical identity: %v", err)
+	}
+	for name, mutate := range map[string]func(*LyricsSourceFixedIdentity){
+		"other fandom origin": func(identity *LyricsSourceFixedIdentity) {
+			identity.Origin = "https://evil.fandom.com"
+			identity.CanonicalURL = "https://evil.fandom.com/wiki/Synthetic_(Song)?oldid=375274"
+		},
+		"URL host differs from origin": func(identity *LyricsSourceFixedIdentity) {
+			identity.CanonicalURL = "https://vocaloid.fandom.com/wiki/Synthetic_(Song)?oldid=375274"
+		},
+		"uppercase host": func(identity *LyricsSourceFixedIdentity) {
+			identity.Origin = "https://PROJECTSEKAI.fandom.com"
+			identity.CanonicalURL = "https://PROJECTSEKAI.fandom.com/wiki/Synthetic_(Song)?oldid=375274"
+		},
+		"http origin": func(identity *LyricsSourceFixedIdentity) {
+			identity.Origin = "http://projectsekai.fandom.com"
+			identity.CanonicalURL = "http://projectsekai.fandom.com/wiki/Synthetic_(Song)?oldid=375274"
+		},
+		"index.php revision URL": func(identity *LyricsSourceFixedIdentity) {
+			identity.CanonicalURL = "https://projectsekai.fandom.com/index.php?oldid=375274&title=Synthetic_(Song)"
+		},
+		"oldid differs from revision": func(identity *LyricsSourceFixedIdentity) {
+			identity.CanonicalURL = "https://projectsekai.fandom.com/wiki/Synthetic_(Song)?oldid=375275"
+		},
+		"sekaipedia provider": func(identity *LyricsSourceFixedIdentity) {
+			identity.Provider = LyricsSourceProviderSekaipedia
+			identity.RevisionTimestamp = "2026-07-27T16:29:13Z"
+		},
+		"moegirl provider": func(identity *LyricsSourceFixedIdentity) {
+			identity.Provider = LyricsSourceProviderMoegirl
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			identity := projectSekai()
+			mutate(&identity)
+			if err := ValidateLyricsSourceFixedIdentity(identity); err == nil {
+				t.Fatalf("identity with origin %q and URL %q was accepted", identity.Origin, identity.CanonicalURL)
+			}
+		})
+	}
+}
+
 func TestValidateLyricsSourceFixedIdentityRequiresSekaipediaRevisionTimestampAndWikiURL(t *testing.T) {
 	for name, mutate := range map[string]func(*LyricsSourceFixedIdentity){
 		"missing revision timestamp": func(identity *LyricsSourceFixedIdentity) {

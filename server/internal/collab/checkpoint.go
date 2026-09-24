@@ -43,7 +43,7 @@ func (s *Service) Checkpoint(ctx context.Context, musicID int, user string) (any
 	}
 	room := roomName(musicID, baseline.epoch)
 	if baseline.baseRevision == 0 {
-		// A first save establishes the immutable source envelope. Freeze the
+		// A first save establishes the persisted document envelope. Freeze the
 		// entire epoch before materializing it: invalidate unused tickets, reject
 		// in-flight authorizations, disconnect peers, and wait for ygo's
 		// persistence worker to drain. Reloading afterwards includes every update
@@ -75,6 +75,11 @@ func (s *Service) Checkpoint(ctx context.Context, musicID int, user string) (any
 	if err != nil {
 		return nil, false, err
 	}
+	if rendition, ok := draft.(store.LyricsRenditionDocument); ok {
+		// Consoles before the relation.lineIds fix left stale exact-projection
+		// Game rows in shared rooms, and rooms persist across restarts.
+		draft = store.ProjectExactGameTranslations(rendition)
+	}
 	_, _, draftRevision, _, err := canonicalDocument(draft)
 	if err != nil {
 		return nil, false, err
@@ -92,7 +97,17 @@ func (s *Service) Checkpoint(ctx context.Context, musicID int, user string) (any
 	var newRevision int
 	var authorityUpdate []byte
 	commitCheckpoint := func(tx *sql.Tx, final any, didChange bool) error {
-		_, newSHA, revision, kind, canonicalErr := canonicalDocument(final)
+		// The room fingerprints the default edition, the one authoritativeDocument
+		// reads; a checkpoint may save any edition.
+		authorityAfter := final
+		if rendition, ok := final.(store.LyricsRenditionDocument); ok && rendition.TranslationEditionKey != rendition.DefaultTranslationEditionKey {
+			defaultDocument, err := store.DefaultLyricsRenditionDocumentTx(tx, musicID)
+			if err != nil {
+				return err
+			}
+			authorityAfter = defaultDocument
+		}
+		_, newSHA, revision, kind, canonicalErr := canonicalDocument(authorityAfter)
 		if canonicalErr != nil {
 			return canonicalErr
 		}
@@ -209,20 +224,8 @@ func validateImmutableDraft(authority, draft any) error {
 		if !ok || requested.MusicID != current.MusicID {
 			return &CheckpointConflict{Code: "source_drift", Details: []string{"lyrics document kind or musicId changed"}, Current: authority}
 		}
-		if current.Revision == 0 {
-			return nil
-		}
-		if requested.SourcePageID != current.SourcePageID || requested.SourceRevisionID != current.SourceRevisionID ||
-			requested.SourceSHA1 != current.SourceSHA1 || requested.SourceFetchedAt != current.SourceFetchedAt || requested.SourceURL != current.SourceURL ||
-			len(requested.Lines) != len(current.Lines) {
-			return &CheckpointConflict{Code: "source_drift", Details: []string{"source provenance or ordered source lines changed"}, Current: authority}
-		}
-		for index := range current.Lines {
-			left, right := requested.Lines[index], current.Lines[index]
-			if left.ID != right.ID || left.Order != right.Order || left.Japanese != right.Japanese {
-				return &CheckpointConflict{Code: "source_drift", Details: []string{"line IDs, order, and Japanese source text are immutable"}, Current: authority}
-			}
-		}
+		// Legacy provenance, line structure and Japanese stay editable after the
+		// first save; the store validates them like any ordinary save.
 		return nil
 	case store.LyricsRenditionDocument:
 		requested, ok := draft.(store.LyricsRenditionDocument)

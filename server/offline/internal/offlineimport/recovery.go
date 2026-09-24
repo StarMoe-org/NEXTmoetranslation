@@ -30,12 +30,20 @@ const (
 	// the editor-seed ledger, v29 adds peer-side translation storage, v30 adds
 	// lazily materialized translation editions, v31 adds yjs collaboration,
 	// v32-v34 adds multi-edition translations for song 682, v35 adds the
-	// public withdrawal markers, and v36 moves the reviewed Sekaipedia
-	// provider maps into the database. None changes those inputs or their
-	// catalog identity, so reviewed imports may run on any contiguous v27-v36
-	// database.
+	// public withdrawal markers, v36 moves the reviewed Sekaipedia provider
+	// maps into the database, v37 only widens the artifact origin CHECK for
+	// projectsekai.fandom, and v38 only adds lyrics_recovery_takeovers. None
+	// changes those inputs or their catalog identity, so reviewed imports may
+	// run on any contiguous v27-v38 database.
 	lyricsRecoveryImportRuntimeSchema          = 27
-	lyricsImportMaximumCompatibleRuntimeSchema = 36
+	lyricsImportMaximumCompatibleRuntimeSchema = 38
+	// lyricsRecoveryTakeoverRuntimeSchema added lyrics_recovery_takeovers.
+	lyricsRecoveryTakeoverRuntimeSchema = 38
+	// lyricsEmbeddedEditorSeedRuntimeSchema added embedded_lyrics_editor_seed_batches.
+	lyricsEmbeddedEditorSeedRuntimeSchema = 28
+	// lyricsEditorManifestBatchSHA256 is store's lyricsDocumentManifestBatchSHA256:
+	// whole-song document publishes and the migration v32 song-682 document.
+	lyricsEditorManifestBatchSHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
 )
 
 var ErrLyricsRecoveryImportDrift = errors.New("lyrics recovery import no longer matches its catalog, root, or evidence pack")
@@ -158,6 +166,10 @@ func ImportRecoveryLyricsManifestWithCommitHook(
 		if err := verifyRecoveryImportBatchTx(ctx, tx, root, manifest, receipt, actor); err != nil {
 			return nil, false, err
 		}
+	} else if err := refuseRecoveryItemsForTakenOverSongs(ctx, tx, manifest); err != nil {
+		return nil, false, err
+	} else if err := refuseRecoveryItemsForEditorOwnedSongs(ctx, tx, manifest); err != nil {
+		return nil, false, err
 	} else if err := insertRecoveryImportBatchTx(ctx, tx, root, manifest, receipt, actor, now); err != nil {
 		return nil, false, err
 	}
@@ -765,6 +777,81 @@ func verifyRecoveryFullSourceDocumentTx(ctx context.Context, tx *sql.Tx, batchSH
 			}
 			return fmt.Errorf("%w: music %d rendition localizations changed", ErrLyricsRecoveryImportDrift, item.MusicID)
 		}
+	}
+	return nil
+}
+
+// refuseRecoveryItemsForTakenOverSongs refuses a new batch with an item for a
+// song whose ledger item a whole-song lyrics document publish took over. The
+// editor document owns that song, and ensureRecoveryItemOwnsNoEditableLyrics
+// only sees song_lyrics, so a new availability document would land beside it.
+func refuseRecoveryItemsForTakenOverSongs(ctx context.Context, tx *sql.Tx, manifest lyricsrecoveryimport.Manifest) error {
+	var hasTakeovers bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=?)`,
+		lyricsRecoveryTakeoverRuntimeSchema).Scan(&hasTakeovers); err != nil {
+		return err
+	}
+	if !hasTakeovers {
+		return nil
+	}
+	for _, item := range manifest.Items {
+		var takenOver bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM lyrics_recovery_takeovers WHERE music_id=?)`,
+			item.MusicID).Scan(&takenOver); err != nil {
+			return err
+		}
+		if takenOver {
+			return fmt.Errorf("%w: music %d was taken over by a whole-song lyrics document publish; a new recovery batch cannot add an item for it",
+				store.ErrLyricsRecoveryImportConflict, item.MusicID)
+		}
+	}
+	return nil
+}
+
+// refuseRecoveryItemsForEditorOwnedSongs refuses a new batch with an item for a
+// song whose source document the editor owns: the all-zero manifest batch of a
+// whole-song document publish or migration v32, or an embedded editor seed.
+// Such a song need not have a ledger item or takeover, and an availability
+// item would land beside its document. Recovery-batch and staged-import
+// documents carry their own manifest digests and keep the per-item checks.
+func refuseRecoveryItemsForEditorOwnedSongs(ctx context.Context, tx *sql.Tx, manifest lyricsrecoveryimport.Manifest) error {
+	var hasSeedBatches bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=?)`,
+		lyricsEmbeddedEditorSeedRuntimeSchema).Scan(&hasSeedBatches); err != nil {
+		return err
+	}
+	query := `SELECT music_id,manifest_batch_sha256 FROM song_lyrics_source_documents WHERE manifest_batch_sha256=?`
+	if hasSeedBatches {
+		query += ` OR manifest_batch_sha256 IN (SELECT seed_sha256 FROM embedded_lyrics_editor_seed_batches)`
+	}
+	rows, err := tx.QueryContext(ctx, query, lyricsEditorManifestBatchSHA256)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	owners := map[int]string{}
+	for rows.Next() {
+		var musicID int
+		var batchSHA256 string
+		if err := rows.Scan(&musicID, &batchSHA256); err != nil {
+			return err
+		}
+		owners[musicID] = batchSHA256
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, item := range manifest.Items {
+		owner, found := owners[item.MusicID]
+		if !found {
+			continue
+		}
+		if owner == lyricsEditorManifestBatchSHA256 {
+			return fmt.Errorf("%w: music %d already has a source document published by the lyrics editor; a new recovery batch cannot add an item for it",
+				store.ErrLyricsRecoveryImportConflict, item.MusicID)
+		}
+		return fmt.Errorf("%w: music %d already has a source document from embedded lyrics editor seed %s; a new recovery batch cannot add an item for it",
+			store.ErrLyricsRecoveryImportConflict, item.MusicID, owner)
 	}
 	return nil
 }

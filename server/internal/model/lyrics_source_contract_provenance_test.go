@@ -276,3 +276,28 @@ func TestValidateLyricsSourceFullRejectsRubyOrSegmentDrift(t *testing.T) {
 		})
 	}
 }
+
+func TestLyricsSourceProviderOriginsAcceptProjectSekaiFandomForVocaloidFandom(t *testing.T) {
+	tests := []struct {
+		provider LyricsSourceProvider
+		origin   string
+		want     bool
+	}{
+		{LyricsSourceProviderVocaloidFandom, "https://vocaloid.fandom.com", true},
+		{LyricsSourceProviderVocaloidFandom, "https://projectsekai.fandom.com", true},
+		{LyricsSourceProviderVocaloidFandom, "https://www.sekaipedia.org", false},
+		{LyricsSourceProviderSekaipedia, "https://www.sekaipedia.org", true},
+		{LyricsSourceProviderSekaipedia, "https://projectsekai.fandom.com", false},
+		{LyricsSourceProviderMoegirl, "https://moegirl.icu", true},
+		{LyricsSourceProviderMoegirlPublicExact, "https://zh.moegirl.org.cn", true},
+		{LyricsSourceProvider("unknown"), "https://vocaloid.fandom.com", false},
+	}
+	for _, test := range tests {
+		if got := LyricsSourceProviderAcceptsOrigin(test.provider, test.origin); got != test.want {
+			t.Errorf("LyricsSourceProviderAcceptsOrigin(%q, %q) = %t, want %t", test.provider, test.origin, got, test.want)
+		}
+	}
+	if origins := LyricsSourceProviderOrigins(LyricsSourceProviderVocaloidFandom); len(origins) == 0 || origins[0] != LyricsSourceOriginVocaloidFandom {
+		t.Fatalf("vocaloid_fandom primary origin = %v", origins)
+	}
+}

@@ -36,6 +36,7 @@ type recoveryBackupGraph struct {
 	batches                 map[string]LyricsRecoveryBatchBackupRecord
 	coverageByBatch         map[string]lyricscontract.Coverage
 	items                   map[recoveryBackupItemIdentity]LyricsRecoveryItemBackupRecord
+	supersededDocuments     map[recoveryBackupItemIdentity]LyricsRecoveryTakeoverDocumentBackupRecord
 	sourceDocuments         map[recoveryBackupItemIdentity]model.LyricsSourceDocument
 	availability            map[recoveryBackupItemIdentity]model.LyricsAvailabilityDocument
 	expectedFixedIdentities map[recoveryBackupArtifactIdentity]string
@@ -52,7 +53,8 @@ func validateRestoredLyricsRecoveryProvenance(
 ) error {
 	if len(lyrics.RecoveryBatches) == 0 {
 		if len(lyrics.RecoveryItems)+len(lyrics.RecoverySourceEvidence)+len(lyrics.RecoveryArtifacts)+
-			len(lyrics.RecoveryArtifactEvidence)+len(lyrics.RecoveryContributions)+len(lyrics.AvailabilityDocuments) != 0 {
+			len(lyrics.RecoveryArtifactEvidence)+len(lyrics.RecoveryContributions)+len(lyrics.AvailabilityDocuments)+
+			len(lyrics.RecoveryTakeovers) != 0 {
 			return errors.New("lyrics recovery backup has graph rows without a batch")
 		}
 		return nil
@@ -63,6 +65,9 @@ func validateRestoredLyricsRecoveryProvenance(
 		return err
 	}
 	if err := graph.validateItems(lyrics, musicIDs); err != nil {
+		return err
+	}
+	if err := graph.validateTakeovers(lyrics); err != nil {
 		return err
 	}
 	if err := graph.validateSourceDocuments(lyrics, documentIDs); err != nil {
@@ -235,8 +240,90 @@ func (graph *recoveryBackupGraph) validateSourceDocuments(lyrics LyricsContentEx
 		}
 		sourceDocuments[identity] = document
 	}
+	// A superseded document is the item's source document for every ledger
+	// check below. Its song now owns a different document, so the current
+	// legacy/source-v3 ownership rules above do not apply to it.
+	for identity, record := range graph.supersededDocuments {
+		item := items[identity]
+		document, err := model.DecodeLyricsSourceDocument([]byte(record.DocumentJSON))
+		canonicalJSON, canonicalErr := json.Marshal(document)
+		digest := sha256.Sum256([]byte(record.DocumentJSON))
+		if err != nil || canonicalErr != nil || string(canonicalJSON) != record.DocumentJSON ||
+			record.DocumentSHA256 != hex.EncodeToString(digest[:]) || record.DocumentSHA256 != item.DocumentSHA256 ||
+			document.SchemaVersion != record.SchemaVersion || string(document.ReasonCode) != record.ReasonCode ||
+			item.State != string(lyricscontract.CoverageComplete) && item.State != string(lyricscontract.CoverageGameOnly) ||
+			item.State == string(lyricscontract.CoverageGameOnly) && document.SchemaVersion != model.LyricsSourceDocumentSchemaVersionV3 ||
+			record.CreatedAt <= 0 || validateStoreV3DocumentGraph(document) != nil {
+			return fmt.Errorf("lyrics recovery takeover %s/%d superseded document is invalid", identity.batchSHA256, identity.musicID)
+		}
+		if _, current := sourceDocuments[identity]; current {
+			return fmt.Errorf("lyrics recovery source document %s/%d is both current and superseded", identity.batchSHA256, identity.musicID)
+		}
+		if record.LocalizationsJSON != "" {
+			if err := validateLyricsRecoverySupersededLocalizations(record.LocalizationsJSON, document); err != nil {
+				return fmt.Errorf("lyrics recovery takeover %s/%d superseded localizations are invalid: %w",
+					identity.batchSHA256, identity.musicID, err)
+			}
+		}
+		sourceDocuments[identity] = document
+	}
 	graph.sourceDocuments = sourceDocuments
 	return nil
+}
+
+// validateTakeovers requires every takeover to name one ledger item of its
+// song with that item's state, and to carry the item's source document exactly
+// when the item pinned one.
+func (graph *recoveryBackupGraph) validateTakeovers(lyrics LyricsContentExport) error {
+	superseded := make(map[recoveryBackupItemIdentity]LyricsRecoveryTakeoverDocumentBackupRecord)
+	takenOver := make(map[int]bool, len(lyrics.RecoveryTakeovers))
+	for _, record := range lyrics.RecoveryTakeovers {
+		identity := recoveryBackupItemIdentity{batchSHA256: record.BatchSHA256, musicID: record.MusicID}
+		item, exists := graph.items[identity]
+		if !exists || record.MusicID <= 0 || record.ItemState != item.State ||
+			(record.SupersededDocument == nil) != (item.DocumentSHA256 == "") || record.TakenOverAt <= 0 {
+			return fmt.Errorf("lyrics recovery takeover %s/%d is invalid", record.BatchSHA256, record.MusicID)
+		}
+		if takenOver[record.MusicID] {
+			return fmt.Errorf("lyrics recovery takeover %d is duplicated", record.MusicID)
+		}
+		takenOver[record.MusicID] = true
+		if record.SupersededDocument != nil {
+			superseded[identity] = *record.SupersededDocument
+		}
+	}
+	graph.supersededDocuments = superseded
+	return nil
+}
+
+// validateLyricsRecoverySupersededLocalizations accepts a takeover's
+// localizations_json only as the canonical encoding, in primary-key order, of
+// rows that satisfy the content backup's localization and translation-edition
+// rules for the superseded source v3 document.
+func validateLyricsRecoverySupersededLocalizations(body string, document model.LyricsSourceDocument) error {
+	if document.SchemaVersion != model.LyricsSourceDocumentSchemaVersionV3 {
+		return errors.New("only a source v3 document owns rendition localizations")
+	}
+	value, err := decodeLyricsRecoverySupersededLocalizations(body)
+	if err != nil {
+		return err
+	}
+	if !value.inPrimaryKeyOrder() {
+		return errors.New("superseded localization rows are not in primary-key order")
+	}
+	const documentID = 1
+	rows := value.contentRows(documentID)
+	documents := map[int64]model.LyricsSourceDocument{documentID: document}
+	digest, err := renditionLocalizationBackupDigest(rows, documentID, document)
+	if err != nil {
+		return err
+	}
+	if err := validateRenditionLocalizationBackup(rows, map[int64]LyricsSourceDocumentBackupRecord{
+		documentID: {DocumentID: documentID, RenditionLocalizationsSHA256: digest},
+	}, documents); err != nil {
+		return err
+	}
+	return validateTranslationEditionBackup(rows, documents)
 }
 
 func (graph *recoveryBackupGraph) validateAvailabilityDocuments(lyrics LyricsContentExport) error {
