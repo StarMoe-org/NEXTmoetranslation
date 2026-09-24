@@ -163,10 +163,10 @@ function normalizeImportedEventText(speaker, text) {
   return normalized;
 }
 
-// SekaiText's Simplified Chinese dialogue punctuation; other locales keep the TXT as written.
+// SekaiText's Simplified Chinese dialogue punctuation, except that 「……」 stays as the style guide
+// and the official zh-CN text write it; other locales keep the TXT as written.
 function chineseDialoguePunctuation(text) {
   return text
-    .replaceAll("…", "...")
     .replaceAll("(", "（")
     .replaceAll(")", "）")
     .replaceAll(",", "，")
@@ -248,8 +248,9 @@ function importedRows(talks, locale) {
           : "dialogue";
     rows.push({ line: talk.idx, speaker: talk.speaker, text: talk.text, kind });
   }
-  if (locale === "zh-CN") {
-    for (const row of rows) if (row.kind === "dialogue") row.text = chineseDialoguePunctuation(row.text);
+  for (const row of rows) {
+    row.raw = row.text;
+    if (locale === "zh-CN" && row.kind === "dialogue") row.text = chineseDialoguePunctuation(row.text);
   }
   return rows;
 }
@@ -323,10 +324,21 @@ function alignmentCandidates(source, imported) {
   return { sourceCandidates, importedCandidates };
 }
 
+// The TXT parser trims each line, so the Japanese is compared trimmed the same way.
+function trimLines(text) {
+  return text.split("\n").map((part) => part.trim()).join("\n");
+}
+
+function lineBreaks(value) {
+  return value.split("\n").length - 1;
+}
+
+// importedRaw is the TXT text as written; importedValue, after punctuation conversion, is what gets saved.
 // repeatsJapanese(value, japanese) tells whether a value is still the untranslated Japanese.
-function translationPreviewRow(source, imported, segment, target, importedValue, rowID, repeatsJapanese) {
+function translationPreviewRow(source, imported, segment, target, importedValue, importedRaw, rowID, repeatsJapanese) {
   const japanese = target === "speaker" ? splitSpeaker(segment.japanese) : segment.japanese;
   const current = segment.text || "";
+  const stillJapanese = (value) => repeatsJapanese(trimLines(value), trimLines(japanese));
   const base = {
     id: rowID(segment, target),
     target,
@@ -341,18 +353,26 @@ function translationPreviewRow(source, imported, segment, target, importedValue,
     current,
     imported: importedValue,
   };
-  if (!importedValue || repeatsJapanese(importedValue, japanese)) {
+  if (!importedValue || stillJapanese(importedRaw)) {
     return { ...base, status: "missing", reason: importedValue ? "TXT 仍是当前日文原文，不会把原文写入译文字段" : "TXT 对应译文为空", selectable: false, selectedByDefault: false };
   }
   if (importedValue === current) {
     return { ...base, status: "matched", reason: "TXT 译文与当前权威译文一致，无需写入草稿", selectable: false, selectedByDefault: false };
   }
-  if (current && !repeatsJapanese(current, japanese)) {
-    return { ...base, status: "conflict", reason: "TXT 译文与当前权威译文不同；检查后可显式选择覆盖到本地草稿", selectable: true, selectedByDefault: false };
+  const lineCount = target === "body" && lineBreaks(importedValue) !== lineBreaks(japanese)
+    ? `换行数与日文不一致（日文 ${lineBreaks(japanese)} 处，TXT ${lineBreaks(importedValue)} 处）`
+    : "";
+  if (current && !stillJapanese(current)) {
+    return { ...base, status: "conflict", reason: `TXT 译文与当前权威译文不同；检查后可显式选择覆盖到本地草稿${lineCount ? `；${lineCount}` : ""}`, selectable: true, selectedByDefault: false };
+  }
+  if (lineCount) {
+    return { ...base, status: "matched", reason: `${lineCount}；检查后可手动勾选`, selectable: true, selectedByDefault: false };
   }
   return { ...base, status: "matched", reason: "已按权威场景结构与 segment 身份对齐", selectable: true, selectedByDefault: true };
 }
 
+// A zh-CN event save updates the line's legacy row, which stored episodes often lack for text
+// equal to the Japanese (a shared name), so unlike side stories such text stays untranslated here.
 export function eventEpisodeTxtImportPreview(snapshot, talks) {
   return txtImportPreview(snapshot, snapshotScenarioState(snapshot), talks, (segment, target) => `${segment.id}:${target}`,
     (value, japanese) => value === japanese);
@@ -438,10 +458,11 @@ function txtImportPreview(snapshot, state, talks, rowID, repeatsJapanese) {
       });
       return;
     }
-    rows.push(translationPreviewRow(sourceRow, importedRow, body, "body", importedRow.text, rowID, repeatsJapanese));
+    rows.push(translationPreviewRow(sourceRow, importedRow, body, "body", importedRow.text, importedRow.raw, rowID, repeatsJapanese));
     if (sourceRow.kind === "dialogue") {
       const speaker = state.byPosition.get(sourceRow.talk.talkDataIndex * 2 + 1);
-      if (speaker) rows.push(translationPreviewRow(sourceRow, importedRow, speaker, "speaker", splitSpeaker(importedRow.speaker), rowID, repeatsJapanese));
+      const name = splitSpeaker(importedRow.speaker);
+      if (speaker) rows.push(translationPreviewRow(sourceRow, importedRow, speaker, "speaker", name, name, rowID, repeatsJapanese));
     }
   });
 

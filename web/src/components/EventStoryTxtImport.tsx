@@ -256,7 +256,7 @@ export function EventStoryTxtImport({ eventId, locale, entries, defaultEpisodeNo
         {error && <div className="event-txt-import-error" role="alert">{error}</div>}
         {preview && <>
           <TxtImportPreviewTable preview={preview} fileName={fileName} selectedRows={selectedRows} onToggle={toggleRow} note={
-            <p className="dirty-guard-copy">仅默认选择空白译文字段。已有译文不同的行会标记为冲突，必须手动勾选才会覆盖到本地草稿；此步骤不会写入服务器。</p>
+            <p className="dirty-guard-copy">仅默认选择空白且换行数与日文一致的译文字段。已有译文不同的行会标记为冲突，换行数不一致的行会在说明中注明，都必须手动勾选才会覆盖到本地草稿；此步骤不会写入服务器。</p>
           } />
           <div className="dirty-guard-actions">
             <span className="event-txt-import-selection">已选择 {selectedCount} 条</span>

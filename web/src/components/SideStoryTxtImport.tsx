@@ -180,7 +180,7 @@ export function SideStoryTxtImport({ kind, storyId, locale, entries, episodes, d
         )}
         {preview && conflicts.length === 0 && (
           <TxtImportPreviewTable preview={preview} fileName={fileName} selectedRows={selectedRows} onToggle={toggleRow} note={
-            <p className="dirty-guard-copy">仅默认选择空白译文字段；已有不同译文的行需手动勾选。保存时所选行以一次批量请求写入服务器，任何一行在预览后被他人修改则整批都不写入。</p>
+            <p className="dirty-guard-copy">仅默认选择空白且换行数与日文一致的译文字段；已有不同译文或换行数不一致的行需手动勾选。保存时所选行以一次批量请求写入服务器，任何一行在预览后被他人修改则整批都不写入。</p>
           } />
         )}
         <div className="dirty-guard-actions">

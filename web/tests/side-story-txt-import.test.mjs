@@ -90,8 +90,7 @@ test("event and side-story snapshots are not interchangeable", async () => {
   const snapshot = await sideSnapshot();
   await assert.rejects(validateEventEpisodeSnapshot(snapshot), /event episode identity is invalid/);
   assert.throws(() => eventEpisodeTxtImportPreview(snapshot, parseEventTxtContent(txt)), /event episode identity is invalid/);
-  const eventShaped = { ...snapshot, kind: undefined, id: undefined, episode: undefined, eventId: 44, episodeNo: "1" };
-  assert.throws(() => sideStoryEpisodeTxtImportPreview(eventShaped, parseEventTxtContent(txt)), /side story episode identity is invalid/);
+  assert.throws(() => sideStoryEpisodeTxtImportPreview(eventShaped(snapshot), parseEventTxtContent(txt)), /side story episode identity is invalid/);
 });
 
 test("the side-story preview keys rows by position and saves a repeated Japanese line once", async () => {
@@ -122,9 +121,9 @@ test("an en-US side-story preview keeps the TXT punctuation and zh-CN converts i
   assert.deepEqual(await imported("zh-CN"), ["Wait， really？！", "（test）～"]);
 });
 
-// Synthetic script: the first and third speakers are kana-free like names Chinese shares with Japanese.
-function kanaFreeSpeakerSnapshot() {
-  const talkData = [["試験", "テスト台詞一"], ["テスト話者", "テスト台詞二"], ["検査", "テスト台詞三"]];
+// Synthetic script shaped like the server's snapshot: a segment is keyed by its trimmed text and
+// carries the Body as written; `official` maps keys to current official text.
+function sideScript(talkData, { locale = "zh-CN", official = {} } = {}) {
   const rawJson = JSON.stringify({
     ScenarioId: "test_card_102_1",
     Snippets: talkData.map((_, index) => ({ Action: 1, ReferenceIndex: index })),
@@ -132,19 +131,29 @@ function kanaFreeSpeakerSnapshot() {
     SpecialEffectData: [],
     AppearCharacters: [],
   });
-  const segment = (id, position, text = "", revision = 0, source = "") =>
-    ({ id, kind: "talk", position, japanese: id, sourceHash: "", text, source, revision });
+  const segment = (japanese, position) => {
+    const id = japanese.trim();
+    return official[id]
+      ? { id, kind: "talk", position, japanese, sourceHash: "", text: official[id], source: "official", revision: 1 }
+      : { id, kind: "talk", position, japanese, sourceHash: "", text: "", source: "", revision: 0 };
+  };
   return {
-    kind: "card", id: "102", episode: "1", locale: "zh-CN", revision: "test-snapshot-revision",
-    segments: [
-      segment("テスト台詞一", 0), segment("試験", 1), segment("テスト台詞二", 2), segment("テスト話者", 3),
-      segment("テスト台詞三", 4), segment("検査", 5, "検査", 1, "official"),
-    ],
+    kind: "card", id: "102", episode: "1", locale, revision: "test-snapshot-revision",
+    segments: talkData.flatMap(([speaker, body], index) => [segment(body, index * 2), segment(speaker, index * 2 + 1)]),
     scenario: {
       scenarioId: "test_card_102_1", fileName: "test_card_102_1.json", sha256: "", parserVersion: 1, rawJson,
       sourceTalks: talkData.map(([speaker, text], index) => ({ speaker, text, charIndex: 0, talkDataIndex: index })),
     },
   };
+}
+
+// The first and third speakers are kana-free like names Chinese shares with Japanese.
+function kanaFreeSpeakerSnapshot() {
+  return sideScript([["試験", "テスト台詞一"], ["テスト話者", "テスト台詞二"], ["検査", "テスト台詞三"]], { official: { 検査: "検査" } });
+}
+
+function eventShaped(snapshot) {
+  return { ...snapshot, kind: undefined, id: undefined, episode: undefined, eventId: 44, episodeNo: "1" };
 }
 
 test("text equal to kana-free Japanese is a side-story translation, but not in the event preview", () => {
@@ -159,10 +168,58 @@ test("text equal to kana-free Japanese is a side-story translation, but not in t
   assert.deepEqual(sideStoryTxtImportEdits(preview, defaults).find((edit) => edit.jp === "試験"),
     { jp: "試験", text: "試験", source: "human", expectedRevision: 0 });
 
-  const eventShaped = { ...kanaFreeSpeakerSnapshot(), kind: undefined, id: undefined, episode: undefined, eventId: 44, episodeNo: "1" };
-  const event = new Map(eventEpisodeTxtImportPreview(eventShaped, talks).rows.map((row) => [row.id, row]));
+  // A zh-CN event save of such a name finds no legacy line row and fails with 404.
+  const event = new Map(eventEpisodeTxtImportPreview(eventShaped(kanaFreeSpeakerSnapshot()), talks).rows.map((row) => [row.id, row]));
   assert.equal(event.get("試験:speaker").status, "missing");
+  assert.equal(event.get("テスト話者:speaker").status, "missing");
   assert.deepEqual([event.get("検査:speaker").status, event.get("検査:speaker").selectedByDefault], ["matched", true]);
+});
+
+test("a TXT line still in Japanese is refused before its punctuation is converted", () => {
+  const talks = parseEventTxtContent("测试话者：……うん！　そうだよね！\n测试话者：テスト台詞!?\n");
+  for (const locale of ["zh-CN", "en-US"]) {
+    const snapshot = sideScript([["テスト話者", "……うん！　そうだよね！"], ["テスト話者", "テスト台詞!?"]], { locale });
+    const rows = new Map(sideStoryEpisodeTxtImportPreview(snapshot, talks).rows.map((row) => [row.id, row]));
+    assert.deepEqual([rows.get("0:body").status, rows.get("0:body").selectable], ["missing", false], locale);
+    assert.deepEqual([rows.get("2:body").status, rows.get("2:body").selectable], ["missing", false], locale);
+  }
+});
+
+test("a Japanese body ending in an ideographic space is refused when the TXT keeps it", () => {
+  const talks = parseEventTxtContent("测试话者：テスト台詞です。\u3000\n");
+  for (const locale of ["zh-CN", "en-US"]) {
+    const snapshot = sideScript([["テスト話者", "テスト台詞です。\u3000"]], { locale });
+    const row = sideStoryEpisodeTxtImportPreview(snapshot, talks).rows.find((candidate) => candidate.id === "0:body");
+    assert.deepEqual([row.status, row.selectable], ["missing", false], locale);
+  }
+});
+
+test("current text equal to the trimmed Japanese is still untranslated, so the TXT is selected", () => {
+  const snapshot = sideScript([["テスト話者", "テスト台詞です。\u3000"]]);
+  Object.assign(snapshot.segments[0], { text: "テスト台詞です。", source: "human", revision: 1 });
+  const talks = parseEventTxtContent("测试话者：测试台词\n");
+  const side = sideStoryEpisodeTxtImportPreview(snapshot, talks).rows.find((row) => row.id === "0:body");
+  assert.deepEqual([side.status, side.selectable, side.selectedByDefault], ["matched", true, true]);
+  const event = eventEpisodeTxtImportPreview(eventShaped(snapshot), talks).rows.find((row) => row.id === "テスト台詞です。:body");
+  assert.deepEqual([event.status, event.selectable, event.selectedByDefault], ["matched", true, true]);
+});
+
+test("a zh-CN line keeping 「……」 equal to the official text needs no write", () => {
+  const snapshot = sideScript([["テスト話者", "テスト台詞……"]], { official: { "テスト台詞……": "测试台词……", テスト話者: "测试话者" } });
+  const preview = sideStoryEpisodeTxtImportPreview(snapshot, parseEventTxtContent("测试话者：测试台词……\n"));
+  const row = preview.rows.find((candidate) => candidate.id === "0:body");
+  assert.deepEqual([row.status, row.selectable, row.imported], ["matched", false, "测试台词……"]);
+  assert.equal(sideStoryTxtImportEdits(preview, new Set(preview.rows.map((candidate) => candidate.id))).length, 0);
+});
+
+test("a body whose line count differs from the Japanese is selectable but not selected by default", () => {
+  const snapshot = sideScript([["テスト話者", "テスト台詞一\nテスト台詞二"], ["テスト話者", "テスト台詞三"]], { official: { テスト台詞三: "测试旧译" } });
+  const talks = parseEventTxtContent("测试话者：测试台词一\\N测试\\N台词二\n测试话者：测试台词三\\N测试新译\n");
+  const rows = new Map(sideStoryEpisodeTxtImportPreview(snapshot, talks).rows.map((row) => [row.id, row]));
+  assert.deepEqual([rows.get("0:body").status, rows.get("0:body").selectable, rows.get("0:body").selectedByDefault], ["matched", true, false]);
+  assert.match(rows.get("0:body").reason, /换行数与日文不一致（日文 1 处，TXT 2 处）/);
+  assert.deepEqual([rows.get("2:body").status, rows.get("2:body").selectable, rows.get("2:body").selectedByDefault], ["conflict", true, false]);
+  assert.match(rows.get("2:body").reason, /换行数与日文不一致（日文 0 处，TXT 1 处）/);
 });
 
 test("selected preview rows become one batch of human edits with their snapshot revisions", async () => {
