@@ -554,6 +554,29 @@ func TestApplySideStoryKeepsTheReasonOfALocaleLeftInErrorWithoutAFetch(t *testin
 	if state := sideStoryEpisodeState(t, s, "card", "170", "1"); applied.Error != "" || state.lastError != "" || applied.CNState != "imported" {
 		t.Fatalf("refresh after the CN error %+v stored %q", applied, state.lastError)
 	}
+
+	// A locale left in mismatch keeps its reason the same way.
+	jp2 := sideStoryTestScript(t, "test_card_170_02", sideStoryTestTalk{"テスト話者", "テスト台詞です"})
+	en2 := sideStoryTestScript(t, "test_card_170_02", sideStoryTestTalk{"Tester", "Test line one"}, sideStoryTestTalk{"Tester", "Test line two"})
+	cn2 := sideStoryTestScript(t, "test_card_170_02", sideStoryTestTalk{"测试说话人", "测试台词一"})
+	enReason := "en-US: TalkData length mismatch (1 != 2)"
+	for step, test := range []struct {
+		fetch SideStoryEpisodeFetch
+		want  string
+	}{
+		{SideStoryEpisodeFetch{JP: fetchedJP(jp2), CN: SideStoryFetchOutcome{Attempted: true, Missing: true}, EN: fetchedJP(en2)},
+			"zh-CN: not found; " + enReason},
+		{SideStoryEpisodeFetch{JP: fetchedJP(jp2), CN: SideStoryFetchOutcome{Attempted: true, Err: "GET cn-a: timeout", Transient: true}},
+			"zh-CN: GET cn-a: timeout; " + enReason},
+		{SideStoryEpisodeFetch{JP: SideStoryFetchOutcome{Attempted: true, Err: "timeout", Transient: true}}, "ja-JP: timeout; " + enReason},
+		{SideStoryEpisodeFetch{JP: fetchedJP(jp2), CN: fetchedJP(cn2)}, enReason},
+	} {
+		test.fetch.Kind, test.fetch.StoryID, test.fetch.EpisodeKey = "card", "170", "2"
+		applied := mustApplySideStory(t, s, sideStoryTestNow, test.fetch).Episodes[0]
+		if state := sideStoryEpisodeState(t, s, "card", "170", "2"); applied.Error != test.want || state.lastError != test.want || applied.ENState != "mismatch" {
+			t.Fatalf("mismatch step %d result %+v stored %q want %q", step+1, applied, state.lastError, test.want)
+		}
+	}
 }
 
 func TestApplySideStoryJPFailureLeavesAStoredScriptTheBackfillWillNotFetchAgain(t *testing.T) {
@@ -589,6 +612,16 @@ func TestApplySideStoryJPFailureLeavesAStoredScriptTheBackfillWillNotFetchAgain(
 	if state := sideStoryEpisodeState(t, s, "card", "181", "2"); state.attempts != 1 ||
 		state.nextAttemptAt != later.Add(10*time.Minute).Unix() || state.lastError != "ja-JP: timeout" {
 		t.Fatalf("queued episode JP failure state %+v", state)
+	}
+	// So does a changed JP path of a stored script.
+	moved := sideStoryTestCard("180", 1, "", "")
+	moved.Episodes[0].JPAssetPath += "_v2"
+	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, moved)
+	mustApplySideStory(t, s, later, SideStoryEpisodeFetch{Kind: "card", StoryID: "180", EpisodeKey: "1",
+		JP: SideStoryFetchOutcome{Attempted: true, Err: "timeout", Transient: true}})
+	if state := sideStoryEpisodeState(t, s, "card", "180", "1"); state.sha != stored["180/1"].sha || state.attempts != 1 ||
+		state.nextAttemptAt != later.Add(10*time.Minute).Unix() || state.lastError != "ja-JP: timeout" {
+		t.Fatalf("changed JP path failure state %+v", state)
 	}
 }
 
