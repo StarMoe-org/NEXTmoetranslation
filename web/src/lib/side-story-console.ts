@@ -174,6 +174,9 @@ const SELF_EXPLANATORY_CODES = new Set(["backfill_disabled", "script_not_fetched
 
 /** Contract errors carry only the code in `error`; the reason is in `details`. */
 export function sideStoryErrorMessage(error: unknown, fallback: string): string {
+  // apiFetch passes fetch's rejection through: an unreachable server is a TypeError
+  // whose English message differs per browser ("Failed to fetch", "Load failed", ...).
+  if (error instanceof TypeError) return `${fallback}：无法连接服务器`;
   const e = error as ContractErrorLike | null;
   const mapped = e && typeof e.code === "string" ? ERROR_MESSAGES[e.code] : undefined;
   const message = mapped || (e && typeof e.message === "string" && e.message ? e.message : fallback);

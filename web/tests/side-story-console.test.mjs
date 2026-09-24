@@ -234,6 +234,15 @@ test("error messages append the contract details and map the runner codes", () =
   assert.equal(model.sideStoryErrorMessage(null, "兜底"), "兜底");
 });
 
+test("an unreachable server shows the Chinese fallback instead of the browser's English fetch error", () => {
+  // fetch rejects with a TypeError; apiFetch passes it through without a status or code.
+  for (const reason of ["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."]) {
+    assert.equal(model.sideStoryErrorMessage(new TypeError(reason), "回填进度载入失败"), "回填进度载入失败：无法连接服务器", reason);
+  }
+  assert.equal(model.sideStoryErrorMessage(new TestAPIError(502, { error: "upstream_unavailable" }), "兜底"), "上游服务暂时不可用，请稍后重试");
+  assert.equal(model.sideStoryErrorMessage(new TestAPIError(503, { error: "Service Unavailable" }), "兜底"), "Service Unavailable");
+});
+
 test("admin action results describe AI fill and refresh outcomes", () => {
   assert.equal(model.describeSideStoryAIResult({ translated: 3, remaining: 1 }, "2"), "AI 补充翻译完成（第 2 话）：已翻译 3 行，仍有 1 行未翻译");
   assert.match(model.describeSideStoryAIResult({ translated: 0, remaining: 0 }, ""), /（整篇）/);
