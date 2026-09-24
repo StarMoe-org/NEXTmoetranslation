@@ -148,24 +148,21 @@ func resolveRuntimeSettings(production bool) runtimeSettings {
 }
 
 // sideStorySourceEnv are the source URL env seedConfigFromEnv gained with side
-// stories. They get the upstream URL check seeding applies here, so a typo
-// fails before db.Open migrates the database.
-var sideStorySourceEnv = []string{
-	"UPSTREAM_EN_MASTERDATA_URL", "UPSTREAM_EN_MASTERDATA_FALLBACK_URL",
-	"UPSTREAM_JP_SCRIPTS_URL", "UPSTREAM_JP_SCRIPTS_FALLBACK_URL",
-	"UPSTREAM_CN_SCRIPTS_URL", "UPSTREAM_EN_SCRIPTS_URL",
+// stories, with their config keys. They get the seeding check here, so a bad
+// value fails before db.Open migrates the database.
+var sideStorySourceEnv = []struct{ env, key string }{
+	{"UPSTREAM_EN_MASTERDATA_URL", config.KeyUpstreamENMasterdataURL},
+	{"UPSTREAM_EN_MASTERDATA_FALLBACK_URL", config.KeyUpstreamENMasterdataFallbackURL},
+	{"UPSTREAM_JP_SCRIPTS_URL", config.KeyUpstreamJPScriptsURL},
+	{"UPSTREAM_JP_SCRIPTS_FALLBACK_URL", config.KeyUpstreamJPScriptsFallbackURL},
+	{"UPSTREAM_CN_SCRIPTS_URL", config.KeyUpstreamCNScriptsURL},
+	{"UPSTREAM_EN_SCRIPTS_URL", config.KeyUpstreamENScriptsURL},
 }
 
 func validateSideStorySourceEnv() error {
-	policy := httpx.UpstreamPolicyFromEnvironment()
-	templates := strings.NewReplacer("{repo}", "owner/repo", "{branch}", "main")
-	for _, name := range sideStorySourceEnv {
-		value := strings.TrimSpace(os.Getenv(name))
-		if value == "" {
-			continue
-		}
-		if err := httpx.ValidateUpstreamURL(templates.Replace(value), policy); err != nil {
-			return fmt.Errorf("%s contains an unsafe upstream URL: %w", name, err)
+	for _, source := range sideStorySourceEnv {
+		if err := config.ValidateSetting(source.key, os.Getenv(source.env)); err != nil {
+			return fmt.Errorf("%s: %w", source.env, err)
 		}
 	}
 	return nil

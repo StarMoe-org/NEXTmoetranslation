@@ -269,6 +269,8 @@ func TestInvalidSideStoryEnvFailsBeforeTheDatabaseIsOpened(t *testing.T) {
 		{"backfill batch", "SIDE_STORY_BACKFILL_BATCH=0", "SIDE_STORY_BACKFILL_BATCH must be"},
 		{"script source", "UPSTREAM_JP_SCRIPTS_URL=http://scripts.example.test/assets", "UPSTREAM_JP_SCRIPTS_URL"},
 		{"masterdata source", "UPSTREAM_EN_MASTERDATA_FALLBACK_URL=https://user@en.example.test/master", "UPSTREAM_EN_MASTERDATA_FALLBACK_URL"},
+		{"trailing carriage return", "UPSTREAM_JP_SCRIPTS_URL=https://scripts.example.test/assets\r", "UPSTREAM_JP_SCRIPTS_URL: upstream.jp_scripts_url must not contain control characters"},
+		{"over-long source", "UPSTREAM_CN_SCRIPTS_URL=https://scripts.example.test/" + strings.Repeat("a", 8192), "UPSTREAM_CN_SCRIPTS_URL: upstream.cn_scripts_url exceeds the 8192-byte"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			databasePath := filepath.Join(t.TempDir(), "must-not-exist", "database.db")

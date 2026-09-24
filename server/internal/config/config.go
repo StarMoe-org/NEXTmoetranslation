@@ -354,6 +354,15 @@ func (c *Config) encodeSetting(key, value string) (string, int, error) {
 	return stored, enc, nil
 }
 
+// ValidateSetting checks a value as SetManyIfAbsent does before seeding it: a
+// blank value is unset, anything else is validated as given.
+func ValidateSetting(key, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return validateSettingValue(key, value)
+}
+
 func validateSettingValue(key, value string) error {
 	canonicalBool := func() error {
 		if value != "true" && value != "false" {
