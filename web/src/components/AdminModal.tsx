@@ -74,7 +74,7 @@ const SETTING_HINTS: Record<string, React.ReactNode> = {
   "upstream.jp_scripts_fallback_url": <>只用于卡牌剧情；区域对话剧本不在该源上。</>,
   "upstream.fetch_concurrency": <>留空默认 4；低内存实例建议 2-4。</>,
   "scheduler.enabled": <>旧版 CN 自动同步：检测到上游版本变化后同步 CN 内容，并对新活动剧情自动调用 AI。修改后重启服务生效。</>,
-  "side_story_backfill.enabled": <>留空为 true。按间隔抓取卡牌剧情与区域对话剧本并导入官方 CN/EN 译文，不调用 AI，与“启用自动检测”无关；环境变量 SIDE_STORY_BACKFILL_ENABLED=false 时始终关闭。</>,
+  "side_story_backfill.enabled": <>未设置时为 true（保存后只能填 true 或 false）。按间隔抓取卡牌剧情与区域对话剧本并导入官方 CN/EN 译文，不调用 AI，与“启用自动检测”无关；环境变量 SIDE_STORY_BACKFILL_ENABLED=false 时始终关闭。</>,
   "backup.git.repo_url": (
     <>
       私有仓库需要把访问令牌写进 URL，格式：
