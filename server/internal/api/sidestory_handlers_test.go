@@ -921,6 +921,24 @@ func TestSideStorySnapshotSatisfiesTheConsoleImporter(t *testing.T) {
 	assertConsoleAcceptsSnapshot(t, area)
 }
 
+// Some real card scripts carry a leftover label in ScenarioId; the console
+// compares scenario.scenarioId with the rawJson's own ScenarioId.
+func TestSideStorySnapshotOfALabelledScriptSatisfiesTheConsoleImporter(t *testing.T) {
+	h := setupSideStoryAPI(t)
+	label := "test_card_501_02 のコピー"
+	value := sideStoryAPIScenario(t, label, sideStoryAPITalk{speaker: "テスト話者甲", body: "テスト台詞四"})
+	script := applySideStoryAPIScript(t, h.legacyAPIHarness, "card", "501", "2", value, label)
+	h.runner.scripts["card/501/2"] = script.CanonicalJSON
+	var snapshot consoleSnapshot
+	if code := h.call(t, http.MethodGet, "/api/editor/v1/story/card/501/2/snapshot?locale=zh-CN", h.editorToken, nil, &snapshot); code != http.StatusOK {
+		t.Fatalf("snapshot = %d", code)
+	}
+	assertConsoleAcceptsSnapshot(t, snapshot)
+	if snapshot.Scenario.ScenarioID != label || snapshot.Scenario.FileName != "test_card_501_02.json" {
+		t.Fatalf("snapshot scenario %q file %q", snapshot.Scenario.ScenarioID, snapshot.Scenario.FileName)
+	}
+}
+
 func TestSideStorySnapshotRejectsMissingOrChangedScripts(t *testing.T) {
 	h := setupSideStoryAPI(t)
 	h.expectError(t, http.MethodGet, "/api/editor/v1/story/card/501/2/snapshot?locale=zh-CN", h.token, nil, http.StatusConflict, "script_not_fetched")

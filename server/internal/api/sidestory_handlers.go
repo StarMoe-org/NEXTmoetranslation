@@ -296,7 +296,9 @@ func (s *Server) handleRefreshSideStory(w http.ResponseWriter, r *http.Request) 
 // GET /api/editor/v1/story/{kind}/{id}/{episode}/snapshot?locale=
 //
 // The live JP script must hash to the stored script_sha256, so the segments
-// built from it name exactly the lines a PUT accepts.
+// built from it name exactly the lines a PUT accepts. scenario.scenarioId is
+// the script's own ScenarioId, which in some card scripts is only a label;
+// fileName follows the catalog scenario id.
 func (s *Server) handleSideStorySnapshot(w http.ResponseWriter, r *http.Request) {
 	kind, id, ok := sideStoryPath(w, r)
 	if !ok {
@@ -342,6 +344,14 @@ func (s *Server) handleSideStorySnapshot(w http.ResponseWriter, r *http.Request)
 		writeContractError(w, http.StatusConflict, "script_changed", []string{"the Japanese script changed upstream; refresh the story before importing"}, nil)
 		return
 	}
+	var identity struct {
+		ScenarioID string `json:"ScenarioId"`
+	}
+	if err := json.Unmarshal([]byte(canonical), &identity); err != nil {
+		log.Printf("[api] side story %s/%s/%s scenario id: %v", kind, id, episodeKey, err)
+		writeContractError(w, http.StatusInternalServerError, "internal_error", nil, nil)
+		return
+	}
 	sourceTalks, err := store.ParseEventSourceTalks(canonical)
 	if err != nil {
 		log.Printf("[api] side story %s/%s/%s source talks: %v", kind, id, episodeKey, err)
@@ -358,7 +368,7 @@ func (s *Server) handleSideStorySnapshot(w http.ResponseWriter, r *http.Request)
 		Kind: kind, ID: id, Episode: episodeKey, Locale: locale,
 		Revision: sideStorySnapshotRevision(locale, digest, episode.Lines), Segments: segments,
 		Scenario: store.EventEpisodeScenarioSnapshot{
-			ScenarioID: episode.ScenarioID, FileName: episode.ScenarioID + ".json", SHA256: digest,
+			ScenarioID: identity.ScenarioID, FileName: episode.ScenarioID + ".json", SHA256: digest,
 			ParserVersion: store.EventScenarioParserVersion, RawJSON: canonical, SourceTalks: sourceTalks,
 		},
 	})
