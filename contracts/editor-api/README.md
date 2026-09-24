@@ -834,7 +834,7 @@ curl -sS "$BASE/api/editor/v1/story/card/501/1/snapshot?locale=zh-CN" -H "Author
 ```
 
 - 服务端现抓日文脚本，确认其 SHA-256 等于详情里的 `scriptSha256` 才返回。TalkData 第 i 条生成两个 segment：`position` 2i 是正文，`japanese` 为未去空白的 `Body`；`position` 2i+1 是说话人，`japanese` 为 `WindowDisplayName` 第一个 `_` 之前的部分。`id` 是对应行的 `jp`，`text`、`source`、`revision` 是该行当前的译文。重复的句子每次出现都有一个 segment，`id` 相同；正文或说话人为空时不生成 segment。
-- `revision` 是不透明字符串，日文脚本或这一话任何一行的 revision 变化时它就变。`scenario` 与活动剧情快照的形状相同。
+- `revision` 是不透明字符串，日文脚本或这一话任何一行的 revision 变化时它就变。`scenario` 与活动剧情快照的形状相同；`scenario.scenarioId` 是剧本自身的 `ScenarioId`，部分卡牌剧本里它只是标签（如 `016048_rui01 のコピー`），可能与目录的 scenarioId 不同，`fileName` 仍是目录 scenarioId 加 `.json`。
 - 写回时整话用一个 PUT，每个 `id` 只提交一次：`jp` 填 `id`，`expectedRevision` 填该 segment 的 `revision`。
 - 错误：`409 script_not_fetched`（日文脚本还没抓到）；`409 script_changed`（上游日文脚本变了，先调用 8.6 再导入）；`502 upstream_unavailable`（抓不到日文脚本）；缺少 `locale` 返回 `400 invalid_request`。
 
@@ -879,7 +879,7 @@ curl -sS -X POST "$BASE/api/editor/v1/stories/sync" -H "Authorization: Bearer $T
 # 202 {"started":true,"state":{…}}
 ```
 
-- `enabled` 要求环境变量 `SIDE_STORY_BACKFILL_ENABLED` 不为 false，且设置 `side_story_backfill.enabled` 不为 false（未设置即为开，每轮都读取）；它与 `scheduler.enabled` 无关。时间是 RFC 3339 UTC，未知时省略；`catalogRefreshedAt` 是卡牌和区域两个目录中较早的那次成功刷新时间，两个目录都刷新成功之前省略。上一轮出错时带 `lastRoundError`，producer 运行时它是 `a producer job is running; retrying next round`，推迟的这一轮最迟 5 秒后重试。`totals.<kind>.errors` 是记着日文抓取错误、仍待抓取的话数。`lastRound.errors` 是上一轮日文没抓到、或某语言变成 `error`/`mismatch` 的话数；`lastRound.retrying` 是其余带 `lastError` 的话数，即某语言因 404、镜像仍返回日文或暂时性错误而保持 `pending`、等待自动重试。
+- `enabled` 要求环境变量 `SIDE_STORY_BACKFILL_ENABLED` 不为 false，且设置 `side_story_backfill.enabled` 不为 false（未设置即为开，每轮都读取）；它与 `scheduler.enabled` 无关。时间是 RFC 3339 UTC，未知时省略；`catalogRefreshedAt` 是卡牌和区域两个目录中较早的那次成功刷新时间，两个目录都刷新成功之前省略。上一轮出错时带 `lastRoundError`。producer 运行时整轮推迟，最迟 5 秒后重试：在发出任何请求之前就推迟的一轮不改 `lastRoundAt`、`lastRound` 和 `lastRoundError`，只推后 `nextRoundAt`；已经发出请求后才推迟的一轮照常记为上一轮，`lastRoundError` 为 `a producer job is running; retrying next round`。`totals.<kind>.errors` 是记着日文抓取错误、仍待抓取的话数。`lastRound.errors` 是上一轮日文没抓到、或某语言变成 `error`/`mismatch` 的话数；`lastRound.retrying` 是其余带 `lastError` 的话数，即某语言因 404、镜像仍返回日文或暂时性错误而保持 `pending`、等待自动重试。
 - POST 立即唤醒一轮，正在跑的一轮结束后接着跑；`refreshCatalog:true` 让这一轮先重建目录。回填被禁用时返回 `409 backfill_disabled`（`details` 为 `the side-story backfill is disabled`）；这时 `refreshCatalog:true` 仍会记下，重新启用后的第一轮先重建目录。
 - 每轮写入了内容时广播 SSE `sidestory.sync`，负载为 `{detail,current,total}`，`current` 是抓到的话数，`total` 是本轮处理的话数。
 
