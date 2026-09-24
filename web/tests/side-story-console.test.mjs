@@ -224,6 +224,8 @@ test("error messages append the contract details and map the runner codes", () =
   assert.equal(message(409, { error: "producer_state_changed", details: ["测试状态变化"] }), "保存被拒绝：测试状态变化");
   assert.equal(message(400, { error: "something_else", details: ["测试原因"] }), "something_else：测试原因");
   assert.equal(message(500, { error: "internal_error" }), "服务器内部错误");
+  assert.equal(message(502, { error: "upstream_unavailable", details: ["测试批次 2/6 失败：openai http 429", "translated lines saved before the failure: 1"] }),
+    "上游服务暂时不可用，请稍后重试：测试批次 2/6 失败：openai http 429；translated lines saved before the failure: 1", "an AI provider failure is not labelled a script fetch");
   assert.equal(message(409, { error: "script_changed", details: ["the Japanese script changed upstream; refresh the story before importing"] }),
     "上游剧本已变化，请先由管理员重新获取剧本后再导入", "an English restatement of the mapped message is dropped");
   assert.match(message(409, { error: "backfill_disabled", details: ["the side-story backfill is disabled"] }), /卡牌剧情\/区域对话后台回填.*SIDE_STORY_BACKFILL_ENABLED=false$/);
