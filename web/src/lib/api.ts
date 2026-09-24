@@ -66,6 +66,8 @@ export interface TranslationEntry {
   entryType?: "title" | "talk";
   sourceHash?: string;
   revision?: number;
+  /** Side-story line role; event-story entries leave it unset. */
+  lineRole?: SideStoryLineRole;
 }
 
 export interface EventStorySummary {
@@ -1188,6 +1190,227 @@ export const retryEventStory = (eventId: number) =>
 export const reorderEventStory = (eventId: number) =>
   apiFetch<Record<string, unknown>>("/event-story/reorder", {
     method: "POST", body: JSON.stringify({ eventId, clientId: getClientID() }),
+  });
+
+// ---- Side stories (card stories and area talk) ----
+
+export type SideStoryKind = "card" | "area";
+export type SideStoryLocale = "zh-CN" | "en-US";
+export type SideStorySource = "official" | "llm" | "human";
+export type SideStoryLineRole = "title" | "talk" | "speaker";
+export type SideStoryStatus = "pending" | "untranslated" | "partial" | "translated";
+export type SideStoryFetchState = "pending" | "imported" | "absent" | "mismatch" | "error";
+
+export interface SideStorySourceCounts {
+  official: number;
+  llm: number;
+  human: number;
+}
+
+export interface SideStorySummary {
+  kind: SideStoryKind;
+  id: string;
+  title: string;
+  characterId: number;
+  areaId: number;
+  areaCategory: string;
+  actionSetId: number;
+  releasedAt: number;
+  episodeCount: number;
+  fetchedEpisodeCount: number;
+  lineCount: number;
+  translatedCount: number;
+  untranslatedCount: number;
+  sourceCounts: SideStorySourceCounts;
+  primarySource: SideStorySource | "";
+  status: SideStoryStatus;
+  updatedAt: number;
+}
+
+export interface SideStoryList {
+  kind: SideStoryKind;
+  locale: SideStoryLocale;
+  stories: SideStorySummary[];
+}
+
+export interface SideStoryLineState {
+  jp: string;
+  role: SideStoryLineRole;
+  speaker?: string;
+  position: number;
+  text: string;
+  source: SideStorySource | "";
+  revision: number;
+  updatedBy?: string;
+  updatedAt?: number;
+}
+
+export interface SideStoryEpisodeDetail {
+  key: string;
+  scenarioId: string;
+  title: string;
+  fetched: boolean;
+  scriptSha256: string;
+  cnState: SideStoryFetchState;
+  enState: SideStoryFetchState;
+  lastError?: string;
+  lines: SideStoryLineState[];
+  translatedCount: number;
+  untranslatedCount: number;
+}
+
+export interface SideStoryDetail {
+  kind: SideStoryKind;
+  id: string;
+  title: string;
+  characterId: number;
+  areaId: number;
+  areaCategory: string;
+  actionSetId: number;
+  locale: SideStoryLocale;
+  episodes: SideStoryEpisodeDetail[];
+}
+
+export interface SideStoryLineEdit {
+  jp: string;
+  text: string;
+  source?: "human" | "llm";
+  expectedRevision?: number;
+}
+
+export interface SideStoryLineConflict {
+  jp: string;
+  expectedRevision: number;
+  currentRevision: number;
+  currentText: string;
+  currentSource: SideStorySource | "";
+}
+
+export interface SideStoryUpdateResult {
+  status: "ok";
+  kind: SideStoryKind;
+  id: string;
+  episode: string;
+  locale: SideStoryLocale;
+  updated: number;
+  unchanged: number;
+  lines: SideStoryLineState[];
+}
+
+export interface SideStoryKindProgress {
+  stories: number;
+  episodes: number;
+  fetched: number;
+  pendingFetch: number;
+  cnImported: number;
+  cnPending: number;
+  cnAbsent: number;
+  cnMismatch: number;
+  cnError: number;
+  enImported: number;
+  enPending: number;
+  enAbsent: number;
+  enMismatch: number;
+  enError: number;
+  errors: number;
+}
+
+export interface SideStoryRoundSummary {
+  episodes: number;
+  requests: number;
+  fetched: number;
+  officialWritten: number;
+  errors: number;
+  retrying: number;
+}
+
+export interface SideStoryBackfillState {
+  enabled: boolean;
+  running: boolean;
+  lastRoundAt?: string;
+  nextRoundAt?: string;
+  catalogRefreshedAt?: string;
+  lastRoundError?: string;
+  lastRound: SideStoryRoundSummary;
+}
+
+export interface SideStorySyncStatus {
+  state: SideStoryBackfillState;
+  totals: Partial<Record<SideStoryKind, SideStoryKindProgress>>;
+}
+
+export interface SideStorySyncTrigger {
+  started: boolean;
+  state: SideStoryBackfillState;
+}
+
+export interface SideStoryAIResult {
+  translated: number;
+  remaining: number;
+}
+
+export interface SideStoryEpisodeApply {
+  kind: SideStoryKind;
+  id: string;
+  key: string;
+  fetched: boolean;
+  scriptChanged: boolean;
+  cnState: SideStoryFetchState;
+  enState: SideStoryFetchState;
+  officialWritten: number;
+  droppedHumanLines: number;
+  error?: string;
+}
+
+export interface SideStoryEpisodeSnapshot {
+  kind: SideStoryKind;
+  id: string;
+  episode: string;
+  locale: SideStoryLocale;
+  revision: string;
+  segments: EventStorySegment[];
+  scenario: EventEpisodeScenarioSnapshot;
+}
+
+const sideStoryPath = (kind: SideStoryKind, id: string, ...rest: string[]) =>
+  ["/editor/v1/story", kind, id, ...rest].map((part, index) => index === 0 ? part : encodeURIComponent(part)).join("/");
+
+export const getSideStories = (kind: SideStoryKind, locale: SideStoryLocale, status?: SideStoryStatus) => {
+  const p = new URLSearchParams({ kind, locale });
+  if (status) p.set("status", status);
+  return apiFetch<SideStoryList>(`/editor/v1/stories?${p}`);
+};
+export const getSideStorySyncStatus = () => apiFetch<SideStorySyncStatus>("/editor/v1/stories/sync");
+export const triggerSideStorySync = (refreshCatalog: boolean) =>
+  apiFetch<SideStorySyncTrigger>("/editor/v1/stories/sync", { method: "POST", body: JSON.stringify({ refreshCatalog }) });
+export const getSideStory = (kind: SideStoryKind, id: string, locale: SideStoryLocale) =>
+  apiFetch<SideStoryDetail>(`${sideStoryPath(kind, id)}?${new URLSearchParams({ locale })}`);
+export const getSideStoryEpisodeSnapshot = (kind: SideStoryKind, id: string, episode: string, locale: SideStoryLocale) =>
+  apiFetch<SideStoryEpisodeSnapshot>(`${sideStoryPath(kind, id, episode, "snapshot")}?${new URLSearchParams({ locale })}`);
+
+export const updateSideStoryLines = async (
+  kind: SideStoryKind, id: string, episode: string, locale: SideStoryLocale, lines: SideStoryLineEdit[],
+): Promise<SideStoryUpdateResult> => {
+  const response = await apiFetch<unknown>(sideStoryPath(kind, id, episode), {
+    method: "PUT",
+    body: JSON.stringify({ locale, lines, clientId: getClientID() }),
+  }, true);
+  const result = response as Partial<SideStoryUpdateResult> | null;
+  if (!result || typeof result !== "object" || result.status !== "ok" || result.kind !== kind || result.id !== id ||
+      result.episode !== episode || result.locale !== locale || !Array.isArray(result.lines) ||
+      !Number.isSafeInteger(result.updated) || !Number.isSafeInteger(result.unchanged)) {
+    throw new APIError(502, { error: "invalid_side_story_response", details: ["剧情保存响应与提交的故事、话数或语言不一致"] });
+  }
+  return result as SideStoryUpdateResult;
+};
+export const aiTranslateSideStory = (
+  kind: SideStoryKind, id: string, locale: SideStoryLocale, episode: string, provider: "gemini" | "openai",
+) => apiFetch<SideStoryAIResult>(sideStoryPath(kind, id, "ai"), {
+  method: "POST", body: JSON.stringify({ locale, episode, provider, clientId: getClientID() }),
+});
+export const refreshSideStory = (kind: SideStoryKind, id: string) =>
+  apiFetch<{ episodes: SideStoryEpisodeApply[] }>(sideStoryPath(kind, id, "refresh"), {
+    method: "POST", body: JSON.stringify({ clientId: getClientID() }),
   });
 
 // ---- Translation engine ----

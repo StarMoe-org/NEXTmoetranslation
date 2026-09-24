@@ -55,13 +55,50 @@ function targetLabel(target: EventTxtImportPreviewRow["target"]): string {
   return target === "body" ? "正文" : target === "speaker" ? "说话人" : "结构";
 }
 
-async function readUTF8File(file: File): Promise<string> {
+export async function readUTF8File(file: File): Promise<string> {
   if (file.size > MAX_EVENT_TXT_BYTES) throw new Error("TXT 文件超过 768 KiB 的本地草稿上限");
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
   } catch {
     throw new Error("TXT 文件不是有效 UTF-8 文本");
   }
+}
+
+// Shared by the event and side-story importers; `note` sits between the counts and the rows.
+export function TxtImportPreviewTable({ preview, fileName, selectedRows, onToggle, note }: {
+  preview: EventTxtImportPreview;
+  fileName: string;
+  selectedRows: ReadonlySet<string>;
+  onToggle: (row: EventTxtImportPreviewRow) => void;
+  note: React.ReactNode;
+}) {
+  return <>
+    <div className="event-txt-import-summary">
+      <strong>{fileName}</strong>
+      <span>已匹配 {preview.counts.matched}</span>
+      <span>冲突 {preview.counts.conflict}</span>
+      <span>缺失 {preview.counts.missing}</span>
+      <span>未匹配 {preview.counts.unmatched}</span>
+    </div>
+    {note}
+    <div className="event-txt-import-table-wrap">
+      <table className="event-txt-import-table">
+        <thead><tr><th>应用</th><th>状态</th><th>位置</th><th>日文 / 当前</th><th>TXT 译文</th><th>说明</th></tr></thead>
+        <tbody>
+          {preview.rows.map((row) => (
+            <tr key={row.id} className={`event-txt-import-${row.status}`}>
+              <td><input type="checkbox" aria-label={`选择 ${row.id}`} checked={selectedRows.has(row.id)} disabled={!row.selectable} onChange={() => onToggle(row)} /></td>
+              <td><span className={`event-txt-import-status ${row.status}`}>{statusLabel(row.status)}</span></td>
+              <td>{row.importedLine ? `TXT ${row.importedLine}` : "—"}<br /><span className="event-txt-import-muted">{targetLabel(row.target)}</span></td>
+              <td><div>{row.japanese || "—"}</div>{row.current && <div className="event-txt-import-current">当前：{row.current}</div>}</td>
+              <td>{row.imported || "—"}</td>
+              <td>{row.reason}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </>;
 }
 
 function assertSnapshotMatchesLoaded(entries: readonly TranslationEntry[], eventId: number, episodeNo: string, snapshot: Awaited<ReturnType<typeof getEventEpisodeSnapshot>>) {
@@ -218,31 +255,9 @@ export function EventStoryTxtImport({ eventId, locale, entries, defaultEpisodeNo
       <Modal open={preview != null || error !== ""} onClose={closePreview} title="活动剧情 TXT 导入预览" maxWidth={960} closeDisabled={busy}>
         {error && <div className="event-txt-import-error" role="alert">{error}</div>}
         {preview && <>
-          <div className="event-txt-import-summary">
-            <strong>{fileName}</strong>
-            <span>已匹配 {preview.counts.matched}</span>
-            <span>冲突 {preview.counts.conflict}</span>
-            <span>缺失 {preview.counts.missing}</span>
-            <span>未匹配 {preview.counts.unmatched}</span>
-          </div>
-          <p className="dirty-guard-copy">仅默认选择空白译文字段。已有译文不同的行会标记为冲突，必须手动勾选才会覆盖到本地草稿；此步骤不会写入服务器。</p>
-          <div className="event-txt-import-table-wrap">
-            <table className="event-txt-import-table">
-              <thead><tr><th>应用</th><th>状态</th><th>位置</th><th>日文 / 当前</th><th>TXT 译文</th><th>说明</th></tr></thead>
-              <tbody>
-                {preview.rows.map((row) => (
-                  <tr key={row.id} className={`event-txt-import-${row.status}`}>
-                    <td><input type="checkbox" aria-label={`选择 ${row.id}`} checked={selectedRows.has(row.id)} disabled={!row.selectable} onChange={() => toggleRow(row)} /></td>
-                    <td><span className={`event-txt-import-status ${row.status}`}>{statusLabel(row.status)}</span></td>
-                    <td>{row.importedLine ? `TXT ${row.importedLine}` : "—"}<br /><span className="event-txt-import-muted">{targetLabel(row.target)}</span></td>
-                    <td><div>{row.japanese || "—"}</div>{row.current && <div className="event-txt-import-current">当前：{row.current}</div>}</td>
-                    <td>{row.imported || "—"}</td>
-                    <td>{row.reason}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <TxtImportPreviewTable preview={preview} fileName={fileName} selectedRows={selectedRows} onToggle={toggleRow} note={
+            <p className="dirty-guard-copy">仅默认选择空白译文字段。已有译文不同的行会标记为冲突，必须手动勾选才会覆盖到本地草稿；此步骤不会写入服务器。</p>
+          } />
           <div className="dirty-guard-actions">
             <span className="event-txt-import-selection">已选择 {selectedCount} 条</span>
             <button type="button" className="btn btn-ghost" onClick={closePreview}>取消</button>

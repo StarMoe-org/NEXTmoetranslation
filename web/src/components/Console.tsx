@@ -8,19 +8,25 @@ import { ConsoleHeader } from "@/components/console/ConsoleHeader";
 import { ConsoleSidebar } from "@/components/console/ConsoleSidebar";
 import { ConsoleToolbar } from "@/components/console/ConsoleToolbar";
 import { EventStoryToolbar } from "@/components/console/EventStoryToolbar";
+import { SideStoryBackfillPanel } from "@/components/console/SideStoryBackfillPanel";
+import { SideStorySidebar } from "@/components/console/SideStorySidebar";
+import { SideStoryToolbar } from "@/components/console/SideStoryToolbar";
 import { ProducerOperationsShell, useProducerOperations } from "@/components/console/ProducerOperationsShell";
 import { TranslationEntryWorkspace } from "@/components/console/TranslationEntryWorkspace";
 import { clearPersistedEventTxtDraft } from "@/components/console/console-drafts";
 import { useHiddenBadges, usePref } from "@/components/console/preferences";
-import type { ContentConflict } from "@/components/console/types";
+import type { ContentConflict, RemoteConflict } from "@/components/console/types";
 import { useAppUpdateProbe } from "@/components/console/useAppUpdateProbe";
 import { useConsoleEntries } from "@/components/console/useConsoleEntries";
 import { useConsoleRealtime } from "@/components/console/useConsoleRealtime";
 import { useEntryEditor } from "@/components/console/useEntryEditor";
+import { useSideStoryCatalog } from "@/components/console/useSideStoryCatalog";
+import { useSideStoryOperations } from "@/components/console/useSideStoryOperations";
 import { LyricsEditor, LyricsEditorHandle } from "@/components/LyricsEditor";
 import { LyricsSourceReview, LyricsSourceReviewHandle } from "@/components/LyricsSourceReview";
 import { Locale, TranslationEntry, clearLoadedProducerState, clearSession, getClientID, getRole, getUsername } from "@/lib/api";
 import { restoreEventStoryDraftEntries } from "@/lib/event-story-console";
+import { sideStoryMoesekaiUrl } from "@/lib/labels";
 import { translationTextareaAction } from "@/lib/translation-shortcuts";
 
 interface PendingAction {
@@ -55,9 +61,9 @@ export function Console({ onLogout }: { onLogout: () => void }) {
   // Filled in from the realtime hook below, which needs the entry loaders it fences.
   const freezeRecoveredConflictRef = useRef<(conflict: ContentConflict) => void>(() => {});
 
-  const [remoteConflict, setRemoteConflictState] = useState<{ key: string; user: string } | null>(null);
+  const [remoteConflict, setRemoteConflictState] = useState<RemoteConflict | null>(null);
   const remoteConflictRef = useRef(remoteConflict);
-  const setRemoteConflict = useCallback((next: { key: string; user: string } | null) => {
+  const setRemoteConflict = useCallback((next: RemoteConflict | null) => {
     remoteConflictRef.current = next;
     setRemoteConflictState(next);
   }, []);
@@ -66,6 +72,9 @@ export function Console({ onLogout }: { onLogout: () => void }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [enterSaves, setEnterSaves] = usePref("ui.saveShortcut", false);
   const [eventStoriesExpanded, setEventStoriesExpanded] = usePref("ui.eventStoriesExpanded", true);
+  const [cardStoriesExpanded, setCardStoriesExpanded] = usePref("ui.cardStoriesExpanded", false);
+  const [areaTalkExpanded, setAreaTalkExpanded] = usePref("ui.areaTalkExpanded", false);
+  const [backfillExpanded, setBackfillExpanded] = usePref("ui.sideStoryBackfillExpanded", false);
   const hiddenBadges = useHiddenBadges();
   const updateAvailable = useAppUpdateProbe();
 
@@ -91,6 +100,7 @@ export function Console({ onLogout }: { onLogout: () => void }) {
     eventNameQuery, setEventNameQuery, relatedEventQuery, setRelatedEventQuery, relatedEventFilterAvailable,
     query, setQuery, sortMode, setSortMode,
     category, field, isEventStory, isLyrics, isLyricsSourceReview,
+    sideStoryKind, isSideStory, isStory, sideStoryDetail,
     entries, entriesRef, setEntries, loading,
     selectedEpisode, chapters, filtered, selectedIndex, selectedKey, setSelectedKey, selectedEntry,
     selectedEventStoryIdentityMissing, selectionStateRef, entryDirty, eventTxtDraftDirty,
@@ -104,6 +114,13 @@ export function Console({ onLogout }: { onLogout: () => void }) {
   });
 
   const {
+    sideStoryLists, ensureList, reloadList, refreshLists,
+    syncStatus, syncBusy, watchSyncStatus, loadSyncStatus, runSync,
+  } = useSideStoryCatalog({ locale, show });
+  useEffect(() => { if (cardStoriesExpanded) ensureList("card"); }, [cardStoriesExpanded, ensureList]);
+  useEffect(() => { if (areaTalkExpanded) ensureList("area"); }, [areaTalkExpanded, ensureList]);
+
+  const {
     writesLocked, writeFenceRef, setWriteFence,
     contentConflict, preservedConflictDraftRef,
     reconcileContent, reconcileContentRef,
@@ -111,12 +128,12 @@ export function Console({ onLogout }: { onLogout: () => void }) {
     realtimeState, onlineUsers, remoteHighlights, progress,
   } = useConsoleRealtime({
     username, clientID, locale, show, category, field,
-    isEventStory, isLyrics, isLyricsSourceReview,
+    isEventStory, sideStoryKind, isLyrics, isLyricsSourceReview,
     entries, setEntries, selectedKey, selectedEntry, entryDirty,
     editValue, setEditValue, eventTxtDraft, setEventTxtDraft, eventTxtDraftDirty,
     lyricsDirty, lyricsEditorRef, lyricsSourceReviewRef,
     setRemoteConflict, contextGenerationRef, invalidatePendingAction,
-    loadEntries, reloadSidebar,
+    loadEntries, reloadSidebar, refreshSideStoryLists: refreshLists,
   });
   freezeRecoveredConflictRef.current = freezeRecoveredConflict;
 
@@ -174,18 +191,22 @@ export function Console({ onLogout }: { onLogout: () => void }) {
     });
   };
 
-  const { save, handleSourceChange, applyEventTxtDraft, undoEventTxtDraft } = useEntryEditor({
-    username, show, category, field, locale, isEventStory, isReadOnly,
+  const { save, handleSourceChange, applyEventTxtDraft, undoEventTxtDraft, saveSideStoryBatch } = useEntryEditor({
+    username, show, category, field, locale, isEventStory, sideStoryKind, isReadOnly,
     entries, entriesRef, setEntries, filtered,
     selectedKey, setSelectedKey, selectedEntry, selectedEpisode,
     editValue, setEditValue, entryDirty,
     eventTxtDraft, setEventTxtDraft, eventTxtDraftDirty,
     keepTranslationEntryVisible, reloadSidebar, reconcileContentRef,
-    writeFenceRef, savingRef, setSaving, remoteConflictRef, contextGenerationRef,
+    writeFenceRef, savingRef, setSaving, remoteConflictRef, setRemoteConflict, contextGenerationRef,
+    onSideStorySaved: refreshLists,
   });
 
   const { busy, publishing, doPublish, doAIStory, promoteStory, retryStory, reorderStory } = useProducerOperations({
     show, category, field, locale, writesLocked, writeFenceRef, contextGenerationRef, loadEntries, reloadSidebar,
+  });
+  const { sideStoryBusy, doSideStoryAI, doSideStoryRefresh } = useSideStoryOperations({
+    show, sideStoryKind, field, locale, selectedEpisode, contextGenerationRef, refreshSideStoryLists: refreshLists,
   });
 
   // ---- Guarded transitions ----
@@ -208,6 +229,8 @@ export function Console({ onLogout }: { onLogout: () => void }) {
     if (epNo === selectedEpisode) return;
     runOrGuard("切换章节", () => performSelectChapter(epNo));
   };
+
+  const reloadStory = () => runOrGuard("重新载入剧情", () => { void loadEntries(); });
 
   const selectEntry = useCallback((entry: TranslationEntry) => {
     if (savingRef.current) return;
@@ -305,6 +328,10 @@ export function Console({ onLogout }: { onLogout: () => void }) {
   const currentField = categories.find((c) => c.name === category)?.fields?.find((f) => f.name === field);
   const currentStory = isEventStory ? eventStories.find((s) => String(s.eventId) === field) : undefined;
   const visibleEventStoryCount = visibleEventStories.length;
+  const sideStoryTitle = !isSideStory ? undefined : sideStoryKind === "card"
+    ? `${sideStoryDetail?.title || "Card"} #${field}`
+    : `${field}${sideStoryDetail?.title ? ` · ${sideStoryDetail.title}` : ""}`;
+  const sideStoryUrl = sideStoryKind ? sideStoryMoesekaiUrl(sideStoryKind, field, sideStoryDetail?.areaCategory) : undefined;
 
   const appClass = `app${sidebarOpen ? "" : " sidebar-collapsed"}`;
 
@@ -335,6 +362,32 @@ export function Console({ onLogout }: { onLogout: () => void }) {
         setEventNameQuery={setEventNameQuery}
         eventStoriesExpanded={eventStoriesExpanded}
         setEventStoriesExpanded={setEventStoriesExpanded}
+        sideStories={<>
+          <SideStorySidebar
+            category={category}
+            field={field}
+            hiddenBadges={hiddenBadges}
+            cardStories={sideStoryLists.card}
+            areaTalks={sideStoryLists.area}
+            eventStories={eventStories}
+            cardExpanded={cardStoriesExpanded}
+            setCardExpanded={setCardStoriesExpanded}
+            areaExpanded={areaTalkExpanded}
+            setAreaExpanded={setAreaTalkExpanded}
+            onRetry={reloadList}
+            selectField={selectField}
+          />
+          <SideStoryBackfillPanel
+            role={role}
+            expanded={backfillExpanded}
+            setExpanded={setBackfillExpanded}
+            status={syncStatus}
+            busy={syncBusy}
+            watch={watchSyncStatus}
+            reload={() => void loadSyncStatus()}
+            runSync={(refreshCatalog) => void runSync(refreshCatalog)}
+          />
+        </>}
         doPublish={doPublish}
         onOpenSettings={() => setShowSettings(true)}
         onOpenAdmin={() => setShowAdmin(true)}
@@ -385,6 +438,7 @@ export function Console({ onLogout }: { onLogout: () => void }) {
               field={field}
               currentStory={currentStory}
               currentField={currentField}
+              storyTitle={sideStoryTitle}
               realtimeState={realtimeState}
               onlineUsers={onlineUsers}
               selectedIndex={selectedIndex}
@@ -417,9 +471,30 @@ export function Console({ onLogout }: { onLogout: () => void }) {
                 onReorderStory={() => guardProducerMutation("重排序对话", reorderStory)}
               />
             )}
+            {sideStoryKind && (
+              <SideStoryToolbar
+                role={role}
+                locale={locale}
+                kind={sideStoryKind}
+                storyId={field}
+                detail={sideStoryDetail}
+                entries={entries}
+                chapters={chapters}
+                selectedEpisode={selectedEpisode}
+                selectChapter={selectChapter}
+                busy={busy || sideStoryBusy}
+                saving={saving}
+                writesLocked={writesLocked}
+                entryDirty={entryDirty}
+                saveBatch={saveSideStoryBatch}
+                onAI={() => guardProducerMutation("AI 补充翻译", doSideStoryAI)}
+                onRefresh={() => guardProducerMutation("重新获取剧本", doSideStoryRefresh)}
+                onReload={reloadStory}
+              />
+            )}
 
             <ConsoleToolbar
-              isEventStory={isEventStory}
+              isStory={isStory}
               locale={locale}
               relatedEventFilterAvailable={relatedEventFilterAvailable}
               relatedEventQuery={relatedEventQuery}
@@ -434,6 +509,7 @@ export function Console({ onLogout }: { onLogout: () => void }) {
               category={category}
               field={field}
               isEventStory={isEventStory}
+              isSideStory={isSideStory}
               isReadOnly={isReadOnly}
               loading={loading}
               saving={saving}
@@ -458,6 +534,8 @@ export function Console({ onLogout }: { onLogout: () => void }) {
               save={save}
               selectEntry={selectEntry}
               handleSourceChange={handleSourceChange}
+              detailUrl={sideStoryUrl}
+              onReloadStory={isSideStory ? reloadStory : undefined}
             />
           </>
         )}

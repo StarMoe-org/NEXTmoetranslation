@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
-  CategoryInfo, EventAssociationIndex, EventStorySummary, Locale, TranslationEntry,
-  getCategories, getEntries, getEventAssociations, getEventStories, getEventStory,
+  CategoryInfo, EventAssociationIndex, EventStorySummary, Locale, SideStoryDetail, TranslationEntry,
+  getCategories, getEntries, getEventAssociations, getEventStories, getEventStory, getSideStory,
 } from "@/lib/api";
 import type { EventStoryTxtDraft } from "@/components/EventStoryTxtImport";
-import { buildEventStoryEntries, eventStoryEntryLabel } from "@/lib/labels";
+import { buildEventStoryEntries, storyEntrySourceText } from "@/lib/labels";
+import {
+  buildSideStoryEntries, sideStoryEntryUntranslated, sideStoryKindForCategory, sideStoryLocale,
+} from "@/lib/side-story-console";
 import {
   eventStoryEntryHasCanonicalIdentity, eventStoryEntryType, eventStoryEpisodeNo,
   listEventStoryEpisodeNos, resolveSelectedEventStoryEpisode,
 } from "@/lib/event-story-console";
 import { overlayEventTxtDraft, recoverEventTxtDraft } from "@/components/console/console-drafts";
-import type { ChapterTab, ContentConflict, ShowToast } from "@/components/console/types";
+import type { ChapterTab, ContentConflict, RemoteConflict, ShowToast } from "@/components/console/types";
 
 interface SidebarReloadResult {
   generation: number;
@@ -26,7 +29,7 @@ export interface ConsoleEntriesOptions {
   show: ShowToast;
   savingRef: RefObject<boolean>;
   contextGenerationRef: RefObject<number>;
-  setRemoteConflict: (next: { key: string; user: string } | null) => void;
+  setRemoteConflict: (next: RemoteConflict | null) => void;
   setSidebarOpen: (open: boolean) => void;
   // Assigned by Console once the realtime hook exists; a recovered TXT draft conflict
   // has to freeze the same write fence as any other reconciliation.
@@ -63,6 +66,7 @@ export function useConsoleEntries({
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [eventTxtDraft, setEventTxtDraft] = useState<EventStoryTxtDraft | null>(null);
+  const [sideStoryDetail, setSideStoryDetail] = useState<SideStoryDetail | null>(null);
   const translationEntryListRef = useRef<HTMLDivElement>(null);
   const loadGenerationRef = useRef(0);
   const sidebarReloadGenerationRef = useRef(0);
@@ -71,6 +75,10 @@ export function useConsoleEntries({
   const sidebarSnapshotRef = useRef<Map<Locale, { categories: CategoryInfo[]; eventStories: EventStorySummary[] }>>(new Map());
 
   const isEventStory = category === "eventStory";
+  const sideStoryKind = sideStoryKindForCategory(category);
+  const isSideStory = sideStoryKind !== null;
+  // Event and side stories share the episode-grouped, per-line editor.
+  const isStory = isEventStory || isSideStory;
   const isLyrics = category === "lyrics";
   const isLyricsSourceReview = category === "lyricsSourceReview";
 
@@ -155,6 +163,7 @@ export function useConsoleEntries({
       setSelectedKey(null);
       setEditValue("");
       setEventTxtDraft(null);
+      setSideStoryDetail(null);
       setRemoteConflict(null);
       return true;
     }
@@ -162,6 +171,7 @@ export function useConsoleEntries({
     setSelectedKey(null);
     setEditValue("");
     setEventTxtDraft(null);
+    setSideStoryDetail(null);
     setRemoteConflict(null);
     if (isLyrics || isLyricsSourceReview) {
       setLoading(false);
@@ -169,11 +179,17 @@ export function useConsoleEntries({
     }
     setLoading(true);
     try {
-      if (isEventStory) {
-        const detail = await getEventStory(Number(field), locale);
+      if (isStory) {
+        // The ja-JP view shows a side story's Japanese lines read-only.
+        const sideDetail = sideStoryKind ? await getSideStory(sideStoryKind, field, sideStoryLocale(locale)) : null;
+        const list = sideDetail
+          ? buildSideStoryEntries(sideDetail, locale === "ja-JP")
+          : buildEventStoryEntries(await getEventStory(Number(field), locale));
         if (loadGenerationRef.current !== generation) return false;
-        const list = buildEventStoryEntries(detail);
-        const recovery = recoverEventTxtDraft(username, Number(field), locale, list);
+        setSideStoryDetail(sideDetail);
+        const recovery = isEventStory
+          ? recoverEventTxtDraft(username, Number(field), locale, list)
+          : { draft: null, conflict: null };
         const visible = recovery.draft ? overlayEventTxtDraft(list, recovery.draft) : list;
         setEventTxtDraft(recovery.draft);
         if (recovery.conflict) {
@@ -209,7 +225,7 @@ export function useConsoleEntries({
     } finally {
       if (loadGenerationRef.current === generation) setLoading(false);
     }
-  }, [category, field, freezeRecoveredConflictRef, isEventStory, isLyrics, isLyricsSourceReview, locale, setRemoteConflict, show, username]);
+  }, [category, field, freezeRecoveredConflictRef, isEventStory, isLyrics, isLyricsSourceReview, isStory, locale, setRemoteConflict, show, sideStoryKind, username]);
 
   useEffect(() => { void loadEntries(); }, [loadEntries]);
 
@@ -265,7 +281,7 @@ export function useConsoleEntries({
   }, [category, categoryEventAssociations, eventStories, relatedEventFilterAvailable, relatedEventQuery]);
 
   const chapters = useMemo<ChapterTab[]>(() => {
-    if (!isEventStory || entries.length === 0) return [];
+    if (!isStory || entries.length === 0) return [];
     const map = new Map<string, { title: string; total: number; untranslated: number }>();
     for (const entry of entries) {
       const epNo = eventStoryEpisodeNo(entry);
@@ -275,7 +291,9 @@ export function useConsoleEntries({
         map.set(epNo, ep);
       }
       ep.total++;
-      const isUntranslated = !entry.text || entry.source === "unknown" || entry.source === "llm";
+      const isUntranslated = isSideStory
+        ? sideStoryEntryUntranslated(entry)
+        : !entry.text || entry.source === "unknown" || entry.source === "llm";
       if (isUntranslated) ep.untranslated++;
       if (eventStoryEntryType(entry) === "title" && !ep.title) {
         ep.title = entry.text || entry.japanese || "";
@@ -292,22 +310,22 @@ export function useConsoleEntries({
     }
     result.sort((a, b) => a.episodeNo.localeCompare(b.episodeNo, undefined, { numeric: true }));
     return result;
-  }, [entries, isEventStory]);
+  }, [entries, isSideStory, isStory]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    let source = isEventStory ? entries : sortedEntries;
-    if (isEventStory && selectedEpisode !== "all") {
+    let source = isStory ? entries : sortedEntries;
+    if (isStory && selectedEpisode !== "all") {
       source = source.filter((entry) => eventStoryEpisodeNo(entry) === selectedEpisode);
     }
     return source.filter((e) => {
       if (relatedEventEntityIDs && !(e.ids || []).some((id) => relatedEventEntityIDs.has(String(id)))) return false;
       if (!q) return true;
-      return isEventStory
-        ? `${e.japanese || eventStoryEntryLabel(e.key)}\n${e.text}`.toLowerCase().includes(q)
+      return isStory
+        ? `${storyEntrySourceText(e)}\n${e.text}`.toLowerCase().includes(q)
         : e.key.toLowerCase().includes(q) || e.text.toLowerCase().includes(q);
     });
-  }, [entries, isEventStory, query, relatedEventEntityIDs, selectedEpisode, sortedEntries]);
+  }, [entries, isStory, query, relatedEventEntityIDs, selectedEpisode, sortedEntries]);
 
   const selectedIndex = useMemo(
     () => (selectedKey ? filtered.findIndex((e) => e.key === selectedKey) : -1),
@@ -340,6 +358,7 @@ export function useConsoleEntries({
     loadGenerationRef.current++;
     sidebarReloadRef.current = null;
     setEventTxtDraft(null);
+    setSideStoryDetail(null);
     setLocale(next);
     setCategories([]);
     setEventStories([]);
@@ -392,6 +411,7 @@ export function useConsoleEntries({
     eventNameQuery, setEventNameQuery, relatedEventQuery, setRelatedEventQuery, relatedEventFilterAvailable,
     query, setQuery, sortMode, setSortMode,
     category, field, isEventStory, isLyrics, isLyricsSourceReview,
+    sideStoryKind, isSideStory, isStory, sideStoryDetail,
     entries, entriesRef, setEntries, loading,
     selectedEpisode, chapters, filtered, selectedIndex, selectedKey, setSelectedKey, selectedEntry,
     selectedEventStoryIdentityMissing, selectionStateRef, entryDirty, eventTxtDraftDirty,

@@ -1,4 +1,4 @@
-import type { EventEpisodeSnapshot } from "./api";
+import type { EventEpisodeSnapshot, SideStoryEpisodeSnapshot, SideStoryKind, SideStoryLineEdit, SideStoryLocale } from "./api";
 
 export type EventTxtImportStatus = "matched" | "conflict" | "missing" | "unmatched";
 export type EventTxtImportTarget = "body" | "speaker" | "structure";
@@ -42,3 +42,9 @@ export interface EventTxtImportPreview {
 export function parseEventTxtContent(content: string): ParsedEventTxtTalk[];
 export function validateEventEpisodeSnapshot(snapshot: EventEpisodeSnapshot): Promise<void>;
 export function eventEpisodeTxtImportPreview(snapshot: EventEpisodeSnapshot, talks: readonly ParsedEventTxtTalk[]): EventTxtImportPreview;
+export function validateSideStoryEpisodeSnapshot(
+  snapshot: SideStoryEpisodeSnapshot,
+  expected: { kind: SideStoryKind; id: string; episode: string; locale: SideStoryLocale },
+): Promise<void>;
+export function sideStoryEpisodeTxtImportPreview(snapshot: SideStoryEpisodeSnapshot, talks: readonly ParsedEventTxtTalk[]): EventTxtImportPreview;
+export function sideStoryTxtImportEdits(preview: EventTxtImportPreview, selectedRowIDs: ReadonlySet<string>): SideStoryLineEdit[];

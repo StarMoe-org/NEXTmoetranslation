@@ -1,6 +1,6 @@
 import React from "react";
 import type { TranslationEntry } from "@/lib/api";
-import { SOURCE_LABELS, eventStoryEntryLabel } from "@/lib/labels";
+import { SOURCE_LABELS, storyEntrySourceText } from "@/lib/labels";
 
 export interface EntryRowProps {
   entry: TranslationEntry;
@@ -13,6 +13,8 @@ export interface EntryRowProps {
   eventTxtDraftDirty: boolean;
   hasRemoteConflict: boolean;
   hasCanonicalIdentity: boolean;
+  /** Sources an editor may choose; others stay visible only as the current value. Defaults to all. */
+  sourceOptions?: readonly string[];
   onSelect: (entry: TranslationEntry) => void;
   onSourceChange: (key: string, source: string) => void;
 }
@@ -28,9 +30,12 @@ export const EntryRow = React.memo(function EntryRow({
   eventTxtDraftDirty,
   hasRemoteConflict,
   hasCanonicalIdentity,
+  sourceOptions,
   onSelect,
   onSourceChange,
 }: EntryRowProps) {
+  // Side-story entries carry a line role; their Japanese text is shown like an event story's.
+  const sourceText = isEventStory || entry.lineRole ? storyEntrySourceText(entry) : entry.key;
   return (
     <tr
       data-key={entry.key}
@@ -50,18 +55,20 @@ export const EntryRow = React.memo(function EntryRow({
           onChange={(e) => onSourceChange(entry.key, e.target.value)}
           className={`source-tag ${entry.source}`}
           disabled={isReadOnly || writesLocked || eventTxtDraftDirty || hasRemoteConflict || (isEventStory && !hasCanonicalIdentity)}
-          aria-label={`${isEventStory ? (entry.japanese || eventStoryEntryLabel(entry.key)) : entry.key} 的来源`}
+          aria-label={`${sourceText} 的来源`}
           title={isEventStory && !hasCanonicalIdentity ? "当前剧情行缺少权威来源身份，请重新获取剧情后再编辑" : undefined}
         >
-          {Object.entries(SOURCE_LABELS).map(([k, v]) => (
-            <option key={k} value={k}>{v}</option>
-          ))}
+          {Object.entries(SOURCE_LABELS)
+            .filter(([k]) => !sourceOptions || sourceOptions.includes(k) || k === entry.source)
+            .map(([k, v]) => (
+              <option key={k} value={k} disabled={Boolean(sourceOptions) && !sourceOptions?.includes(k)}>{v}</option>
+            ))}
         </select>
       </td>
       <td>
         <div className="jp">
           {entry.speakerName && <div className="speaker">{entry.speakerName}</div>}
-          <div className="entry-preview">{isEventStory ? (entry.japanese || eventStoryEntryLabel(entry.key)) : entry.key}</div>
+          <div className="entry-preview">{sourceText}</div>
         </div>
       </td>
       <td><div className="cn entry-preview">{entry.text}</div></td>

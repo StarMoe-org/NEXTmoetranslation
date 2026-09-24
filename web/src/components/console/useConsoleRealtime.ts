@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import {
-  EditorGateStatus, Locale, TranslationEntry,
+  EditorGateStatus, Locale, SideStoryKind, TranslationEntry,
   acceptLoadedProducerState, clearLoadedProducerState, getEditorGateStatus,
   subscribeProducerProofInvalidated,
 } from "@/lib/api";
@@ -14,12 +14,16 @@ import {
 import {
   lyricsUpdateMatchesEditorTarget, lyricsUpdateTargetLabel, normalizeLyricsUpdateEvent,
 } from "@/lib/lyrics-collaboration.mjs";
+import {
+  applySideStoryLineStates, normalizeSideStoryUpdateEvent, sideStoryEntryKey, sideStoryLocale,
+  sideStoryUpdateEffect, sideStoryUpdateRefreshesList,
+} from "@/lib/side-story-console";
 import { useSSE } from "@/lib/sse";
 import {
   clearPersistedContentConflict, clearPersistedEventTxtDraft, clearPersistedEventTxtDraftFromConflict,
   persistContentConflict, recoverPersistedContentConflict,
 } from "@/components/console/console-drafts";
-import type { ContentConflict, ReconciliationReason, ShowToast } from "@/components/console/types";
+import type { ContentConflict, ReconciliationReason, RemoteConflict, ShowToast } from "@/components/console/types";
 
 interface Progress { label: string; current: number; total: number }
 
@@ -31,6 +35,7 @@ export interface ConsoleRealtimeOptions {
   category: string;
   field: string;
   isEventStory: boolean;
+  sideStoryKind: SideStoryKind | null;
   isLyrics: boolean;
   isLyricsSourceReview: boolean;
   entries: TranslationEntry[];
@@ -46,11 +51,13 @@ export interface ConsoleRealtimeOptions {
   lyricsDirty: boolean;
   lyricsEditorRef: RefObject<LyricsEditorHandle | null>;
   lyricsSourceReviewRef: RefObject<LyricsSourceReviewHandle | null>;
-  setRemoteConflict: (next: { key: string; user: string } | null) => void;
+  setRemoteConflict: (next: RemoteConflict | null) => void;
   contextGenerationRef: RefObject<number>;
   invalidatePendingAction: () => void;
   loadEntries: () => Promise<boolean>;
   reloadSidebar: () => Promise<boolean>;
+  // Debounced refresh of the loaded side-story lists (all kinds when omitted).
+  refreshSideStoryLists: (kind?: SideStoryKind) => void;
 }
 
 export function useConsoleRealtime({
@@ -61,6 +68,7 @@ export function useConsoleRealtime({
   category,
   field,
   isEventStory,
+  sideStoryKind,
   isLyrics,
   isLyricsSourceReview,
   entries,
@@ -81,6 +89,7 @@ export function useConsoleRealtime({
   invalidatePendingAction,
   loadEntries,
   reloadSidebar,
+  refreshSideStoryLists,
 }: ConsoleRealtimeOptions) {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [realtimeState, setRealtimeState] = useState<"connecting" | "connected" | "reconnecting" | "offline">("connecting");
@@ -349,7 +358,7 @@ export function useConsoleRealtime({
   useSSE((event, data) => {
     const d = data as Record<string, unknown>;
     if (event === "entry.updated" || event === "entry.locale.updated" ||
-        event === "eventstory.updated" || event === "eventstory.locale.updated" ||
+        event === "eventstory.updated" || event === "eventstory.locale.updated" || event === "sidestory.updated" ||
         event === "lyrics.updated" || event === "content.restored") {
       contentEventGenerationRef.current++;
     }
@@ -395,6 +404,7 @@ export function useConsoleRealtime({
     } else if (event === "sse.missed-events") {
       sseConnectedRef.current = true;
       setRealtimeState("connected");
+      refreshSideStoryLists();
       void reconcileContent("gap").then((reconciled) => {
         if (reconciled) show(d.initial === true ? "实时连接已建立" : "实时连接已恢复", "ok");
       });
@@ -478,6 +488,34 @@ export function useConsoleRealtime({
           show(`${remoteUser} 修改了第 ${update.episodeNo || eventStoryEpisodeNo(targetEntry)} 话的一条剧情翻译`, "ok");
         }
       }
+    } else if (event === "sidestory.updated") {
+      const update = normalizeSideStoryUpdateEvent(d);
+      if (!update) return;
+      if (sideStoryUpdateRefreshesList(update, sideStoryLocale(locale))) refreshSideStoryLists(update.kind);
+      const effect = sideStoryUpdateEffect(update, { kind: sideStoryKind, id: field, locale }, clientID);
+      if (effect === "reload") {
+        const preservedDraft = captureUnsavedDraft();
+        const actionLabel = update.action === "ai" ? "AI 补充翻译" : update.action === "refresh" ? "重新获取剧本" : "批量修改";
+        void reconcileContent("remote", preservedDraft, `${update.user} 对当前剧情执行了${actionLabel}；已重新载入权威 revision。`).then((reconciled) => {
+          if (reconciled && !preservedDraft) show(`${update.user} 已对当前剧情执行${actionLabel}`, "ok");
+        });
+      } else if (effect === "apply-lines") {
+        const keys = new Map(update.lines.map((line) => [sideStoryEntryKey(update.episode, line.jp), line]));
+        setEntries((prev) => applySideStoryLineStates(prev, update.episode, update.lines));
+        keys.forEach((_, key) => highlightRemoteRow(key, update.user));
+        const selectedLine = selectedKey ? keys.get(selectedKey) : undefined;
+        if (selectedKey && selectedLine && selectedLine.revision >= (selectedEntry?.revision ?? 0)) {
+          if (selectedEntry && entryDirty) {
+            setRemoteConflict({ key: selectedKey, user: update.user });
+          } else {
+            setEditValue(selectedLine.text);
+            setRemoteConflict(null);
+          }
+        }
+        show(`${update.user} 修改了第 ${update.episode} 话的 ${update.lines.length} 行剧情翻译`, "ok");
+      }
+    } else if (event === "sidestory.sync") {
+      refreshSideStoryLists();
     } else if (event === "lyrics.updated") {
       const update = normalizeLyricsUpdateEvent(d);
       if (isLyrics && update && update.clientId !== clientID) {
@@ -504,6 +542,7 @@ export function useConsoleRealtime({
         }
       }
     } else if (event === "content.restored") {
+      refreshSideStoryLists();
       void reconcileContent("restore");
     }
   }, true);

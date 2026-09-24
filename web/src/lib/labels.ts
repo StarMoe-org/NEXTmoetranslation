@@ -1,4 +1,4 @@
-import type { EventStoryDetail, TranslationEntry } from "./api";
+import type { EventStoryDetail, SideStoryKind, TranslationEntry } from "./api";
 
 // ---- Display labels (ported from the legacy client) ----
 
@@ -7,6 +7,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   virtualLive: "虚拟Live", sticker: "贴纸", comic: "漫画",
   mysekai: "我的世界", costumes: "服装", characters: "角色", units: "团体",
   eventStory: "活动剧情", gachaInfo: "卡池简介与说明",
+  cardStory: "卡牌剧情", areaTalk: "区域对话",
 };
 
 export const FIELD_LABELS: Record<string, string> = {
@@ -54,6 +55,14 @@ export const DETAIL_BUILDERS: Record<string, (id: string) => string> = {
 };
 export const EVENTSTORY_DETAIL = (id: string) => `${SOURCE_BASE}/story/event/${id}/`;
 
+// Area talk pages are addressed by the main site's category URL parameter.
+export function sideStoryMoesekaiUrl(kind: SideStoryKind, id: string, areaCategory = ""): string | null {
+  if (!id) return null;
+  if (kind === "card") return `${SOURCE_BASE}/story/card/${encodeURIComponent(id)}/`;
+  if (!areaCategory) return null;
+  return `${SOURCE_BASE}/story/area/${encodeURIComponent(areaCategory)}/${encodeURIComponent(id)}/`;
+}
+
 /**
  * Build a Moesekai detail-page URL for the given category.
  * For eventStory, the field (eventId) is used directly — ids are not needed.
@@ -64,6 +73,7 @@ export function buildMoesekaiUrl(category: string, field: string, ids?: string[]
   if (category === "eventStory") {
     return EVENTSTORY_DETAIL(field);
   }
+  if (category === "cardStory") return sideStoryMoesekaiUrl("card", field);
   const builder = DETAIL_BUILDERS[category];
   if (!builder || !ids || ids.length === 0) return null;
   // ids are stored as string representations of the masterdata row id.
@@ -156,4 +166,11 @@ export function parseEventStoryEntryKey(key: string): {
 export function eventStoryEntryLabel(key: string): string {
   const p = parseEventStoryEntryKey(key);
   return p.entryType === "title" ? `[章节标题] ${p.originalText}` : p.originalText;
+}
+
+/** The Japanese text shown for a story entry; side-story title and speaker lines carry a role marker. */
+export function storyEntrySourceText(entry: Pick<TranslationEntry, "key" | "japanese" | "lineRole">): string {
+  if (entry.lineRole === "title") return `[章节标题] ${entry.japanese ?? ""}`;
+  if (entry.lineRole === "speaker") return `[说话人] ${entry.japanese ?? ""}`;
+  return entry.japanese || eventStoryEntryLabel(entry.key);
 }

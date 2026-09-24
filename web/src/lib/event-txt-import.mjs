@@ -1,5 +1,6 @@
 const ALIGNMENT_GAP = -5;
 const INCOMPATIBLE = Number.NEGATIVE_INFINITY;
+const KANA = /[\u3040-\u30ff]/;
 
 function splitSpeaker(value) {
   return String(value || "").split("_", 1)[0];
@@ -65,6 +66,21 @@ function snapshotScenarioState(snapshot) {
   if (!Number.isSafeInteger(snapshot.eventId) || snapshot.eventId <= 0 || typeof snapshot.episodeNo !== "string" || !snapshot.episodeNo) {
     throw new Error("event episode identity is invalid");
   }
+  return scenarioState(snapshot, "event");
+}
+
+function sideStorySnapshotState(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || typeof snapshot.revision !== "string" || !snapshot.revision) {
+    throw new Error("side story episode snapshot revision is required");
+  }
+  if ((snapshot.kind !== "card" && snapshot.kind !== "area") || typeof snapshot.id !== "string" || !snapshot.id ||
+      typeof snapshot.episode !== "string" || !snapshot.episode) {
+    throw new Error("side story episode identity is invalid");
+  }
+  return scenarioState(snapshot, "side story");
+}
+
+function scenarioState(snapshot, label) {
   if (!snapshot.scenario || typeof snapshot.scenario.fileName !== "string" ||
       !snapshot.scenario.fileName.toLocaleLowerCase().endsWith(".json") ||
       /[/\\\u0000-\u001f\u007f]/.test(snapshot.scenario.fileName) || snapshot.scenario.fileName.includes("..")) {
@@ -72,7 +88,7 @@ function snapshotScenarioState(snapshot) {
   }
   if (snapshot.scenario.parserVersion !== 1) throw new Error("unsupported scenario parser version");
   if (!Array.isArray(snapshot.scenario.sourceTalks) || !Array.isArray(snapshot.segments)) {
-    throw new Error("event episode snapshot structure is invalid");
+    throw new Error(`${label} episode snapshot structure is invalid`);
   }
 
   const parsed = parseScenarioSourceTalks(snapshot.scenario.rawJson);
@@ -91,7 +107,7 @@ function snapshotScenarioState(snapshot) {
   const byPosition = new Map();
   for (const segment of segments) {
     if (!segment || !Number.isSafeInteger(segment.position) || segment.position < 0 || byPosition.has(segment.position)) {
-      throw new Error(`invalid or duplicate event segment position ${segment?.position}`);
+      throw new Error(`invalid or duplicate ${label} segment position ${segment?.position}`);
     }
     byPosition.set(segment.position, segment);
   }
@@ -119,6 +135,20 @@ async function sha256(value) {
 
 export async function validateEventEpisodeSnapshot(snapshot) {
   snapshotScenarioState(snapshot);
+  await verifyScenarioSHA256(snapshot);
+}
+
+// A side-story snapshot must describe exactly the episode and locale the editor asked for.
+export async function validateSideStoryEpisodeSnapshot(snapshot, expected) {
+  sideStorySnapshotState(snapshot);
+  if (snapshot.kind !== expected.kind || snapshot.id !== expected.id || snapshot.episode !== expected.episode ||
+      snapshot.locale !== expected.locale) {
+    throw new Error("side story snapshot identity mismatch");
+  }
+  await verifyScenarioSHA256(snapshot);
+}
+
+async function verifyScenarioSHA256(snapshot) {
   const expected = String(snapshot.scenario.sha256 || "").toLocaleLowerCase().replace(/^sha256:/, "");
   if (!/^[a-f0-9]{64}$/.test(expected)) throw new Error("scenario SHA-256 is invalid");
   if (await sha256(snapshot.scenario.rawJson) !== expected) throw new Error("scenario SHA-256 mismatch");
@@ -285,11 +315,12 @@ function alignmentCandidates(source, imported) {
   return { sourceCandidates, importedCandidates };
 }
 
-function translationPreviewRow(source, imported, segment, target, importedValue) {
+// repeatsJapanese(value, japanese) tells whether a value is still the untranslated Japanese.
+function translationPreviewRow(source, imported, segment, target, importedValue, rowID, repeatsJapanese) {
   const japanese = target === "speaker" ? splitSpeaker(segment.japanese) : segment.japanese;
   const current = segment.text || "";
   const base = {
-    id: `${segment.id}:${target}`,
+    id: rowID(segment, target),
     target,
     sourceOrder: source.order,
     importedLine: imported.line,
@@ -302,20 +333,58 @@ function translationPreviewRow(source, imported, segment, target, importedValue)
     current,
     imported: importedValue,
   };
-  if (!importedValue || importedValue === japanese) {
+  if (!importedValue || repeatsJapanese(importedValue, japanese)) {
     return { ...base, status: "missing", reason: importedValue ? "TXT 仍是当前日文原文，不会把原文写入译文字段" : "TXT 对应译文为空", selectable: false, selectedByDefault: false };
   }
   if (importedValue === current) {
     return { ...base, status: "matched", reason: "TXT 译文与当前权威译文一致，无需写入草稿", selectable: false, selectedByDefault: false };
   }
-  if (current && current !== japanese) {
+  if (current && !repeatsJapanese(current, japanese)) {
     return { ...base, status: "conflict", reason: "TXT 译文与当前权威译文不同；检查后可显式选择覆盖到本地草稿", selectable: true, selectedByDefault: false };
   }
   return { ...base, status: "matched", reason: "已按权威场景结构与 segment 身份对齐", selectable: true, selectedByDefault: true };
 }
 
 export function eventEpisodeTxtImportPreview(snapshot, talks) {
-  const state = snapshotScenarioState(snapshot);
+  return txtImportPreview(snapshot, snapshotScenarioState(snapshot), talks, (segment, target) => `${segment.id}:${target}`,
+    (value, japanese) => value === japanese);
+}
+
+// Side-story segments are keyed by their Japanese text, so one key can occur at several
+// TalkData positions; rows are identified by position and only the first occurrence is saved.
+// Like the server's official import, text equal to kana-free Japanese (a shared name) is a translation.
+export function sideStoryEpisodeTxtImportPreview(snapshot, talks) {
+  const preview = txtImportPreview(snapshot, sideStorySnapshotState(snapshot), talks, (segment, target) => `${segment.position}:${target}`,
+    (value, japanese) => value === japanese && KANA.test(japanese));
+  const firstByKey = new Map();
+  const rows = preview.rows.map((row) => {
+    if (!row.segmentId || row.status === "missing") return row;
+    const first = firstByKey.get(row.segmentId);
+    if (!first) {
+      firstByKey.set(row.segmentId, row);
+      return row;
+    }
+    return row.imported === first.imported
+      ? { ...row, status: "matched", reason: "同一日文在本话重复出现，TXT 译文与首次出现一致，随首次出现一并保存", selectable: false, selectedByDefault: false }
+      : { ...row, status: "conflict", reason: "同一日文在本话重复出现但 TXT 译文不同；每个日文只保存一个译文，以首次出现为准", selectable: false, selectedByDefault: false };
+  });
+  const counts = { matched: 0, conflict: 0, missing: 0, unmatched: 0 };
+  rows.forEach((row) => { counts[row.status]++; });
+  return { revision: preview.revision, rows, counts };
+}
+
+/** One PUT batch for the selected rows, each carrying the revision the preview was built from. */
+export function sideStoryTxtImportEdits(preview, selectedRowIDs) {
+  const edits = new Map();
+  for (const row of preview.rows) {
+    if (!row.selectable || !selectedRowIDs.has(row.id) || !row.segmentId) continue;
+    if (edits.has(row.segmentId)) throw new Error(`side story TXT import selected ${row.segmentId} twice`);
+    edits.set(row.segmentId, { jp: row.segmentId, text: row.imported, source: "human", expectedRevision: row.revision ?? 0 });
+  }
+  return [...edits.values()];
+}
+
+function txtImportPreview(snapshot, state, talks, rowID, repeatsJapanese) {
   const source = sourceRows(state);
   const imported = importedRows(talks);
   if (source.length > 2000 || imported.length > 2000 || source.length * imported.length > 1000000) {
@@ -361,10 +430,10 @@ export function eventEpisodeTxtImportPreview(snapshot, talks) {
       });
       return;
     }
-    rows.push(translationPreviewRow(sourceRow, importedRow, body, "body", importedRow.text));
+    rows.push(translationPreviewRow(sourceRow, importedRow, body, "body", importedRow.text, rowID, repeatsJapanese));
     if (sourceRow.kind === "dialogue") {
       const speaker = state.byPosition.get(sourceRow.talk.talkDataIndex * 2 + 1);
-      if (speaker) rows.push(translationPreviewRow(sourceRow, importedRow, speaker, "speaker", splitSpeaker(importedRow.speaker)));
+      if (speaker) rows.push(translationPreviewRow(sourceRow, importedRow, speaker, "speaker", splitSpeaker(importedRow.speaker), rowID, repeatsJapanese));
     }
   });
 

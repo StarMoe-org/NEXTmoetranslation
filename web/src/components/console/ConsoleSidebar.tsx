@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { CategoryInfo, EventStorySummary, Locale } from "@/lib/api";
 import { CATEGORY_LABELS, fieldLabel } from "@/lib/labels";
 
@@ -37,6 +38,8 @@ export interface ConsoleSidebarProps {
   setEventNameQuery: (query: string) => void;
   eventStoriesExpanded: boolean;
   setEventStoriesExpanded: (expanded: boolean) => void;
+  /** Card story, area talk and backfill groups, placed between event stories and music. */
+  sideStories: ReactNode;
   doPublish: () => void;
   onOpenSettings: () => void;
   onOpenAdmin: () => void;
@@ -64,6 +67,7 @@ export function ConsoleSidebar({
   setEventNameQuery,
   eventStoriesExpanded,
   setEventStoriesExpanded,
+  sideStories,
   doPublish,
   onOpenSettings,
   onOpenAdmin,
@@ -160,6 +164,8 @@ export function ConsoleSidebar({
             )}
           </div>
         )}
+
+        {sideStories}
 
         <div className="field-group">
           <div className="field-group-title">音乐内容</div>

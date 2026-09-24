@@ -16,3 +16,11 @@ export interface ChapterTab {
   total: number;
   untranslated: number;
 }
+
+// A collaborator's change to the selected line; `current` is set when the server
+// rejected a save because the line's revision had moved on.
+export interface RemoteConflict {
+  key: string;
+  user: string;
+  current?: { text: string; revision: number };
+}

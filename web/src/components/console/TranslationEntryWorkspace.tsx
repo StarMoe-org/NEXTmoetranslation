@@ -1,7 +1,9 @@
 import React, { useMemo, useRef, type RefObject } from "react";
 import type { TranslationEntry } from "@/lib/api";
-import { SOURCE_LABELS, buildMoesekaiUrl, eventStoryEntryLabel } from "@/lib/labels";
+import type { RemoteConflict } from "@/components/console/types";
+import { SOURCE_LABELS, buildMoesekaiUrl, storyEntrySourceText } from "@/lib/labels";
 import { eventStoryEntryHasCanonicalIdentity, eventStoryEpisodeNo } from "@/lib/event-story-console";
+import { SIDE_STORY_EDIT_SOURCES } from "@/lib/side-story-console";
 import { EntryRow } from "@/components/console/EntryRow";
 
 const IconExternalLink = () => (
@@ -12,6 +14,7 @@ export interface TranslationEntryWorkspaceProps {
   category: string;
   field: string;
   isEventStory: boolean;
+  isSideStory?: boolean;
   isReadOnly: boolean;
   loading: boolean;
   saving: boolean;
@@ -22,8 +25,8 @@ export interface TranslationEntryWorkspaceProps {
   selectedIndex: number;
   selectedEventStoryIdentityMissing: boolean;
   remoteHighlights: Record<string, { user: string; until: number }>;
-  remoteConflict: { key: string; user: string } | null;
-  setRemoteConflict: (next: { key: string; user: string } | null) => void;
+  remoteConflict: RemoteConflict | null;
+  setRemoteConflict: (next: RemoteConflict | null) => void;
   eventTxtDraftDirty: boolean;
   editValue: string;
   setEditValue: (value: string) => void;
@@ -36,12 +39,16 @@ export interface TranslationEntryWorkspaceProps {
   save: (overrideSource?: string, advance?: boolean) => Promise<boolean>;
   selectEntry: (entry: TranslationEntry) => void;
   handleSourceChange: (key: string, source: string) => void;
+  /** Overrides the per-entry Moesekai link (side stories link the whole story). */
+  detailUrl?: string | null;
+  onReloadStory?: () => void;
 }
 
 export function TranslationEntryWorkspace({
   category,
   field,
   isEventStory,
+  isSideStory = false,
   isReadOnly,
   loading,
   saving,
@@ -66,12 +73,15 @@ export function TranslationEntryWorkspace({
   save,
   selectEntry,
   handleSourceChange,
+  detailUrl,
+  onReloadStory,
 }: TranslationEntryWorkspaceProps) {
   const translationWorkspaceRef = useRef<HTMLDivElement>(null);
   const saveKeyLabel = enterSaves ? "Enter" : "Shift+Enter";
   const newlineKeyLabel = enterSaves ? "Shift+Enter" : "Enter";
+  const isStory = isEventStory || isSideStory;
   const sourceText = selectedEntry
-    ? isEventStory ? (selectedEntry.japanese || eventStoryEntryLabel(selectedEntry.key)) : selectedEntry.key
+    ? isStory ? storyEntrySourceText(selectedEntry) : selectedEntry.key
     : "";
   const sourceLines = sourceText.split("\n").length;
   // Long originals (gacha descriptions) sit beside the editor on wide screens, so the
@@ -82,8 +92,9 @@ export function TranslationEntryWorkspace({
   // ---- Moesekai URL for the currently selected entry ----
   const moesekaiUrl = useMemo(() => {
     if (!selectedEntry || !category || !field) return null;
+    if (detailUrl !== undefined) return detailUrl;
     return buildMoesekaiUrl(category, field, selectedEntry.ids);
-  }, [selectedEntry, category, field]);
+  }, [selectedEntry, category, field, detailUrl]);
 
   return (
     <div className="translation-workspace" ref={translationWorkspaceRef}>
@@ -95,6 +106,7 @@ export function TranslationEntryWorkspace({
             {selectedEntry.speakerName && <div className="speaker">{selectedEntry.speakerName}</div>}
             <div className="jp-body">{sourceText}</div>
             {isEventStory && <div className="episode">第 {eventStoryEpisodeNo(selectedEntry)} 章</div>}
+            {isSideStory && category === "cardStory" && <div className="episode">第 {eventStoryEpisodeNo(selectedEntry)} 话</div>}
             {moesekaiUrl && (
               <a className="moesekai-link" href={moesekaiUrl} target="_blank" rel="noopener noreferrer" title="在 Moesekai 上查看详情">
                 <IconExternalLink /> Moesekai 页面
@@ -114,7 +126,21 @@ export function TranslationEntryWorkspace({
                 当前剧情行缺少权威来源身份，已保持只读。请由管理员执行“重新获取剧情”后再编辑。
               </div>
             )}
-            {remoteConflict?.key === selectedEntry.key && (
+            {remoteConflict?.key === selectedEntry.key && remoteConflict.current && (
+              <div className="remote-conflict-banner revision-conflict" role="alert">
+                保存被拒绝：服务器上这一行已更新到 revision {remoteConflict.current.revision}，你的草稿仍保留在输入框中。
+                <div className="remote-conflict-current">服务器当前译文：{remoteConflict.current.text || "（空）"}</div>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => {
+                  setEditValue(selectedEntry.text);
+                  setRemoteConflict(null);
+                }} disabled={saving}>采用服务器版本</button>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setRemoteConflict(null)} disabled={saving}>
+                  保留本地并允许覆盖
+                </button>
+                {onReloadStory && <button type="button" className="btn btn-ghost btn-sm" onClick={onReloadStory} disabled={saving}>重新载入本篇</button>}
+              </div>
+            )}
+            {remoteConflict?.key === selectedEntry.key && !remoteConflict.current && (
               <div className="remote-conflict-banner" role="alert">
                 {remoteConflict.user} 刚刚修改了这一行；已保留你的本地草稿，请确认后再保存。
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => {
@@ -137,7 +163,7 @@ export function TranslationEntryWorkspace({
               readOnly={isReadOnly || saving || writesLocked || selectedEventStoryIdentityMissing}
               aria-label="翻译校对内容"
             />
-            {!isEventStory && selectedEntry.source === "cn" && (
+            {!isStory && selectedEntry.source === "cn" && (
               <p className="proof-hints">
                 保存后来源变为{SOURCE_LABELS.human}，下次{SOURCE_LABELS.cn}同步仍会覆盖这条译文；需要长期保留请用“{SOURCE_LABELS.pinned}保存”。
               </p>
@@ -151,7 +177,7 @@ export function TranslationEntryWorkspace({
                   ? "当前剧情行缺少权威来源身份"
                   : remoteConflict?.key === selectedEntry.key ? "请先明确处理协作者冲突" : undefined}
               >保存并下一条</button>
-              {!isEventStory && <button
+              {!isStory && <button
                 className="btn btn-secondary"
                 onClick={() => save("pinned")}
                 disabled={isReadOnly || saving || writesLocked || remoteConflict?.key === selectedEntry.key}
@@ -195,6 +221,7 @@ export function TranslationEntryWorkspace({
                 eventTxtDraftDirty={eventTxtDraftDirty}
                 hasRemoteConflict={remoteConflict?.key === entry.key}
                 hasCanonicalIdentity={!isEventStory || eventStoryEntryHasCanonicalIdentity(entry)}
+                sourceOptions={isSideStory ? SIDE_STORY_EDIT_SOURCES : undefined}
                 onSelect={selectEntry}
                 onSourceChange={handleSourceChange}
               />

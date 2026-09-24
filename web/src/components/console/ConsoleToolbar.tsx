@@ -1,7 +1,7 @@
 import type { Locale } from "@/lib/api";
 
 export interface ConsoleToolbarProps {
-  isEventStory: boolean;
+  isStory: boolean;
   locale: Locale;
   relatedEventFilterAvailable: boolean;
   relatedEventQuery: string;
@@ -13,7 +13,7 @@ export interface ConsoleToolbarProps {
 }
 
 export function ConsoleToolbar({
-  isEventStory,
+  isStory,
   locale,
   relatedEventFilterAvailable,
   relatedEventQuery,
@@ -25,7 +25,7 @@ export function ConsoleToolbar({
 }: ConsoleToolbarProps) {
   return (
     <div className="search-bar">
-      {relatedEventFilterAvailable && !isEventStory && (
+      {relatedEventFilterAvailable && !isStory && (
         <input
           className="related-event-filter"
           aria-label="按活动名称筛选当前分类"
@@ -40,7 +40,7 @@ export function ConsoleToolbar({
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
       />
-      {!isEventStory && (
+      {!isStory && (
         <label className="sort-selector">
           <span>排序</span>
           <select

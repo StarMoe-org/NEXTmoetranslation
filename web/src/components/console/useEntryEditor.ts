@@ -1,12 +1,25 @@
-import { useCallback, type Dispatch, type RefObject, type SetStateAction } from "react";
-import { Locale, TranslationEntry, updateEntry, updateEventStoryLine } from "@/lib/api";
+import { useCallback, useRef, type Dispatch, type RefObject, type SetStateAction } from "react";
+import {
+  Locale, SideStoryKind, SideStoryLineConflict, SideStoryLineEdit, TranslationEntry,
+  updateEntry, updateEventStoryLine, updateSideStoryLines,
+} from "@/lib/api";
 import type { EventStoryTxtDraft } from "@/components/EventStoryTxtImport";
 import { EVENT_STORY_TITLE_MARKER, SOURCE_LABELS, parseEventStoryEntryKey } from "@/lib/labels";
 import { eventStoryEntryHasCanonicalIdentity, restoreEventStoryDraftEntries } from "@/lib/event-story-console";
 import {
+  applySideStoryLineStates, sideStoryConflictsFromError, sideStoryEntrySource, sideStoryErrorMessage, sideStoryLineEdit,
+  sideStoryLocale, sideStoryMutationResultIsAmbiguous,
+} from "@/lib/side-story-console";
+import { sideStoryLineSaveIsNoop } from "@/lib/side-story-editor";
+import {
   clearPersistedEventTxtDraft, eventStoryMutationResultIsAmbiguous, persistEventTxtDraft,
 } from "@/components/console/console-drafts";
-import type { ReconciliationReason, ShowToast } from "@/components/console/types";
+import type { ReconciliationReason, RemoteConflict, ShowToast } from "@/components/console/types";
+
+export type SideStoryBatchOutcome =
+  | { status: "saved"; updated: number; unchanged: number }
+  | { status: "conflict"; conflicts: SideStoryLineConflict[] }
+  | { status: "failed"; message: string };
 
 export interface EntryEditorOptions {
   username: string;
@@ -15,6 +28,7 @@ export interface EntryEditorOptions {
   field: string;
   locale: Locale;
   isEventStory: boolean;
+  sideStoryKind: SideStoryKind | null;
   isReadOnly: boolean;
   entries: TranslationEntry[];
   entriesRef: RefObject<TranslationEntry[]>;
@@ -36,8 +50,10 @@ export interface EntryEditorOptions {
   writeFenceRef: RefObject<boolean>;
   savingRef: RefObject<boolean>;
   setSaving: (saving: boolean) => void;
-  remoteConflictRef: RefObject<{ key: string; user: string } | null>;
+  remoteConflictRef: RefObject<RemoteConflict | null>;
+  setRemoteConflict: (next: RemoteConflict | null) => void;
   contextGenerationRef: RefObject<number>;
+  onSideStorySaved: (kind: SideStoryKind) => void;
 }
 
 export function useEntryEditor({
@@ -47,6 +63,7 @@ export function useEntryEditor({
   field,
   locale,
   isEventStory,
+  sideStoryKind,
   isReadOnly,
   entries,
   entriesRef,
@@ -69,8 +86,32 @@ export function useEntryEditor({
   savingRef,
   setSaving,
   remoteConflictRef,
+  setRemoteConflict,
   contextGenerationRef,
+  onSideStorySaved,
 }: EntryEditorOptions) {
+  // Async writes resolve conflicts against the line selected when the response arrives.
+  const selectedKeyRef = useRef(selectedKey);
+  selectedKeyRef.current = selectedKey;
+
+  // A revision conflict writes nothing: show the server's line and keep the local draft.
+  const applySideStoryConflicts = useCallback((episodeKey: string, conflicts: readonly SideStoryLineConflict[], selected: string | null) => {
+    const byJP = new Map(conflicts.map((conflict) => [conflict.jp, conflict]));
+    setEntries((prev) => prev.map((entry) => {
+      const conflict = entry.episodeNo === episodeKey && entry.japanese !== undefined ? byJP.get(entry.japanese) : undefined;
+      return conflict
+        ? { ...entry, text: conflict.currentText, source: sideStoryEntrySource(conflict.currentSource), revision: conflict.currentRevision }
+        : entry;
+    }));
+    const selectedEntryNow = selected ? entriesRef.current.find((entry) => entry.key === selected) : undefined;
+    const selectedConflict = selectedEntryNow?.episodeNo === episodeKey && selectedEntryNow.japanese !== undefined
+      ? byJP.get(selectedEntryNow.japanese)
+      : undefined;
+    if (selected && selectedConflict) {
+      setRemoteConflict({ key: selected, user: "服务器", current: { text: selectedConflict.currentText, revision: selectedConflict.currentRevision } });
+    }
+  }, [entriesRef, setEntries, setRemoteConflict]);
+
   const applyEventTxtDraft = (draft: EventStoryTxtDraft) => {
     if (!isEventStory || Number(field) !== draft.eventId || locale !== draft.locale || writeFenceRef.current || savingRef.current) return;
     const bySegment = new Map(entries.flatMap((entry) => entry.segmentId ? [[entry.segmentId, entry] as const] : []));
@@ -134,7 +175,19 @@ export function useEntryEditor({
     const saveValue = editValue;
     const saveEntry = selectedEntry;
     try {
-      if (isEventStory) {
+      if (sideStoryKind) {
+        const episodeKey = saveEntry?.episodeNo ?? "";
+        if (!saveEntry || !episodeKey) return false;
+        if (sideStoryLineSaveIsNoop(saveEntry, saveValue)) {
+          if (saveValue !== saveEntry.text) setEditValue(saveEntry.text);
+        } else {
+          const result = await updateSideStoryLines(sideStoryKind, saveField, episodeKey, sideStoryLocale(saveLocale),
+            [sideStoryLineEdit(saveEntry, saveValue, src)]);
+          onSideStorySaved(sideStoryKind);
+          if (contextGenerationRef.current !== generation) return true;
+          setEntries((prev) => applySideStoryLineStates(prev, episodeKey, result.lines));
+        }
+      } else if (isEventStory) {
         const p = parseEventStoryEntryKey(saveKey);
         const episodeNo = saveEntry?.episodeNo || p.episodeNo;
         const entryType = saveEntry?.entryType || p.entryType;
@@ -187,8 +240,16 @@ export function useEntryEditor({
       }
       return true;
     } catch (e) {
-      const ambiguousEventStoryFailure = isEventStory && eventStoryMutationResultIsAmbiguous(e);
-      if (ambiguousEventStoryFailure) {
+      const conflicts = sideStoryKind ? sideStoryConflictsFromError(e) : null;
+      if (conflicts) {
+        if (contextGenerationRef.current === generation) applySideStoryConflicts(saveEntry?.episodeNo ?? "", conflicts, saveKey);
+        show("保存被拒绝：这一行在服务器上已被修改，请确认服务器当前译文后再保存", "err");
+        return false;
+      }
+      const ambiguousStoryFailure = isEventStory
+        ? eventStoryMutationResultIsAmbiguous(e)
+        : sideStoryKind !== null && sideStoryMutationResultIsAmbiguous(e);
+      if (ambiguousStoryFailure) {
         const preservedDraft = JSON.stringify({
           exportedAt: new Date().toISOString(),
           kind: "translation",
@@ -206,13 +267,13 @@ export function useEntryEditor({
           "剧情保存结果无法确认；本地草稿已冻结，并正在重新载入权威 revision。",
         );
       }
-      show(e instanceof Error ? e.message : "保存失败", "err");
+      show(sideStoryKind ? sideStoryErrorMessage(e, "保存失败") : e instanceof Error ? e.message : "保存失败", "err");
       return false;
     } finally {
       savingRef.current = false;
       setSaving(false);
     }
-  }, [selectedKey, selectedEntry, category, eventTxtDraft, field, editValue, filtered, isEventStory, isReadOnly, locale, selectedEpisode, show, username, keepTranslationEntryVisible, reloadSidebar, contextGenerationRef, entriesRef, reconcileContentRef, remoteConflictRef, savingRef, setEditValue, setEntries, setEventTxtDraft, setSaving, setSelectedKey, writeFenceRef]);
+  }, [selectedKey, selectedEntry, category, eventTxtDraft, field, editValue, filtered, isEventStory, isReadOnly, locale, selectedEpisode, show, sideStoryKind, username, applySideStoryConflicts, keepTranslationEntryVisible, onSideStorySaved, reloadSidebar, contextGenerationRef, entriesRef, reconcileContentRef, remoteConflictRef, savingRef, setEditValue, setEntries, setEventTxtDraft, setSaving, setSelectedKey, writeFenceRef]);
 
   // ---- Change source for a single entry ----
   const handleSourceChange = useCallback(async (key: string, newSource: string) => {
@@ -233,6 +294,16 @@ export function useEntryEditor({
     savingRef.current = true;
     setSaving(true);
     try {
+      if (sideStoryKind) {
+        const episodeKey = entry.episodeNo ?? "";
+        const result = await updateSideStoryLines(sideStoryKind, field, episodeKey, sideStoryLocale(locale),
+          [sideStoryLineEdit(entry, entry.text, newSource)]);
+        onSideStorySaved(sideStoryKind);
+        if (contextGenerationRef.current !== generation) return;
+        setEntries((prev) => applySideStoryLineStates(prev, episodeKey, result.lines));
+        show(`来源已改为「${SOURCE_LABELS[newSource] || newSource}」`, "ok");
+        return;
+      }
       if (isEventStory) {
         const parsed = parseEventStoryEntryKey(key);
         const episodeNo = entry.episodeNo || parsed.episodeNo;
@@ -260,6 +331,15 @@ export function useEntryEditor({
       if (isEventStory) void reloadSidebar();
       show(`来源已改为「${SOURCE_LABELS[newSource] || newSource}」`, "ok");
     } catch (err) {
+      const conflicts = sideStoryKind ? sideStoryConflictsFromError(err) : null;
+      if (conflicts) {
+        if (contextGenerationRef.current === generation) applySideStoryConflicts(entry.episodeNo ?? "", conflicts, selectedKeyRef.current);
+        show("来源修改被拒绝：这一行在服务器上已被修改，已显示服务器当前内容", "err");
+        return;
+      }
+      if (sideStoryKind && sideStoryMutationResultIsAmbiguous(err)) {
+        void reconcileContentRef.current("remote", null, "剧情来源修改结果无法确认，正在重新载入权威 revision。");
+      }
       if (isEventStory && eventStoryMutationResultIsAmbiguous(err)) {
         const preservedDraft = JSON.stringify({
           exportedAt: new Date().toISOString(),
@@ -281,12 +361,49 @@ export function useEntryEditor({
           "剧情来源修改结果无法确认；修改意图已冻结，并正在重新载入权威 revision。",
         );
       }
-      show(err instanceof Error ? err.message : "修改失败", "err");
+      show(sideStoryKind ? sideStoryErrorMessage(err, "修改失败") : err instanceof Error ? err.message : "修改失败", "err");
     } finally {
       savingRef.current = false;
       setSaving(false);
     }
-  }, [category, eventTxtDraftDirty, field, entries, isEventStory, locale, show, reloadSidebar, contextGenerationRef, entriesRef, reconcileContentRef, remoteConflictRef, savingRef, setEntries, setSaving, writeFenceRef]);
+  }, [category, eventTxtDraftDirty, field, entries, isEventStory, locale, show, sideStoryKind, applySideStoryConflicts, onSideStorySaved, reloadSidebar, contextGenerationRef, entriesRef, reconcileContentRef, remoteConflictRef, savingRef, setEntries, setSaving, writeFenceRef]);
 
-  return { save, handleSourceChange, applyEventTxtDraft, undoEventTxtDraft };
+  // SekaiText TXT import of a side story: one all-or-nothing PUT for the episode.
+  const saveSideStoryBatch = useCallback(async (episodeKey: string, edits: SideStoryLineEdit[]): Promise<SideStoryBatchOutcome> => {
+    if (!sideStoryKind || writeFenceRef.current || savingRef.current || isReadOnly || edits.length === 0) {
+      return { status: "failed", message: "当前无法写入：实时校对未完成、正在保存或为只读语言" };
+    }
+    const saveKind = sideStoryKind;
+    const saveField = field;
+    const generation = contextGenerationRef.current;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const result = await updateSideStoryLines(saveKind, saveField, episodeKey, sideStoryLocale(locale), edits);
+      onSideStorySaved(saveKind);
+      if (contextGenerationRef.current === generation) {
+        setEntries((prev) => applySideStoryLineStates(prev, episodeKey, result.lines));
+        const selected = selectedEntry?.episodeNo === episodeKey
+          ? result.lines.find((line) => line.jp === selectedEntry.japanese)
+          : undefined;
+        if (selected) setEditValue(selected.text);
+      }
+      return { status: "saved", updated: result.updated, unchanged: result.unchanged };
+    } catch (error) {
+      const conflicts = sideStoryConflictsFromError(error);
+      if (conflicts) {
+        if (contextGenerationRef.current === generation) applySideStoryConflicts(episodeKey, conflicts, selectedKeyRef.current);
+        return { status: "conflict", conflicts };
+      }
+      if (sideStoryMutationResultIsAmbiguous(error)) {
+        void reconcileContentRef.current("remote", null, "TXT 导入的批量保存结果无法确认，正在重新载入权威 revision。");
+      }
+      return { status: "failed", message: sideStoryErrorMessage(error, "TXT 导入保存失败") };
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }, [field, isReadOnly, locale, selectedEntry, sideStoryKind, applySideStoryConflicts, onSideStorySaved, contextGenerationRef, reconcileContentRef, savingRef, setEditValue, setEntries, setSaving, writeFenceRef]);
+
+  return { save, handleSourceChange, applyEventTxtDraft, undoEventTxtDraft, saveSideStoryBatch };
 }

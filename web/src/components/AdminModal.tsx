@@ -36,12 +36,19 @@ const UPSTREAM_KEYS = [
   ["upstream.jp_masterdata_fallback_url", "JP Masterdata 备用 URL"],
   ["upstream.cn_masterdata_url", "CN Masterdata URL"],
   ["upstream.cn_masterdata_fallback_url", "CN Masterdata 备用 URL"],
+  ["upstream.en_masterdata_url", "EN Masterdata URL"],
+  ["upstream.en_masterdata_fallback_url", "EN Masterdata 备用 URL"],
   ["upstream.jp_assets_url", "JP 剧情资源 URL"],
   ["upstream.jp_assets_fallback_url", "JP 剧情资源备用 URL"],
   ["upstream.cn_assets_url", "CN 剧情资源 URL"],
   ["upstream.cn_assets_fallback_url", "CN 剧情资源备用 URL"],
+  ["upstream.jp_scripts_url", "JP 卡牌/区域对话剧本 URL"],
+  ["upstream.jp_scripts_fallback_url", "JP 卡牌剧本备用 URL"],
+  ["upstream.cn_scripts_url", "CN 卡牌/区域对话剧本 URL"],
+  ["upstream.en_scripts_url", "EN 卡牌/区域对话剧本 URL"],
   ["upstream.fetch_concurrency", "并发下载数 (1-12)"],
   ["scheduler.enabled", "启用自动检测 (true/false)"],
+  ["side_story_backfill.enabled", "卡牌剧情/区域对话后台回填 (true/false)"],
 ] as const;
 
 const BACKUP_KEYS = [
@@ -64,7 +71,10 @@ const SETTING_HINTS: Record<string, React.ReactNode> = {
   "llm.max_retries": <>默认 2，即首次请求失败后最多再尝试 2 次。</>,
   "upstream.version_fallback_url": <>可填写多个 URL，用逗号分隔；系统还会自动追加 GitHub Raw、Fastly、Gcore 和 jsDelivr 救援源。</>,
   "upstream.jp_assets_url": <>留空使用 <code>https://assets.unipjsk.com/ondemand</code>。旧 snowyassets 源持续返回 HTTP 525，不再作为默认源。</>,
+  "upstream.jp_scripts_fallback_url": <>只用于卡牌剧情；区域对话剧本不在该源上。</>,
   "upstream.fetch_concurrency": <>留空默认 4；低内存实例建议 2-4。</>,
+  "scheduler.enabled": <>旧版 CN 自动同步：检测到上游版本变化后同步 CN 内容，并对新活动剧情自动调用 AI。修改后重启服务生效。</>,
+  "side_story_backfill.enabled": <>留空为 true。按间隔抓取卡牌剧情与区域对话剧本并导入官方 CN/EN 译文，不调用 AI，与“启用自动检测”无关；环境变量 SIDE_STORY_BACKFILL_ENABLED=false 时始终关闭。</>,
   "backup.git.repo_url": (
     <>
       私有仓库需要把访问令牌写进 URL，格式：

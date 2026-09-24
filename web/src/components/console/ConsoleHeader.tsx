@@ -6,6 +6,8 @@ export interface ConsoleHeaderProps {
   field: string;
   currentStory?: EventStorySummary;
   currentField?: { total: number };
+  /** Title for categories whose field is a story id (side stories). */
+  storyTitle?: string;
   realtimeState: "connected" | "reconnecting" | "connecting" | "offline";
   onlineUsers: string[];
   selectedIndex: number;
@@ -17,6 +19,7 @@ export function ConsoleHeader({
   field,
   currentStory,
   currentField,
+  storyTitle,
   realtimeState,
   onlineUsers,
   selectedIndex,
@@ -30,7 +33,7 @@ export function ConsoleHeader({
           {CATEGORY_LABELS[category] || category} /{" "}
           {isEventStory
             ? currentStory?.eventName || currentStory?.eventNameJapanese || `Event #${field}`
-            : fieldLabel(category, field)}
+            : storyTitle ?? fieldLabel(category, field)}
         </h2>
         <div className="realtime-meta" role="status" aria-live="polite">
           <span className={`realtime-status ${realtimeState}`}>
