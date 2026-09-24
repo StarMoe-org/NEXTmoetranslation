@@ -637,25 +637,26 @@ func TestApplySideStoryKeepsAnImportAgainstALaterMissingOrMirroredFetch(t *testi
 	}
 	apply(jp, fetchedJP(cn))
 	// A round's older fetch is applied after a refresh imported the locale.
+	// Nothing failed, so no message reaches the round summary or the console.
 	for _, test := range []struct {
+		name string
 		cn   SideStoryFetchOutcome
-		want string
 	}{
-		{SideStoryFetchOutcome{Attempted: true, Missing: true}, "zh-CN: not found"},
-		{fetchedJP(mirrored), "zh-CN: official script repeats the Japanese text"},
+		{"404", SideStoryFetchOutcome{Attempted: true, Missing: true}},
+		{"mirror", fetchedJP(mirrored)},
 	} {
 		applied := apply(jp, test.cn)
-		if applied.CNState != "imported" || applied.Error != test.want {
-			t.Fatalf("later %q result %+v", test.want, applied)
+		if applied.CNState != "imported" || applied.Error != "" {
+			t.Fatalf("later %s result %+v", test.name, applied)
 		}
 		if state := sideStoryEpisodeState(t, s, "card", "190", "1"); state.lastError != "" || state.attempts != 0 || state.nextAttemptAt != 0 {
-			t.Fatalf("later %q stored %+v", test.want, state)
+			t.Fatalf("later %s stored %+v", test.name, state)
 		}
 		if cnState, _ := sideStoryEpisodeStates(t, s, "card", "190", "1"); cnState != "imported" {
-			t.Fatalf("later %q stored CN state %s", test.want, cnState)
+			t.Fatalf("later %s stored CN state %s", test.name, cnState)
 		}
 		if row, ok := sideStoryRow(t, s, "card", "190", "1", "テスト台詞です", "zh-CN"); !ok || row.text != "测试台词一" || row.source != "official" {
-			t.Fatalf("later %q CN row %+v ok=%v", test.want, row, ok)
+			t.Fatalf("later %s CN row %+v ok=%v", test.name, row, ok)
 		}
 	}
 	changed := sideStoryTestScript(t, "test_card_190_01", sideStoryTestTalk{"テスト話者", "テスト台詞改です"})

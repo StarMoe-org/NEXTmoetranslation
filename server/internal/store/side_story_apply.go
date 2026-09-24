@@ -234,10 +234,7 @@ func applySideStoryFetchTx(ctx context.Context, tx *sql.Tx, fetch SideStoryEpiso
 		case message != "":
 			part := target.locale + ": " + message
 			messages = append(messages, part)
-			// An import kept over a 404 or a mirror is only reported.
-			if state != SideStoryStateImported {
-				stored = append(stored, part)
-			}
+			stored = append(stored, part)
 		case !target.outcome.Attempted:
 			if kept := episode.keptError(target.locale, state); kept != "" {
 				messages = append(messages, kept)
@@ -354,8 +351,8 @@ const (
 // applyTx returns the locale's new state, the rows written, a failure
 // message and when to retry it. A locale not fetched now keeps its state
 // unless the JP script changed under an earlier import. Under an unchanged JP
-// script an import also survives a 404 or a mirror serving Japanese: that
-// fetch may predate the refresh that imported it. Its message is not stored.
+// script an import also survives a 404 or a mirror serving Japanese without a
+// message: that fetch may predate the refresh that imported it.
 func (o sideStoryOfficialImport) applyTx(ctx context.Context, tx *sql.Tx, state, path string, requeue bool) (string, int, string, sideStoryRetry, error) {
 	outcome := o.official
 	keepImport := state == SideStoryStateImported && !requeue
@@ -366,7 +363,7 @@ func (o sideStoryOfficialImport) applyTx(ctx context.Context, tx *sql.Tx, state,
 		}
 		return state, 0, "", sideStoryNoRetry, nil
 	case outcome.Missing && keepImport:
-		return state, 0, "not found", sideStoryNoRetry, nil
+		return state, 0, "", sideStoryNoRetry, nil
 	case outcome.Missing:
 		// A listed script the mirror has not synced yet 404s; absent is kept
 		// for a locale without an asset path.
@@ -395,7 +392,7 @@ func (o sideStoryOfficialImport) applyTx(ctx context.Context, tx *sql.Tx, state,
 	// gets the real one later, so this is retried like a 404.
 	if mirrored*2 > kanaBodies {
 		if keepImport {
-			return state, 0, "official script repeats the Japanese text", sideStoryNoRetry, nil
+			return state, 0, "", sideStoryNoRetry, nil
 		}
 		return SideStoryStatePending, 0, "official script repeats the Japanese text", sideStoryRetryMissing, nil
 	}
