@@ -1602,6 +1602,8 @@ kbd {
   .app.sidebar-collapsed .sidebar-backdrop { display: none; }
 
   .main-header { padding: 14px 16px 14px 60px; }
+  .remote-conflict-banner { flex-wrap: wrap; }
+  .remote-conflict-banner .btn { margin-left: 0; white-space: nowrap; }
   .main-header h2 { font-size: 16px; }
   .search-bar { padding: 10px 16px; flex-wrap: wrap; }
   .search-bar .related-event-filter { flex: 1 1 100%; }
