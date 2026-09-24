@@ -139,7 +139,7 @@ func runContext(ctx context.Context, src, dbPath string, verify bool) error {
 		if err != nil {
 			return fmt.Errorf("import %s: %w", categoryName, err)
 		}
-		if count == 0 {
+		if count == 0 && !model.IsRestoreOptionalCategory(categoryName) {
 			return fmt.Errorf("import %s produced zero rows", categoryName)
 		}
 		importedEntries += count

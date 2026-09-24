@@ -114,9 +114,18 @@ func (tm traceMap) add(field, jpText string, refID int) {
 }
 
 func (tm traceMap) addStr(field, jpText, refID string) {
-	jpText = strings.TrimSpace(jpText)
+	tm.addExactStr(field, strings.TrimSpace(jpText), refID)
+}
+
+// addExact records refID under the untrimmed jpText, for keys that must stay
+// byte-identical to masterdata.
+func (tm traceMap) addExact(field, jpText string, refID int) {
+	tm.addExactStr(field, jpText, strconv.Itoa(refID))
+}
+
+func (tm traceMap) addExactStr(field, jpText, refID string) {
 	refID = strings.TrimSpace(refID)
-	if jpText == "" || refID == "" || refID == "0" {
+	if strings.TrimSpace(jpText) == "" || refID == "" || refID == "0" {
 		return
 	}
 	if tm[field] == nil {
@@ -138,6 +147,19 @@ func collectPair(target map[string]string, jp, cn string) {
 		return
 	}
 	if cn == jp {
+		cn = ""
+	}
+	target[jp] = cn
+}
+
+// collectExactPair is collectPair without trimming the jp key: the main site
+// looks these texts up by the unmodified masterdata string.
+func collectExactPair(target map[string]string, jp, cn string) {
+	if strings.TrimSpace(jp) == "" {
+		return
+	}
+	cn = strings.TrimSpace(cn)
+	if cn == strings.TrimSpace(jp) {
 		cn = ""
 	}
 	target[jp] = cn

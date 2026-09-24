@@ -205,6 +205,53 @@ func TestSeedMigrationVerificationCannotBeDisabled(t *testing.T) {
 	}
 }
 
+func TestSeedMigrationAcceptsSeedPredatingGachaInfo(t *testing.T) {
+	root := writeCompleteSeed(t)
+	for _, name := range []string{"gachaInfo.json", "gachaInfo.full.json"} {
+		if err := os.Remove(filepath.Join(root, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	databasePath := filepath.Join(t.TempDir(), "predating-gacha-info.db")
+	if err := run(root, databasePath, true); err != nil {
+		t.Fatalf("seed without gachaInfo: %v", err)
+	}
+	database, err := db.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	s := store.New(database)
+	gachaInfo, err := s.CategoryData("gachaInfo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(normalizeCategory(gachaInfo)) != 0 {
+		t.Fatalf("gachaInfo after seed without it = %#v", gachaInfo)
+	}
+	gacha, err := s.CategoryData("gacha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gacha["name"]["jp-gacha"]; got.Text != "translated-gacha" || got.Source != model.SourceHuman {
+		t.Fatalf("gacha after seed without gachaInfo = %#v", gacha)
+	}
+}
+
+func TestSeedMigrationRejectsHalfPresentGachaInfo(t *testing.T) {
+	root := writeCompleteSeed(t)
+	if err := os.Remove(filepath.Join(root, "gachaInfo.full.json")); err != nil {
+		t.Fatal(err)
+	}
+	databasePath := filepath.Join(t.TempDir(), "half-gacha-info.db")
+	if err := run(root, databasePath, true); err == nil || !strings.Contains(err.Error(), "gachaInfo.full.json") {
+		t.Fatalf("half-present gachaInfo error = %v", err)
+	}
+	if _, err := os.Stat(databasePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed migration published database: %v", err)
+	}
+}
+
 func TestKnownGachaFlatFullDiscrepancyUsesLosslessNonconflictingUnion(t *testing.T) {
 	root := writeCompleteSeed(t)
 	for _, name := range []string{"gacha.json", "gacha.full.json"} {

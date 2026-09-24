@@ -296,23 +296,37 @@ func pathExists(path string) (bool, error) {
 	return false, err
 }
 
+// hasLegacyRestoreLayout reports whether root holds every category file pair.
+// A restore-optional category may be absent as a whole, because archives made
+// before it existed lack both files; one file without the other is incomplete.
 func hasLegacyRestoreLayout(ctx context.Context, root string) (bool, error) {
-	paths := []string{filepath.Join(root, "eventStory")}
-	for _, category := range model.SupportedCategories {
-		paths = append(paths, filepath.Join(root, category+".json"), filepath.Join(root, category+".full.json"))
+	if exists, err := pathExistsContext(ctx, filepath.Join(root, "eventStory")); err != nil || !exists {
+		return false, err
 	}
-	for _, path := range paths {
-		if err := ctx.Err(); err != nil {
+	for _, category := range model.SupportedCategories {
+		flat, err := pathExistsContext(ctx, filepath.Join(root, category+".json"))
+		if err != nil {
 			return false, err
 		}
-		if _, err := os.Lstat(path); err != nil {
-			if os.IsNotExist(err) {
-				return false, nil
-			}
+		full, err := pathExistsContext(ctx, filepath.Join(root, category+".full.json"))
+		if err != nil {
 			return false, err
+		}
+		if flat && full {
+			continue
+		}
+		if flat || full || !model.IsRestoreOptionalCategory(category) {
+			return false, nil
 		}
 	}
 	return true, nil
+}
+
+func pathExistsContext(ctx context.Context, path string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return pathExists(path)
 }
 
 // ---- tar.gz helpers ----

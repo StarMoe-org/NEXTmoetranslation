@@ -57,16 +57,12 @@ func TestFailedEventScenarioIsRetriedAfterLaterEventImports(t *testing.T) {
 		fmt.Fprint(w, `{"TalkData":[{"Body":"五十一译文","WindowDisplayName":"角色中"}]}`)
 	}))
 	defer cnAssets.Close()
-	for key, value := range map[string]string{
-		config.KeyUpstreamJPMasterdataURL: jpMaster.URL, config.KeyUpstreamJPMasterdataFallbackURL: "",
-		config.KeyUpstreamCNMasterdataURL: cnMaster.URL, config.KeyUpstreamCNMasterdataFallbackURL: "",
-		config.KeyUpstreamJPAssetsURL: jpAssets.URL, config.KeyUpstreamJPAssetsFallbackURL: "",
-		config.KeyUpstreamCNAssetsURL: cnAssets.URL, config.KeyUpstreamCNAssetsFallbackURL: "",
-	} {
-		if err := cfg.Set(key, value); err != nil {
-			t.Fatal(err)
-		}
-	}
+	configureSourceURLs(t, cfg, map[string]string{
+		config.KeyUpstreamJPMasterdataURL: jpMaster.URL,
+		config.KeyUpstreamCNMasterdataURL: cnMaster.URL,
+		config.KeyUpstreamJPAssetsURL:     jpAssets.URL,
+		config.KeyUpstreamCNAssetsURL:     cnAssets.URL,
+	})
 
 	first, err := tr.syncEventStoriesCNOnly(0, 1)
 	if err != nil {
@@ -132,7 +128,7 @@ func TestTitleOnlyOfficialEventsDoNotEndTheOfficialScan(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	configureRetryTestSources(t, cfg, upstream.URL)
+	configureLocalSources(t, cfg, upstream.URL)
 
 	if _, err := tr.syncEventStoriesCNOnly(0, 1); err != nil {
 		t.Fatal(err)

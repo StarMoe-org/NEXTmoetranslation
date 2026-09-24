@@ -13,12 +13,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"moesekai/server/internal/httpx"
 )
 
 const (
-	gameContextPrompt   = "你是一个专业的游戏翻译器，专门翻译《世界计划 彩色舞台 feat. 初音未来》(Project SEKAI) 游戏内容。\n请将以下XML格式的日文文本翻译成简体中文。\n请只返回<translations>...</translations>，每条使用 <t id=\"N\">文本</t>。\n"
+	gameContextPrompt   = "你是一个专业的游戏翻译器，专门翻译《世界计划 彩色舞台 feat. 初音未来》(Project SEKAI) 游戏内容。\n请将以下XML格式的日文文本翻译成简体中文。\n请只返回<translations>...</translations>，每条使用 <t id=\"N\">文本</t>。\n每条原文中的换行须在译文对应位置原样保留。\n"
 	maxLLMResponseBytes = 8 << 20
 )
 
@@ -327,9 +328,33 @@ func xmlEscape(s string) string {
 	return s
 }
 
+var reXMLEntity = regexp.MustCompile(`&(?:lt|gt|amp|quot|apos|#[0-9]+|#x[0-9A-Fa-f]+);`)
+
+// xmlUnescape decodes the predefined XML entities and character references in
+// one pass, so a model that re-serializes its reply as strict XML (&quot;,
+// &#10;) round-trips and an escaped "&amp;lt;" stays the literal "&lt;".
 func xmlUnescape(s string) string {
-	s = strings.ReplaceAll(s, "&lt;", "<")
-	s = strings.ReplaceAll(s, "&gt;", ">")
-	s = strings.ReplaceAll(s, "&amp;", "&")
-	return s
+	return reXMLEntity.ReplaceAllStringFunc(s, func(entity string) string {
+		switch entity {
+		case "&lt;":
+			return "<"
+		case "&gt;":
+			return ">"
+		case "&amp;":
+			return "&"
+		case "&quot;":
+			return `"`
+		case "&apos;":
+			return "'"
+		}
+		digits, base := entity[2:len(entity)-1], 10
+		if digits[0] == 'x' {
+			digits, base = digits[1:], 16
+		}
+		code, err := strconv.ParseUint(digits, base, 32)
+		if err != nil || code == 0 || !utf8.ValidRune(rune(code)) {
+			return entity
+		}
+		return string(rune(code))
+	})
 }

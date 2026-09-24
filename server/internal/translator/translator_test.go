@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,10 +24,26 @@ import (
 	"moesekai/server/internal/store"
 )
 
+// externalDNSQueries counts DNS queries. Every test source is a loopback IP
+// literal, so any query means a source fell through to a public default.
+var externalDNSQueries atomic.Int64
+
 func TestMain(m *testing.M) {
 	_ = os.Setenv("MOESEKAI_PRODUCTION", "false")
 	_ = os.Setenv(httpx.UpstreamAllowInsecureLocalEnv, "true")
-	os.Exit(m.Run())
+	net.DefaultResolver.PreferGo = true
+	net.DefaultResolver.Dial = func(context.Context, string, string) (net.Conn, error) {
+		externalDNSQueries.Add(1)
+		return nil, errors.New("translator tests must not resolve external hosts")
+	}
+	code := m.Run()
+	if queries := externalDNSQueries.Load(); queries > 0 {
+		fmt.Fprintf(os.Stderr, "translator tests attempted %d external DNS queries; configure every upstream source locally\n", queries)
+		if code == 0 {
+			code = 1
+		}
+	}
+	os.Exit(code)
 }
 
 func openTranslatorConfig(t *testing.T) *config.Config {
@@ -86,23 +104,40 @@ func openCatalogTestTranslator(t *testing.T) (*Translator, *db.DB, *config.Confi
 	return New(store.New(database), nil, cfg), database, cfg
 }
 
-func configureRetryTestSources(t *testing.T, cfg *config.Config, baseURL string) {
+var fallbackSourceKeys = map[string]string{
+	config.KeyUpstreamJPMasterdataURL: config.KeyUpstreamJPMasterdataFallbackURL,
+	config.KeyUpstreamCNMasterdataURL: config.KeyUpstreamCNMasterdataFallbackURL,
+	config.KeyUpstreamJPAssetsURL:     config.KeyUpstreamJPAssetsFallbackURL,
+	config.KeyUpstreamCNAssetsURL:     config.KeyUpstreamCNAssetsFallbackURL,
+}
+
+// configureSourceURLs sets each given primary source and repeats it as that
+// source's fallback, which collapses the chain to the one local source. An
+// empty fallback setting would re-enable the public default mirror.
+func configureSourceURLs(t *testing.T, cfg *config.Config, primaries map[string]string) {
 	t.Helper()
-	settings := map[string]string{
-		config.KeyUpstreamJPMasterdataURL:         baseURL + "/jp-master",
-		config.KeyUpstreamJPMasterdataFallbackURL: "",
-		config.KeyUpstreamCNMasterdataURL:         baseURL + "/cn-master",
-		config.KeyUpstreamCNMasterdataFallbackURL: "",
-		config.KeyUpstreamJPAssetsURL:             baseURL + "/jp-assets",
-		config.KeyUpstreamJPAssetsFallbackURL:     "",
-		config.KeyUpstreamCNAssetsURL:             baseURL + "/cn-assets",
-		config.KeyUpstreamCNAssetsFallbackURL:     "",
-	}
-	for key, value := range settings {
-		if err := cfg.Set(key, value); err != nil {
-			t.Fatal(err)
+	settings := make(map[string]string, 2*len(primaries))
+	for key, url := range primaries {
+		fallback, ok := fallbackSourceKeys[key]
+		if !ok {
+			t.Fatalf("%s is not a primary source key", key)
 		}
+		settings[key], settings[fallback] = url, url
 	}
+	if _, err := cfg.SetMany(settings); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// configureLocalSources points all four sources at paths of one test server.
+func configureLocalSources(t *testing.T, cfg *config.Config, baseURL string) {
+	t.Helper()
+	configureSourceURLs(t, cfg, map[string]string{
+		config.KeyUpstreamJPMasterdataURL: baseURL + "/jp-master",
+		config.KeyUpstreamCNMasterdataURL: baseURL + "/cn-master",
+		config.KeyUpstreamJPAssetsURL:     baseURL + "/jp-assets",
+		config.KeyUpstreamCNAssetsURL:     baseURL + "/cn-assets",
+	})
 }
 
 func TestBuildAndParseXMLRoundTrip(t *testing.T) {
@@ -162,12 +197,7 @@ func TestExtractMusicIsReadOnlyAndReturnsCatalog(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	if err := cfg.Set(config.KeyUpstreamJPMasterdataURL, upstream.URL); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Set(config.KeyUpstreamJPMasterdataFallbackURL, ""); err != nil {
-		t.Fatal(err)
-	}
+	configureSourceURLs(t, cfg, map[string]string{config.KeyUpstreamJPMasterdataURL: upstream.URL})
 
 	fields, catalog, err := tr.extractMusic()
 	if err != nil {
@@ -202,16 +232,10 @@ func TestExtractCharactersSurfacesPerformerCatalogFetchFailure(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	for _, key := range []string{config.KeyUpstreamJPMasterdataURL, config.KeyUpstreamCNMasterdataURL} {
-		if err := cfg.Set(key, upstream.URL); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, key := range []string{config.KeyUpstreamJPMasterdataFallbackURL, config.KeyUpstreamCNMasterdataFallbackURL} {
-		if err := cfg.Set(key, ""); err != nil {
-			t.Fatal(err)
-		}
-	}
+	configureSourceURLs(t, cfg, map[string]string{
+		config.KeyUpstreamJPMasterdataURL: upstream.URL,
+		config.KeyUpstreamCNMasterdataURL: upstream.URL,
+	})
 
 	fields, catalog, err := tr.extractCharacters()
 	if err == nil || !strings.Contains(err.Error(), "gameCharacters.json") || fields != nil || catalog != nil {
@@ -232,12 +256,7 @@ func TestMusicCategoryApplyRollsBackTranslationAndCatalogTogether(t *testing.T) 
 		}
 	}))
 	defer upstream.Close()
-	if err := cfg.Set(config.KeyUpstreamJPMasterdataURL, upstream.URL); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Set(config.KeyUpstreamJPMasterdataFallbackURL, ""); err != nil {
-		t.Fatal(err)
-	}
+	configureSourceURLs(t, cfg, map[string]string{config.KeyUpstreamJPMasterdataURL: upstream.URL})
 	fields, catalog, err := tr.extractMusic()
 	if err != nil {
 		t.Fatal(err)
@@ -609,7 +628,7 @@ func TestRetryOfficialTalkLengthMismatchPreservesExistingEvent(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	configureRetryTestSources(t, cfg, upstream.URL)
+	configureLocalSources(t, cfg, upstream.URL)
 
 	result, err := tr.RetryEventStorySync(101)
 	if err == nil || !strings.Contains(err.Error(), "TalkData length mismatch") || result != nil {
@@ -644,7 +663,7 @@ func TestRetryOfficialPreservesEmptyEpisodeIdentity(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	configureRetryTestSources(t, cfg, upstream.URL)
+	configureLocalSources(t, cfg, upstream.URL)
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		result, err := tr.RetryEventStorySync(102)
@@ -683,7 +702,7 @@ func TestRetryResponseUsesPersistedPendingSourceAfterPartialAI(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	configureRetryTestSources(t, cfg, upstream.URL)
+	configureLocalSources(t, cfg, upstream.URL)
 	for key, value := range map[string]string{
 		config.KeyOpenAIAPIKey: "test", config.KeyOpenAIBaseURL: upstream.URL + "/llm",
 		config.KeyOpenAIModel: "test-model", config.KeyBatchSize: "20", config.KeyRateDelayMS: "0",
@@ -713,12 +732,7 @@ func TestJPPendingEpisodeFailureDoesNotPartiallyReplaceEvent(t *testing.T) {
 		fmt.Fprint(w, `{"ScenarioId":"one","Snippets":[],"TalkData":[{"Body":"一","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer assets.Close()
-	if err := cfg.Set(config.KeyUpstreamJPAssetsURL, assets.URL); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Set(config.KeyUpstreamJPAssetsFallbackURL, ""); err != nil {
-		t.Fatal(err)
-	}
+	configureSourceURLs(t, cfg, map[string]string{config.KeyUpstreamJPAssetsURL: assets.URL})
 	stories := []map[string]any{{
 		"eventId": float64(91), "assetbundleName": "asset",
 		"eventStoryEpisodes": []any{
@@ -758,12 +772,7 @@ func TestMalformedEventEpisodeIdentitiesFailClosedBeforeFetch(t *testing.T) {
 		http.Error(w, "unexpected", http.StatusInternalServerError)
 	}))
 	defer assets.Close()
-	if err := cfg.Set(config.KeyUpstreamJPAssetsURL, assets.URL); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Set(config.KeyUpstreamJPAssetsFallbackURL, ""); err != nil {
-		t.Fatal(err)
-	}
+	configureSourceURLs(t, cfg, map[string]string{config.KeyUpstreamJPAssetsURL: assets.URL})
 	cases := map[string][]any{
 		"non-object":         {"bad"},
 		"non-positive":       {map[string]any{"episodeNo": float64(0), "scenarioId": "one"}},
@@ -843,17 +852,12 @@ func TestOfficialEpisodeFailureDoesNotPartiallyReplaceExistingEvent(t *testing.T
 		fmt.Fprint(w, `{"TalkData":[{"Body":"一中","WindowDisplayName":"角色"}]}`)
 	}))
 	defer cnAssets.Close()
-	settings := map[string]string{
-		config.KeyUpstreamJPMasterdataURL: jpMaster.URL, config.KeyUpstreamJPMasterdataFallbackURL: "",
-		config.KeyUpstreamCNMasterdataURL: cnMaster.URL, config.KeyUpstreamCNMasterdataFallbackURL: "",
-		config.KeyUpstreamJPAssetsURL: jpAssets.URL, config.KeyUpstreamJPAssetsFallbackURL: "",
-		config.KeyUpstreamCNAssetsURL: cnAssets.URL, config.KeyUpstreamCNAssetsFallbackURL: "",
-	}
-	for key, value := range settings {
-		if err := cfg.Set(key, value); err != nil {
-			t.Fatal(err)
-		}
-	}
+	configureSourceURLs(t, cfg, map[string]string{
+		config.KeyUpstreamJPMasterdataURL: jpMaster.URL,
+		config.KeyUpstreamCNMasterdataURL: cnMaster.URL,
+		config.KeyUpstreamJPAssetsURL:     jpAssets.URL,
+		config.KeyUpstreamCNAssetsURL:     cnAssets.URL,
+	})
 	outcome, err := tr.syncEventStoriesCNOnly(0, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -903,16 +907,11 @@ func TestRetryEventStorySyncFallbackFailurePreservesExistingEvent(t *testing.T) 
 		fmt.Fprint(w, `{"ScenarioId":"one","Snippets":[],"TalkData":[{"Body":"一","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer jpAssets.Close()
-	settings := map[string]string{
-		config.KeyUpstreamJPMasterdataURL: jpMaster.URL, config.KeyUpstreamJPMasterdataFallbackURL: "",
-		config.KeyUpstreamCNMasterdataURL: cnMaster.URL, config.KeyUpstreamCNMasterdataFallbackURL: "",
-		config.KeyUpstreamJPAssetsURL: jpAssets.URL, config.KeyUpstreamJPAssetsFallbackURL: "",
-	}
-	for key, value := range settings {
-		if err := cfg.Set(key, value); err != nil {
-			t.Fatal(err)
-		}
-	}
+	configureSourceURLs(t, cfg, map[string]string{
+		config.KeyUpstreamJPMasterdataURL: jpMaster.URL,
+		config.KeyUpstreamCNMasterdataURL: cnMaster.URL,
+		config.KeyUpstreamJPAssetsURL:     jpAssets.URL,
+	})
 	result, err := tr.RetryEventStorySync(95)
 	if err == nil || !strings.Contains(err.Error(), "incomplete JP episode fetch") || result != nil {
 		t.Fatalf("retry result=%v err=%v", result, err)
@@ -955,19 +954,11 @@ func TestSyncBackfillsSkippedHumanEventScenarioWithoutChangingTranslations(t *te
 		fmt.Fprint(w, `{"ScenarioId":"human-scenario","Snippets":[{"Action":1,"ReferenceIndex":0}],"TalkData":[{"Body":"原文","WindowDisplayName":"角色","Voices":[]}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer assets.Close()
-	settings := map[string]string{
-		config.KeyUpstreamJPMasterdataURL:         jpMaster.URL,
-		config.KeyUpstreamJPMasterdataFallbackURL: "",
-		config.KeyUpstreamCNMasterdataURL:         cnMaster.URL,
-		config.KeyUpstreamCNMasterdataFallbackURL: "",
-		config.KeyUpstreamJPAssetsURL:             assets.URL,
-		config.KeyUpstreamJPAssetsFallbackURL:     "",
-	}
-	for key, value := range settings {
-		if err := cfg.Set(key, value); err != nil {
-			t.Fatal(err)
-		}
-	}
+	configureSourceURLs(t, cfg, map[string]string{
+		config.KeyUpstreamJPMasterdataURL: jpMaster.URL,
+		config.KeyUpstreamCNMasterdataURL: cnMaster.URL,
+		config.KeyUpstreamJPAssetsURL:     assets.URL,
+	})
 	outcome, err := tr.syncEventStoriesCNOnly(0, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -1115,15 +1106,11 @@ func TestRollingScenarioReplacementBackfillPreservesRecoveryLocalesAndRestoresEx
 		fmt.Fprint(w, `{"ScenarioId":"new-scenario","Snippets":[],"TalkData":[{"Body":"共有原文","WindowDisplayName":"新話者","Voices":[]},{"Body":"変更後","WindowDisplayName":"","Voices":[]}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer assets.Close()
-	for key, value := range map[string]string{
-		config.KeyUpstreamJPMasterdataURL: jpMaster.URL, config.KeyUpstreamJPMasterdataFallbackURL: "",
-		config.KeyUpstreamCNMasterdataURL: cnMaster.URL, config.KeyUpstreamCNMasterdataFallbackURL: "",
-		config.KeyUpstreamJPAssetsURL: assets.URL, config.KeyUpstreamJPAssetsFallbackURL: "",
-	} {
-		if err := cfg.Set(key, value); err != nil {
-			t.Fatal(err)
-		}
-	}
+	configureSourceURLs(t, cfg, map[string]string{
+		config.KeyUpstreamJPMasterdataURL: jpMaster.URL,
+		config.KeyUpstreamCNMasterdataURL: cnMaster.URL,
+		config.KeyUpstreamJPAssetsURL:     assets.URL,
+	})
 	outcome, err := tr.syncEventStoriesCNOnly(0, 1)
 	if err != nil || outcome.Processed != 0 || len(outcome.PartialErrors) != 0 {
 		t.Fatalf("rolling backfill outcome=%+v err=%v", outcome, err)
@@ -1230,12 +1217,7 @@ func TestScenarioBackfillFetchesOnlyMissingEpisodes(t *testing.T) {
 		}
 	}))
 	defer assets.Close()
-	if err := cfg.Set(config.KeyUpstreamJPAssetsURL, assets.URL); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Set(config.KeyUpstreamJPAssetsFallbackURL, ""); err != nil {
-		t.Fatal(err)
-	}
+	configureSourceURLs(t, cfg, map[string]string{config.KeyUpstreamJPAssetsURL: assets.URL})
 	states, _, err := events.EventSyncStates()
 	if err != nil {
 		t.Fatal(err)
@@ -1308,17 +1290,12 @@ func TestOfficialSyncRechecksProtectedEditInsideImportTransaction(t *testing.T) 
 		fmt.Fprint(w, `{"TalkData":[{"Body":"官方译文","WindowDisplayName":"角色"}]}`)
 	}))
 	defer cnAssets.Close()
-	settings := map[string]string{
-		config.KeyUpstreamJPMasterdataURL: jpMaster.URL, config.KeyUpstreamJPMasterdataFallbackURL: "",
-		config.KeyUpstreamCNMasterdataURL: cnMaster.URL, config.KeyUpstreamCNMasterdataFallbackURL: "",
-		config.KeyUpstreamJPAssetsURL: jpAssets.URL, config.KeyUpstreamJPAssetsFallbackURL: "",
-		config.KeyUpstreamCNAssetsURL: cnAssets.URL, config.KeyUpstreamCNAssetsFallbackURL: "",
-	}
-	for key, value := range settings {
-		if err := cfg.Set(key, value); err != nil {
-			t.Fatal(err)
-		}
-	}
+	configureSourceURLs(t, cfg, map[string]string{
+		config.KeyUpstreamJPMasterdataURL: jpMaster.URL,
+		config.KeyUpstreamCNMasterdataURL: cnMaster.URL,
+		config.KeyUpstreamJPAssetsURL:     jpAssets.URL,
+		config.KeyUpstreamCNAssetsURL:     cnAssets.URL,
+	})
 	outcome, err := tr.syncEventStoriesCNOnly(0, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -1350,12 +1327,7 @@ func TestJPPendingSyncRechecksProtectedEventCreatedDuringFetch(t *testing.T) {
 		fmt.Fprint(w, `{"ScenarioId":"remote","Snippets":[],"TalkData":[{"Body":"远端原文","WindowDisplayName":"角色","Voices":[]}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer assets.Close()
-	if err := cfg.Set(config.KeyUpstreamJPAssetsURL, assets.URL); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Set(config.KeyUpstreamJPAssetsFallbackURL, ""); err != nil {
-		t.Fatal(err)
-	}
+	configureSourceURLs(t, cfg, map[string]string{config.KeyUpstreamJPAssetsURL: assets.URL})
 	stories := []map[string]any{{
 		"eventId": float64(97), "assetbundleName": "asset",
 		"eventStoryEpisodes": []any{map[string]any{"episodeNo": float64(1), "scenarioId": "remote", "title": "远端标题"}},

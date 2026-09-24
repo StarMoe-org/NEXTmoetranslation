@@ -37,8 +37,10 @@ func IsValidLocale(locale string) bool {
 
 // SupportedCategories are the flat translation categories (event stories
 // are handled separately). Order is preserved for stable category listing.
+// gachaInfo holds the multi-KB gacha texts apart from gacha (names) so the
+// main site does not load them on every page.
 var SupportedCategories = []string{
-	"cards", "skills", "events", "information", "music", "gacha", "virtualLive",
+	"cards", "skills", "events", "information", "music", "gacha", "gachaInfo", "virtualLive",
 	"sticker", "comic", "mysekai", "costumes", "characters", "units",
 }
 
@@ -49,6 +51,13 @@ func IsValidCategory(category string) bool {
 		}
 	}
 	return false
+}
+
+// IsRestoreOptionalCategory reports categories added after translation exports
+// and legacy seeds already existed. An import that predates one, or was taken
+// before its first sync, restores it as empty.
+func IsRestoreOptionalCategory(category string) bool {
+	return category == "gachaInfo"
 }
 
 // Entry is a single translation row in the .full.json format:

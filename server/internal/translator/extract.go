@@ -154,6 +154,35 @@ func (t *Translator) extractEvents() (map[string]store.CNApplyField, error) {
 func (t *Translator) extractGacha() (map[string]store.CNApplyField, error) {
 	return t.extractSimpleNameByID("gachas.json", "id", "name")
 }
+
+var gachaInfoFields = []string{"summary", "bubbleText", "description"}
+
+// extractGachaInfo pairs gachaInformation texts by gacha id. Keys keep the
+// exact masterdata text, line breaks and surrounding whitespace included.
+func (t *Translator) extractGachaInfo() (map[string]store.CNApplyField, error) {
+	jp, err := t.fetchMasterdata("gachas.json", "jp")
+	if err != nil {
+		return nil, err
+	}
+	cn, err := t.fetchMasterdata("gachas.json", "cn")
+	if err != nil {
+		return nil, err
+	}
+	cnByID := byIntID(cn, "id")
+	out := newExtractResult(gachaInfoFields...)
+	tm := newTraceMap(gachaInfoFields...)
+	for _, item := range jp {
+		id := getInt(item, "id")
+		jpInfo := asMap(item["gachaInformation"])
+		cnInfo := asMap(cnByID[id]["gachaInformation"])
+		for _, field := range gachaInfoFields {
+			jpText := getString(jpInfo, field)
+			tm.addExact(field, jpText, id)
+			collectExactPair(out[field].Pairs, jpText, getString(cnInfo, field))
+		}
+	}
+	return out.withTrace(tm), nil
+}
 func (t *Translator) extractVirtualLive() (map[string]store.CNApplyField, error) {
 	return t.extractSimpleNameByID("virtualLives.json", "id", "name")
 }
@@ -353,7 +382,10 @@ func (t *Translator) extractMysekai() (map[string]store.CNApplyField, error) {
 		collectPair(out["flavorText"].Pairs, jpFlavor, getString(cnf, "flavorText"))
 	}
 
-	jpGenre, _ := t.fetchMasterdata("mysekaiFixtureMainGenres.json", "jp")
+	jpGenre, err := t.fetchMasterdata("mysekaiFixtureMainGenres.json", "jp")
+	if err != nil {
+		return nil, err
+	}
 	cnGenre, err := t.fetchMasterdata("mysekaiFixtureMainGenres.json", "cn")
 	if err != nil {
 		return nil, err
@@ -366,7 +398,10 @@ func (t *Translator) extractMysekai() (map[string]store.CNApplyField, error) {
 		collectPair(out["genre"].Pairs, jpName, getString(cnGenreByID[id], "name"))
 	}
 
-	jpTag, _ := t.fetchMasterdata("mysekaiFixtureTags.json", "jp")
+	jpTag, err := t.fetchMasterdata("mysekaiFixtureTags.json", "jp")
+	if err != nil {
+		return nil, err
+	}
 	cnTag, err := t.fetchMasterdata("mysekaiFixtureTags.json", "cn")
 	if err != nil {
 		return nil, err

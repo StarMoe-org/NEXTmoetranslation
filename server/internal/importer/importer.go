@@ -47,7 +47,7 @@ func readDirContext(ctx context.Context, src, validationLabel string) (Payload, 
 		if err := ctx.Err(); err != nil {
 			return payload, res, err
 		}
-		category, warnings, err := loadCompleteCategory(src, cat)
+		category, warnings, err := loadCategory(src, cat)
 		if err != nil {
 			return payload, res, err
 		}
@@ -102,8 +102,9 @@ func readDirContext(ctx context.Context, src, validationLabel string) (Payload, 
 
 // ReadSeedDir applies the stricter first-boot contract. A seed is a complete,
 // non-empty production snapshot, not an optional partial restore: every
-// category must contain at least one entry and at least one valid event story
-// with complete metadata and episode representation must be present.
+// category except restore-optional ones must contain at least one entry and at
+// least one valid event story with complete metadata and episode
+// representation must be present.
 func ReadSeedDir(ctx context.Context, src string) (Payload, Result, error) {
 	payload, result, err := readDirContext(ctx, src, "")
 	if err != nil {
@@ -136,7 +137,7 @@ func validateCompletePayload(payload Payload, result Result, label string) error
 				}
 			}
 		}
-		if entries == 0 {
+		if entries == 0 && !model.IsRestoreOptionalCategory(categoryName) {
 			return fmt.Errorf("%s category %s is empty", label, categoryName)
 		}
 	}
@@ -185,6 +186,33 @@ func validateCompletePayload(payload Payload, result Result, label string) error
 		}
 	}
 	return nil
+}
+
+// loadCategory treats a restore-optional category whose flat and full files are
+// both absent as empty; a single missing file is still a broken projection.
+func loadCategory(src, category string) (model.Category, []string, error) {
+	if model.IsRestoreOptionalCategory(category) {
+		flatMissing, err := fileMissing(filepath.Join(src, category+".json"))
+		if err != nil {
+			return nil, nil, err
+		}
+		fullMissing, err := fileMissing(filepath.Join(src, category+".full.json"))
+		if err != nil {
+			return nil, nil, err
+		}
+		if flatMissing && fullMissing {
+			return model.Category{}, []string{fmt.Sprintf("%s: absent from source, imported as empty", category)}, nil
+		}
+	}
+	return loadCompleteCategory(src, category)
+}
+
+func fileMissing(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return true, nil
+	}
+	return false, err
 }
 
 func loadCompleteCategory(src, category string) (model.Category, []string, error) {
@@ -268,7 +296,8 @@ func eventIDFromPath(path string) int {
 }
 
 // ValidateDir parses the complete legacy projection before a destructive
-// restore. Every generated category pair and the event directory are required.
+// restore. Every generated category pair and the event directory are required,
+// except restore-optional categories that are absent altogether.
 func ValidateDir(src string) error {
 	_, _, err := ReadDir(src)
 	return err

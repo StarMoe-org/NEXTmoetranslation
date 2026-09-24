@@ -437,6 +437,30 @@ func (t *Translator) SyncCNOnly() (CNSyncResult, error) {
 	return t.SyncCNOnlyContext(context.Background())
 }
 
+type cnSyncStep struct {
+	category string
+	fn       func() cnExtractedCategory
+}
+
+func (t *Translator) cnSyncSteps() []cnSyncStep {
+	return []cnSyncStep{
+		{"cards", extractCNFields(t.extractCards)},
+		{"skills", extractCNFields(t.extractSkills)},
+		{"events", extractCNFields(t.extractEvents)},
+		{"information", extractCNFields(t.extractInformation)},
+		{"gacha", extractCNFields(t.extractGacha)},
+		{"gachaInfo", extractCNFields(t.extractGachaInfo)},
+		{"virtualLive", extractCNFields(t.extractVirtualLive)},
+		{"sticker", extractCNFields(t.extractStickers)},
+		{"comic", extractCNFields(t.extractComics)},
+		{"mysekai", extractCNFields(t.extractMysekai)},
+		{"costumes", extractCNFields(t.extractCostumes)},
+		{"characters", t.extractCharactersCategory},
+		{"units", extractCNFields(t.extractUnits)},
+		{"music", t.extractMusicCategory},
+	}
+}
+
 func (t *Translator) SyncCNOnlyContext(ctx context.Context) (CNSyncResult, error) {
 	if err := t.markStart(ctx, "cn-sync"); err != nil {
 		return CNSyncResult{}, err
@@ -453,24 +477,7 @@ func (t *Translator) SyncCNOnlyContext(ctx context.Context) (CNSyncResult, error
 		t.markEnd(note, runErr)
 	}()
 
-	steps := []struct {
-		category string
-		fn       func() cnExtractedCategory
-	}{
-		{"cards", extractCNFields(t.extractCards)},
-		{"skills", extractCNFields(t.extractSkills)},
-		{"events", extractCNFields(t.extractEvents)},
-		{"information", extractCNFields(t.extractInformation)},
-		{"gacha", extractCNFields(t.extractGacha)},
-		{"virtualLive", extractCNFields(t.extractVirtualLive)},
-		{"sticker", extractCNFields(t.extractStickers)},
-		{"comic", extractCNFields(t.extractComics)},
-		{"mysekai", extractCNFields(t.extractMysekai)},
-		{"costumes", extractCNFields(t.extractCostumes)},
-		{"characters", t.extractCharactersCategory},
-		{"units", extractCNFields(t.extractUnits)},
-		{"music", t.extractMusicCategory},
-	}
+	steps := t.cnSyncSteps()
 
 	// Remote extraction is read-only and independent per category. Fetch a
 	// bounded number in parallel, then apply translations and their corresponding
@@ -647,8 +654,32 @@ func (t *Translator) ManualAITranslateContext(ctx context.Context, req AITransla
 	return result, nil
 }
 
-// translateBatch runs LLM translation over keys in BatchSize chunks, honoring
-// the rate-limit delay. Returns jp -> cn for non-empty results.
+// maxLLMBatchTextBytes caps the Japanese text per request so a batch of
+// multi-KB texts (gachaInfo descriptions) stays within provider output limits
+// (Gemini maxOutputTokens=8192). Short entries still batch by BatchSize.
+const maxLLMBatchTextBytes = 8 << 10
+
+// llmBatches splits keys into consecutive batches of at most batchSize keys and
+// maxBytes of text; a single key larger than maxBytes forms its own batch.
+func llmBatches(keys []string, batchSize, maxBytes int) [][]string {
+	var batches [][]string
+	start, size := 0, 0
+	for i, key := range keys {
+		if i > start && (i-start >= batchSize || size+len(key) > maxBytes) {
+			batches = append(batches, keys[start:i])
+			start, size = i, 0
+		}
+		size += len(key)
+	}
+	if start < len(keys) {
+		batches = append(batches, keys[start:])
+	}
+	return batches
+}
+
+// translateBatch runs LLM translation over keys in BatchSize chunks (bounded
+// by maxLLMBatchTextBytes), honoring the rate-limit delay. Returns jp -> cn for
+// non-empty results.
 func (t *Translator) translateBatch(provider string, keys []string) (map[string]string, error) {
 	cfg := t.snapshotConfig()
 	batchSize := cfg.BatchSize
@@ -656,12 +687,9 @@ func (t *Translator) translateBatch(provider string, keys []string) (map[string]
 		batchSize = 20
 	}
 	updates := make(map[string]string, len(keys))
-	for i := 0; i < len(keys); i += batchSize {
-		end := i + batchSize
-		if end > len(keys) {
-			end = len(keys)
-		}
-		batch := keys[i:end]
+	i := 0
+	for _, batch := range llmBatches(keys, batchSize, maxLLMBatchTextBytes) {
+		end := i + len(batch)
 		log.Printf("[translate] batch %d-%d/%d (provider=%s)", i+1, end, len(keys), provider)
 		translated, err := t.callLLMWithAttempts(provider, batch, func(attempt, attempts int) {
 			t.emit("translate.progress", fmt.Sprintf("AI 翻译中 %d/%d · 请求 %d/%d", i, len(keys), attempt, attempts), i, len(keys))
@@ -683,6 +711,7 @@ func (t *Translator) translateBatch(provider string, keys []string) (map[string]
 				return updates, err
 			}
 		}
+		i = end
 	}
 	return updates, nil
 }
