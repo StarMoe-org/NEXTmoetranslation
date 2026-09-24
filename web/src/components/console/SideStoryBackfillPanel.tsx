@@ -1,14 +1,6 @@
-import { useEffect, useRef } from "react";
-import type { SideStoryBackfillState, SideStoryKindProgress, SideStorySyncStatus } from "@/lib/api";
+import { useEffect } from "react";
+import type { SideStoryKindProgress, SideStorySyncStatus } from "@/lib/api";
 import { SIDE_STORY_FETCH_STATE_LABELS as LABELS } from "@/lib/side-story-console";
-
-const POLL_MS = 15_000;
-
-// Only rounds with changes send sidestory.sync, so a running round or a passed
-// next-round time would otherwise stay on screen.
-function stateMayBeStale(state: SideStoryBackfillState | undefined, now: number): boolean {
-  return Boolean(state?.running) || Date.parse(state?.nextRoundAt ?? "") <= now;
-}
 
 function formatTime(value?: string): string {
   if (!value) return "—";
@@ -34,6 +26,7 @@ export interface SideStoryBackfillPanelProps {
   setExpanded: (expanded: boolean) => void;
   status: SideStorySyncStatus | null;
   busy: boolean;
+  /** While watching, the catalog hook also polls a running or overdue round. */
   watch: (watching: boolean) => void;
   reload: () => void;
   runSync: (refreshCatalog: boolean) => void;
@@ -44,18 +37,6 @@ export function SideStoryBackfillPanel({ role, expanded, setExpanded, status, bu
     watch(expanded);
     return () => watch(false);
   }, [expanded, watch]);
-
-  const stateRef = useRef(status?.state);
-  stateRef.current = status?.state;
-  const reloadRef = useRef(reload);
-  reloadRef.current = reload;
-  useEffect(() => {
-    if (!expanded) return;
-    const timer = setInterval(() => {
-      if (stateMayBeStale(stateRef.current, Date.now())) reloadRef.current();
-    }, POLL_MS);
-    return () => clearInterval(timer);
-  }, [expanded]);
 
   const state = status?.state;
   const round = state?.lastRound;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Locale, SideStoryKind, SideStorySummary, SideStorySyncStatus,
+  Locale, SideStoryBackfillState, SideStoryKind, SideStorySummary, SideStorySyncStatus,
   getSideStories, getSideStorySyncStatus, triggerSideStorySync,
 } from "@/lib/api";
 import { sideStoryErrorMessage, sideStoryLocale } from "@/lib/side-story-console";
@@ -21,6 +21,13 @@ export type SideStoryListRefreshed = (
 const EMPTY_LIST: SideStoryListState = { stories: [], loaded: false, loading: false, failed: false };
 const KINDS: readonly SideStoryKind[] = ["card", "area"];
 const REFRESH_DEBOUNCE_MS = 1500;
+const SYNC_POLL_MS = 15_000;
+
+// Only rounds with changes send sidestory.sync, so a running round or a passed
+// next-round time would otherwise stay on screen.
+function syncStateMayBeStale(state: SideStoryBackfillState | undefined, now: number): boolean {
+  return Boolean(state?.running) || Date.parse(state?.nextRoundAt ?? "") <= now;
+}
 
 /**
  * Side-story lists are large, so each kind loads only once its sidebar group (or one of
@@ -35,6 +42,8 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
   const syncWantedRef = useRef(false);
   const requestRef = useRef<Record<SideStoryKind, number>>({ card: 0, area: 0 });
   const syncRequestRef = useRef(0);
+  const syncStateRef = useRef<SideStoryBackfillState | undefined>(undefined);
+  const syncPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingRef = useRef(new Set<SideStoryKind>());
   const pendingCallbacksRef = useRef(new Set<SideStoryListRefreshed>());
   const loadedRef = useRef<Record<SideStoryKind, SideStorySummary[] | null>>({ card: null, area: null });
@@ -64,13 +73,15 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
   const loadListRef = useRef(loadList);
   loadListRef.current = loadList;
 
-  const loadSyncStatus = useCallback(async () => {
+  const loadSyncStatus = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     const request = ++syncRequestRef.current;
     try {
       const status = await getSideStorySyncStatus();
-      if (syncRequestRef.current === request) setSyncStatus(status);
+      if (syncRequestRef.current !== request) return;
+      syncStateRef.current = status.state;
+      setSyncStatus(status);
     } catch (error) {
-      if (syncRequestRef.current === request) showRef.current(sideStoryErrorMessage(error, "回填进度载入失败"), "err");
+      if (!silent && syncRequestRef.current === request) showRef.current(sideStoryErrorMessage(error, "回填进度载入失败"), "err");
     }
   }, []);
 
@@ -84,6 +95,7 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
 
   useEffect(() => () => {
     if (timerRef.current) clearTimeout(timerRef.current);
+    if (syncPollRef.current) clearInterval(syncPollRef.current);
   }, []);
 
   const ensureList = useCallback((kind: SideStoryKind) => {
@@ -94,7 +106,14 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
 
   const watchSyncStatus = useCallback((watching: boolean) => {
     syncWantedRef.current = watching;
-    if (watching) void loadSyncStatus();
+    if (syncPollRef.current) clearInterval(syncPollRef.current);
+    syncPollRef.current = null;
+    if (!watching) return;
+    void loadSyncStatus();
+    // A failed poll keeps the last status without a toast, e.g. while the server restarts.
+    syncPollRef.current = setInterval(() => {
+      if (syncStateMayBeStale(syncStateRef.current, Date.now())) void loadSyncStatus({ silent: true });
+    }, SYNC_POLL_MS);
   }, [loadSyncStatus]);
 
   const refreshLists = useCallback((kind?: SideStoryKind, onRefreshed?: SideStoryListRefreshed) => {
@@ -124,6 +143,7 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
     setSyncBusy(true);
     try {
       const result = await triggerSideStorySync(refreshCatalog);
+      syncStateRef.current = result.state;
       setSyncStatus((prev) => (prev ? { ...prev, state: result.state } : prev));
       // A disabled backfill is a 409; while a round runs, the requested round follows it.
       showRef.current(result.state.running
