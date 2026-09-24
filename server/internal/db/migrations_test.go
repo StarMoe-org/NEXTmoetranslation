@@ -75,10 +75,11 @@ func TestMigrationsAfterV34MustNotMutateContentTables(t *testing.T) {
 	verbatimRebuilds := map[int]map[string]string{
 		37: {"SONG_LYRICS_SOURCE_ARTIFACTS": "SONG_LYRICS_SOURCE_ARTIFACTS_V36"},
 	}
-	// These migrations may only create the named table with its indexes and
+	// These migrations may only create the named tables with their indexes and
 	// RAISE-only triggers.
-	createOnly := map[int]string{
-		38: "LYRICS_RECOVERY_TAKEOVERS",
+	createOnly := map[int][]string{
+		38: {"LYRICS_RECOVERY_TAKEOVERS"},
+		39: {"SIDE_STORIES", "SIDE_STORY_EPISODES", "SIDE_STORY_LINES", "SIDE_STORY_LINE_LOCALIZATIONS"},
 	}
 
 	for _, m := range migrations {
@@ -93,15 +94,15 @@ func TestMigrationsAfterV34MustNotMutateContentTables(t *testing.T) {
 		}
 		upper := strings.ToUpper(m.sql)
 		normalized := strings.Join(strings.Fields(upper), " ")
-		if table, ok := createOnly[m.version]; ok {
+		if tables, ok := createOnly[m.version]; ok {
 			statements := migrationSQLStatements(m.sql)
 			if len(statements) == 0 {
 				t.Fatalf("migration %d (%s) has no statements", m.version, m.name)
 			}
 			for _, statement := range statements {
-				if !isCreateOnlyStatement(statement, table) {
-					t.Fatalf("migration %d (%s) may only create %s, its indexes and RAISE-only triggers; found %q",
-						m.version, m.name, table, statement)
+				if !isCreateOnlyStatement(statement, tables...) {
+					t.Fatalf("migration %d (%s) may only create %v, their indexes and RAISE-only triggers; found %q",
+						m.version, m.name, tables, statement)
 				}
 			}
 		}
@@ -201,16 +202,21 @@ var (
 	createOnlyTriggerStatement = regexp.MustCompile(`^CREATE TRIGGER [A-Z0-9_]+ BEFORE (?:INSERT|UPDATE|DELETE) ON ([A-Z0-9_]+) (?:WHEN .* )?BEGIN SELECT RAISE\(ABORT, '[^';]*'\); END$`)
 )
 
-// isCreateOnlyStatement reports whether a normalized statement creates table,
-// an index on it, or a trigger on it whose body only raises.
-func isCreateOnlyStatement(statement, table string) bool {
+// isCreateOnlyStatement reports whether a normalized statement creates one of
+// tables, an index on one, or a trigger on one whose body only raises.
+func isCreateOnlyStatement(statement string, tables ...string) bool {
 	if strings.Contains(statement, "INSERT INTO") || strings.Contains(statement, "DELETE FROM") ||
 		strings.Contains(statement, "UPDATE ") && !strings.Contains(statement, "BEFORE UPDATE ON ") {
 		return false
 	}
 	for _, pattern := range []*regexp.Regexp{createOnlyTableStatement, createOnlyIndexStatement, createOnlyTriggerStatement} {
 		if match := pattern.FindStringSubmatch(statement); match != nil {
-			return match[1] == table
+			for _, table := range tables {
+				if match[1] == table {
+					return true
+				}
+			}
+			return false
 		}
 	}
 	return false

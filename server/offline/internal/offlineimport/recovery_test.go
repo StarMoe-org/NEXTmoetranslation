@@ -16,7 +16,7 @@ import (
 	"moesekai/server/offline/internal/lyricsrecoveryimport"
 )
 
-func TestLyricsImportRuntimeSchemasAllowReviewedV27ThroughV38Contiguously(t *testing.T) {
+func TestLyricsImportRuntimeSchemasAllowReviewedV27ThroughV39Contiguously(t *testing.T) {
 	validators := map[string]func(context.Context, *sql.Tx) error{
 		"recovery": validateRecoveryImportRuntimeSchema,
 		"staged":   validateStagedImportRuntimeSchema,
@@ -33,7 +33,8 @@ func TestLyricsImportRuntimeSchemasAllowReviewedV27ThroughV38Contiguously(t *tes
 		mutate    func(*testing.T, *sql.Tx)
 		wantError bool
 	}{
-		{name: "current v38"},
+		{name: "current v39"},
+		{name: "v38 input runtime", mutate: deleteVersionsFrom(39)},
 		{name: "v37 input runtime", mutate: deleteVersionsFrom(38)},
 		{name: "v36 input runtime", mutate: deleteVersionsFrom(37)},
 		{name: "v35 input runtime", mutate: deleteVersionsFrom(36)},
@@ -50,9 +51,9 @@ func TestLyricsImportRuntimeSchemasAllowReviewedV27ThroughV38Contiguously(t *tes
 				t.Fatal(err)
 			}
 		}},
-		{name: "unreviewed v39", wantError: true, mutate: func(t *testing.T, tx *sql.Tx) {
+		{name: "unreviewed v40", wantError: true, mutate: func(t *testing.T, tx *sql.Tx) {
 			if _, err := tx.Exec(`INSERT INTO schema_migrations(version,name,checksum,applied_at)
-				VALUES (39,'future_migration',?,1)`, strings.Repeat("f", 64)); err != nil {
+				VALUES (40,'future_migration',?,1)`, strings.Repeat("f", 64)); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -71,7 +72,7 @@ func TestLyricsImportRuntimeSchemasAllowReviewedV27ThroughV38Contiguously(t *tes
 				}
 				err = validate(context.Background(), tx)
 				if test.wantError {
-					if err == nil || !strings.Contains(err.Error(), "contiguous schema-v27 through schema-v38 runtime") {
+					if err == nil || !strings.Contains(err.Error(), "contiguous schema-v27 through schema-v39 runtime") {
 						t.Fatalf("runtime schema gate error=%v", err)
 					}
 					return

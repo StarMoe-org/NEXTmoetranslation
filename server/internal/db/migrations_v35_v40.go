@@ -119,4 +119,9 @@ INSERT INTO lyrics_provider_contributor_aliases(provider,music_id,catalog_contri
 		name:    "lyrics_recovery_takeovers",
 		sql:     migrationV38LyricsRecoveryTakeoversSQL,
 	},
+	{
+		version: 39,
+		name:    "side_stories",
+		sql:     migrationV39SideStoriesSQL,
+	},
 }

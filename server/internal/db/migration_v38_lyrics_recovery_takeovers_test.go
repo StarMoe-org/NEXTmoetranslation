@@ -79,13 +79,16 @@ func TestMigrationV38OnlyCreatesTheTakeoverTable(t *testing.T) {
 	}
 	defer migrated.Close()
 	var version int
-	if err := migrated.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 38 {
+	if err := migrated.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 39 {
 		t.Fatalf("schema version=%d err=%v", version, err)
 	}
 	afterSchema := v37SchemaObjects(t, migrated.DB)
 	var added []string
 	for name, definition := range afterSchema {
 		before, existed := beforeSchema[name]
+		if !existed && isV39SideStoryObject(definition) {
+			continue
+		}
 		if !existed {
 			if !strings.HasPrefix(definition, "on lyrics_recovery_takeovers: ") {
 				t.Fatalf("v38 created %s outside the takeover table: %s", name, definition)
@@ -114,6 +117,9 @@ func TestMigrationV38OnlyCreatesTheTakeoverTable(t *testing.T) {
 		t.Fatalf("v38 added %v want %v", added, want)
 	}
 	afterRows := v37TableRowDigests(t, migrated.DB)
+	for _, table := range v39SideStoryTables {
+		delete(afterRows, table)
+	}
 	for table, digest := range beforeRows {
 		if afterRows[table] != digest {
 			t.Fatalf("v38 changed the rows of %s", table)

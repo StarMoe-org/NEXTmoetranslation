@@ -32,11 +32,12 @@ const (
 	// v32-v34 adds multi-edition translations for song 682, v35 adds the
 	// public withdrawal markers, v36 moves the reviewed Sekaipedia provider
 	// maps into the database, v37 only widens the artifact origin CHECK for
-	// projectsekai.fandom, and v38 only adds lyrics_recovery_takeovers. None
-	// changes those inputs or their catalog identity, so reviewed imports may
-	// run on any contiguous v27-v38 database.
+	// projectsekai.fandom, v38 only adds lyrics_recovery_takeovers, and v39
+	// only adds the side-story tables. None changes those inputs or their
+	// catalog identity, so reviewed imports may run on any contiguous v27-v39
+	// database.
 	lyricsRecoveryImportRuntimeSchema          = 27
-	lyricsImportMaximumCompatibleRuntimeSchema = 38
+	lyricsImportMaximumCompatibleRuntimeSchema = 39
 	// lyricsRecoveryTakeoverRuntimeSchema added lyrics_recovery_takeovers.
 	lyricsRecoveryTakeoverRuntimeSchema = 38
 	// lyricsEmbeddedEditorSeedRuntimeSchema added embedded_lyrics_editor_seed_batches.
