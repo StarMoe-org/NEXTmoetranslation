@@ -2791,7 +2791,7 @@ func validateRestoredLyricsDocuments(lyrics LyricsContentExport, performerIDs, d
 		if _, err := validateLyricsProvenance(candidate); err != nil {
 			return fmt.Errorf("lyrics document %d provenance: %w", document.MusicID, err)
 		}
-		candidate = normalizeEditableLyricsRuby(candidate)
+		candidate = normalizeEditableLyricsRuby(withStoredUnsegmentedLines(candidate))
 		code, details, sourceHash := validateLyrics(candidate, performerIDs, false)
 		if code != "" {
 			return fmt.Errorf("lyrics document %d violates %s: %s", document.MusicID, code, strings.Join(details, "; "))
@@ -2801,6 +2801,24 @@ func validateRestoredLyricsDocuments(lyrics LyricsContentExport, performerIDs, d
 		}
 	}
 	return nil
+}
+
+// withStoredUnsegmentedLines returns a validation copy in which each line
+// stored without segments counts as one unassigned segment spanning its
+// Japanese text. The production database holds drafts whose lines have no
+// segment rows, and a restore must accept what an export of it contains;
+// lines that do carry segments keep the exact concatenation rule. The source
+// hash covers only line ids and Japanese text, so the copy does not change it.
+func withStoredUnsegmentedLines(lyrics model.SongLyrics) model.SongLyrics {
+	lines := make([]model.LyricLine, len(lyrics.Lines))
+	for index, line := range lyrics.Lines {
+		if len(line.Segments) == 0 {
+			line.Segments = []model.LyricSegment{{Text: line.Japanese}}
+		}
+		lines[index] = line
+	}
+	lyrics.Lines = lines
+	return lyrics
 }
 
 func canonicalizeRestoredPublication(record *LyricsPublicationBackupRecord, performerIDs map[int]bool) error {

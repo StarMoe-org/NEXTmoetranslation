@@ -213,6 +213,7 @@
 
 - 内容备份导出和恢复接受父证据行缺失的 artifact 证据引用（内嵌 seed 和文档路由写入的 artifact 都是这种情况）。此前含 seed 插入歌曲的数据库导出会报 `has no exact parent evidence`（`TestSeededDatabaseContentBackupRoundTripsWithoutParentEvidence`、`TestRoutePublishedSongInSeededDatabaseContentBackupRoundTrips`）。
 - 生产 Git 备份自 2026-08-11 起每次都失败，报 `lyrics source artifact evidence 1/fixed-88fb…/0 has no exact parent evidence`，原因就是上一条：旧版导出给歌曲 1 的 seed artifact 补链接时不检查 list-of-songs 父证据行是否存在。本地演练用生产同款旧版（`bd95715`）加 8/11 备份、seed 和生产的歌词文档，在没有该父证据行的库上复现了完全相同的报错。另外，导出补链接只接受 id 和摘要都一致的父证据，其余引用保持未链接；恢复校验同样只在备份里有同摘要父证据时才要求链接；已有链接指向的父证据不一致时仍然拒绝（`TestContentBackupParentEvidenceWithOtherBytes`、`TestContentBackupKeepsReferenceUnlinkedWhenSharedParentHasOtherBytes`）。
+- 恢复接受没有分段行的歌词行。生产库里有 36 首歌的数据库文档（例如歌曲 50）存着没有 segment 行的歌词行，本地演练中任何含这些文档的备份都恢复失败，报 `lyrics document 50 violates segment_mismatch`。恢复校验把这种行当作一整段、无演唱者的行来检查；有分段的行仍要求各段拼起来等于日文（`TestRestoreAcceptsStoredLyricsLinesWithoutSegments`）。
 - 早于 `gachaInfo` 的 S3/Git 备份和旧 seed 可以恢复：`hasLegacyRestoreLayout`、importer 的 `loadCategory` 和 `cmd/migrate` 接受两个文件都缺失的情况，只缺其中一个仍报错（`TestS3RestoreAcceptsArchivePredatingRestoreOptionalCategory`、`TestS3RestoreRejectsHalfPresentRestoreOptionalCategory`、`TestImportExportPredatingGachaInfoRestoresItEmpty`、`TestSeedMigrationAcceptsSeedPredatingGachaInfo`）。
 - 未加密 Git 备份在内容未变时不提交、不推送，记为成功，不再因 “nothing to commit” 失败（`TestUnencryptedGitBackupSucceedsWithoutCommitWhenContentIsUnchanged`）。
 - 设置写入（`SetMany`）和环境变量种子（`SetManyIfAbsent`）都保存去掉首尾空白后的值，secret 也一样；纯空白值等于清空并回落默认值（`TestSetManyStoresTrimmedValues`、`TestSetManyIfAbsentStoresTrimmedValues`）。

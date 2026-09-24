@@ -1825,6 +1825,50 @@ func TestRestoreRejectsInvalidLyricsDraftWithoutChangingStoredContent(t *testing
 	}
 }
 
+func TestRestoreAcceptsStoredLyricsLinesWithoutSegments(t *testing.T) {
+	s := setupLyricsStore(t)
+	input := validLyrics()
+	input.Lines = append(input.Lines, model.LyricLine{
+		ID: "line-2", Order: 1, Japanese: "ありがとう", Chinese: "谢谢",
+		Segments: []model.LyricSegment{{Text: "ありがとう", PerformerIDs: []int{1}}},
+	})
+	saved, err := s.SaveLyrics(input, "editor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The production database holds drafts whose lines have no segment rows.
+	if _, err := s.db.Exec(`DELETE FROM song_lyric_segments WHERE music_id=? AND line_id='line-2'`, saved.MusicID); err != nil {
+		t.Fatal(err)
+	}
+	exported, err := s.ExportLyricsContent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := setupLyricsStore(t)
+	if err := restored.ImportTranslationContent(nil, EventContentExport{}, exported); err != nil {
+		t.Fatalf("restore rejected a stored line without segments: %v", err)
+	}
+	loaded, err := restored.GetLyrics(saved.MusicID)
+	if err != nil || loaded.Revision != saved.Revision || len(loaded.Lines) != 2 ||
+		len(loaded.Lines[0].Segments) != 2 || len(loaded.Lines[1].Segments) != 0 || loaded.Lines[1].Japanese != "ありがとう" {
+		t.Fatalf("restored lyrics = %+v err=%v", loaded, err)
+	}
+
+	partial := exported
+	partial.Segments = nil
+	for _, segment := range exported.Segments {
+		if segment.LineID == "line-1" && segment.Position == 1 {
+			continue
+		}
+		partial.Segments = append(partial.Segments, segment)
+	}
+	target := setupLyricsStore(t)
+	err = target.ImportTranslationContent(nil, EventContentExport{}, partial)
+	if err == nil || !strings.Contains(err.Error(), "lines[0].japanese must equal concatenated segment text") {
+		t.Fatalf("restore of a line whose segments do not cover its Japanese = %v", err)
+	}
+}
+
 func TestRestoreRejectsInvalidLyricsPublication(t *testing.T) {
 	s := setupLyricsStore(t)
 	lyrics := LyricsContentExport{
