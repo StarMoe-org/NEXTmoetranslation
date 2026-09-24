@@ -347,7 +347,7 @@ test("the SSE client subscribes to side-story events and the realtime hook route
   assert.match(sse, /const SSE_EVENTS = new Set<SSEEvent>\(\[[^\]]*"sidestory\.updated", "sidestory\.sync"/);
   assert.match(realtime, /event === "sidestory\.updated"\) \{\s*const update = normalizeSideStoryUpdateEvent\(d\);/);
   assert.match(realtime, /sideStoryUpdateRefreshesList\(update, sideStoryLocale\(locale\)\)\) refreshSideStoryLists\(update\.kind\)/);
-  assert.match(realtime, /event === "sidestory\.sync"\) \{\s*refreshSideStoryLists\(\);/);
+  assert.match(realtime, /event === "sidestory\.sync"\) \{\s*refreshSideStoryLists\(undefined, onSideStoryListSynced\);/);
 });
 
 function editorHarness({ respond, entry, locale = "zh-CN", kind = "card" }) {

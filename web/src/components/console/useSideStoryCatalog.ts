@@ -13,6 +13,11 @@ export interface SideStoryListState {
   failed: boolean;
 }
 
+/** Sees a list a refresh reloaded; before is null when that kind had not loaded yet. */
+export type SideStoryListRefreshed = (
+  kind: SideStoryKind, before: readonly SideStorySummary[] | null, after: readonly SideStorySummary[],
+) => void;
+
 const EMPTY_LIST: SideStoryListState = { stories: [], loaded: false, loading: false, failed: false };
 const KINDS: readonly SideStoryKind[] = ["card", "area"];
 const REFRESH_DEBOUNCE_MS = 1500;
@@ -31,17 +36,23 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
   const requestRef = useRef<Record<SideStoryKind, number>>({ card: 0, area: 0 });
   const syncRequestRef = useRef(0);
   const pendingRef = useRef(new Set<SideStoryKind>());
+  const pendingCallbacksRef = useRef(new Set<SideStoryListRefreshed>());
+  const loadedRef = useRef<Record<SideStoryKind, SideStorySummary[] | null>>({ card: null, area: null });
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showRef = useRef(show);
   showRef.current = show;
 
-  const loadList = useCallback(async (kind: SideStoryKind) => {
+  const loadList = useCallback(async (kind: SideStoryKind, onLoaded: readonly SideStoryListRefreshed[] = []) => {
     const request = ++requestRef.current[kind];
     setLists((prev) => ({ ...prev, [kind]: { ...prev[kind], loading: true } }));
     try {
       const list = await getSideStories(kind, listLocale);
       if (requestRef.current[kind] !== request) return;
-      setLists((prev) => ({ ...prev, [kind]: { stories: list.stories ?? [], loaded: true, loading: false, failed: false } }));
+      const stories = list.stories ?? [];
+      const before = loadedRef.current[kind];
+      loadedRef.current[kind] = stories;
+      setLists((prev) => ({ ...prev, [kind]: { stories, loaded: true, loading: false, failed: false } }));
+      onLoaded.forEach((callback) => callback(kind, before, stories));
     } catch (error) {
       if (requestRef.current[kind] !== request) return;
       setLists((prev) => ({ ...prev, [kind]: { ...prev[kind], loading: false, failed: true } }));
@@ -66,6 +77,7 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
   // A locale switch invalidates every list; reload the kinds already in use.
   useEffect(() => {
     KINDS.forEach((kind) => { requestRef.current[kind]++; });
+    loadedRef.current = { card: null, area: null };
     setLists({ card: EMPTY_LIST, area: EMPTY_LIST });
     wantedRef.current.forEach((kind) => { void loadList(kind); });
   }, [loadList]);
@@ -85,16 +97,19 @@ export function useSideStoryCatalog({ locale, show }: { locale: Locale; show: Sh
     if (watching) void loadSyncStatus();
   }, [loadSyncStatus]);
 
-  const refreshLists = useCallback((kind?: SideStoryKind) => {
+  const refreshLists = useCallback((kind?: SideStoryKind, onRefreshed?: SideStoryListRefreshed) => {
     (kind ? [kind] : KINDS).forEach((candidate) => {
       if (wantedRef.current.has(candidate)) pendingRef.current.add(candidate);
     });
+    if (onRefreshed) pendingCallbacksRef.current.add(onRefreshed);
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
       const kinds = [...pendingRef.current];
+      const callbacks = [...pendingCallbacksRef.current];
       pendingRef.current.clear();
-      kinds.forEach((candidate) => { void loadListRef.current(candidate); });
+      pendingCallbacksRef.current.clear();
+      kinds.forEach((candidate) => { void loadListRef.current(candidate, callbacks); });
       if (syncWantedRef.current) void loadSyncStatus();
     }, REFRESH_DEBOUNCE_MS);
   }, [loadSyncStatus]);

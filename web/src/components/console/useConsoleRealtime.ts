@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import {
-  EditorGateStatus, Locale, SideStoryKind, TranslationEntry,
+  EditorGateStatus, Locale, SideStoryKind, SideStorySummary, TranslationEntry,
   acceptLoadedProducerState, clearLoadedProducerState, getEditorGateStatus,
   subscribeProducerProofInvalidated,
 } from "@/lib/api";
@@ -16,7 +16,7 @@ import {
 } from "@/lib/lyrics-collaboration.mjs";
 import {
   applySideStoryLineStates, normalizeSideStoryUpdateEvent, sideStoryEntryKey, sideStoryLocale,
-  sideStoryUpdateEffect, sideStoryUpdateRefreshesList,
+  sideStorySyncEffect, sideStoryUpdateEffect, sideStoryUpdateRefreshesList,
 } from "@/lib/side-story-console";
 import { useSSE } from "@/lib/sse";
 import {
@@ -24,6 +24,7 @@ import {
   persistContentConflict, recoverPersistedContentConflict,
 } from "@/components/console/console-drafts";
 import type { ContentConflict, ReconciliationReason, RemoteConflict, ShowToast } from "@/components/console/types";
+import type { SideStoryListRefreshed } from "@/components/console/useSideStoryCatalog";
 
 interface Progress { label: string; current: number; total: number }
 
@@ -41,6 +42,8 @@ export interface ConsoleRealtimeOptions {
   entries: TranslationEntry[];
   setEntries: Dispatch<SetStateAction<TranslationEntry[]>>;
   selectedKey: string | null;
+  // Reselects the line after a backfill sync reloaded the open story.
+  setSelectedKey?: (key: string) => void;
   selectedEntry: TranslationEntry | null;
   entryDirty: boolean;
   editValue: string;
@@ -57,7 +60,7 @@ export interface ConsoleRealtimeOptions {
   loadEntries: () => Promise<boolean>;
   reloadSidebar: () => Promise<boolean>;
   // Debounced refresh of the loaded side-story lists (all kinds when omitted).
-  refreshSideStoryLists: (kind?: SideStoryKind) => void;
+  refreshSideStoryLists: (kind?: SideStoryKind, onRefreshed?: SideStoryListRefreshed) => void;
 }
 
 export function useConsoleRealtime({
@@ -74,6 +77,7 @@ export function useConsoleRealtime({
   entries,
   setEntries,
   selectedKey,
+  setSelectedKey,
   selectedEntry,
   entryDirty,
   editValue,
@@ -354,6 +358,61 @@ export function useConsoleRealtime({
     Object.values(remoteHighlightTimersRef.current).forEach(clearTimeout);
   }, []);
 
+  // ---- Backfill sync of the open side story ----
+  // sidestory.sync names no story, so the open story's list summary decides. A reload waits
+  // until an unsaved draft is saved or discarded, and reselects the line once loaded.
+  const syncReloadPendingRef = useRef<{ kind: SideStoryKind; id: string; locale: Locale } | null>(null);
+  const syncReselectRef = useRef<{ kind: SideStoryKind; id: string; locale: Locale; key: string } | null>(null);
+
+  const reloadSyncedSideStory = () => {
+    syncReloadPendingRef.current = null;
+    if (!sideStoryKind) return;
+    syncReselectRef.current = selectedKey ? { kind: sideStoryKind, id: field, locale, key: selectedKey } : null;
+    void loadEntries().then((loaded) => {
+      if (!loaded) syncReselectRef.current = null;
+    });
+  };
+  const reloadSyncedSideStoryRef = useRef(reloadSyncedSideStory);
+  reloadSyncedSideStoryRef.current = reloadSyncedSideStory;
+
+  const handleSideStoryListSynced: SideStoryListRefreshed = (kind, before, after) => {
+    if (kind !== sideStoryKind || !before) return;
+    const open = (stories: readonly SideStorySummary[]) => stories.find((story) => story.id === field);
+    const effect = sideStorySyncEffect(open(before), open(after), entryDirty);
+    if (effect === "reload") {
+      reloadSyncedSideStory();
+      show("后台回填更新了当前剧情，已重新载入", "ok");
+    } else if (effect === "notice") {
+      syncReloadPendingRef.current = { kind, id: field, locale };
+      if (selectedKey) setRemoteConflict({ key: selectedKey, user: "后台回填" });
+      show("后台回填更新了当前剧情；保存或放弃本地草稿后将自动重新载入", "ok");
+    }
+  };
+  const handleSideStoryListSyncedRef = useRef(handleSideStoryListSynced);
+  handleSideStoryListSyncedRef.current = handleSideStoryListSynced;
+  const onSideStoryListSynced = useCallback<SideStoryListRefreshed>(
+    (kind, before, after) => handleSideStoryListSyncedRef.current(kind, before, after), [],
+  );
+
+  useEffect(() => {
+    const pending = syncReloadPendingRef.current;
+    if (!pending || entryDirty) return;
+    syncReloadPendingRef.current = null;
+    if (pending.kind === sideStoryKind && pending.id === field && pending.locale === locale) reloadSyncedSideStoryRef.current();
+  }, [entryDirty, field, locale, sideStoryKind]);
+
+  useEffect(() => {
+    const reselect = syncReselectRef.current;
+    if (!reselect || entries.length === 0) return;
+    syncReselectRef.current = null;
+    if (reselect.kind !== sideStoryKind || reselect.id !== field || reselect.locale !== locale) return;
+    const entry = entries.find((candidate) => candidate.key === reselect.key);
+    if (entry && setSelectedKey) {
+      setSelectedKey(entry.key);
+      setEditValue(entry.text);
+    }
+  }, [entries, field, locale, setEditValue, setSelectedKey, sideStoryKind]);
+
   // ---- Realtime SSE ----
   useSSE((event, data) => {
     const d = data as Record<string, unknown>;
@@ -515,7 +574,7 @@ export function useConsoleRealtime({
         show(`${update.user} 修改了第 ${update.episode} 话的 ${update.lines.length} 行剧情翻译`, "ok");
       }
     } else if (event === "sidestory.sync") {
-      refreshSideStoryLists();
+      refreshSideStoryLists(undefined, onSideStoryListSynced);
     } else if (event === "lyrics.updated") {
       const update = normalizeLyricsUpdateEvent(d);
       if (isLyrics && update && update.clientId !== clientID) {

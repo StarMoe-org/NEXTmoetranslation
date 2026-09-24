@@ -295,3 +295,26 @@ export function sideStoryUpdateEffect(
 export function sideStoryUpdateRefreshesList(update: SideStoryUpdateEvent, listLocale: SideStoryLocale): boolean {
   return update.action === "refresh" || update.locale === listLocale;
 }
+
+const SYNC_SUMMARY_FIELDS = [
+  "title", "episodeCount", "fetchedEpisodeCount", "lineCount", "translatedCount", "untranslatedCount",
+  "primarySource", "status", "updatedAt",
+] as const satisfies readonly (keyof SideStorySummary)[];
+
+export type SideStorySyncEffect = "ignore" | "reload" | "notice";
+
+/**
+ * What a backfill sync means for the open story, judged by its list summary before and after the
+ * list refresh (the event names no story): reload it, or keep an unsaved draft and show a notice.
+ */
+export function sideStorySyncEffect(
+  before: SideStorySummary | undefined, after: SideStorySummary | undefined, hasDraft: boolean,
+): SideStorySyncEffect {
+  if (!before || !after) return "ignore";
+  const changed = SYNC_SUMMARY_FIELDS.some((field) => before[field] !== after[field]) ||
+    before.sourceCounts.official !== after.sourceCounts.official ||
+    before.sourceCounts.llm !== after.sourceCounts.llm ||
+    before.sourceCounts.human !== after.sourceCounts.human;
+  if (!changed) return "ignore";
+  return hasDraft ? "notice" : "reload";
+}
