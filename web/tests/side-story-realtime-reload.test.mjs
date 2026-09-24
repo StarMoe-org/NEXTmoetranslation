@@ -161,3 +161,28 @@ test("another load of the story takes over a sync reload that waited for a draft
   render(reloaded, reloaded[1].key, reloaded[1].text);
   assert.equal(calls.loadEntries, 0, "the pending sync reload was dropped");
 });
+
+for (const [resolution, resolve] of [
+  ["saved", (loaded) => [[loaded[0], line(2, "测试草稿", 2)], "测试草稿"]],
+  ["discarded", (loaded) => [loaded, loaded[1].text]],
+]) {
+  test(`closing the line with Esc still reloads the synced story once the draft is ${resolution}`, (t) => {
+    const { calls, render, sync } = reloadHarness(t);
+    const loaded = [line(1, "测试译文一"), line(2, "测试译文二")];
+    render(loaded, loaded[1].key, "测试草稿");
+    sync(summary({ fetchedEpisodeCount: 2 }));
+    assert.equal(calls.loadEntries, 0, "the draft is not reloaded away");
+
+    // 关闭当前条目 clears the selection in the render that resolves the draft; the lines stay loaded.
+    const [entries, editValue] = resolve(loaded);
+    render(entries, null, editValue);
+    assert.equal(calls.loadEntries, 1, "the promised reload follows the closed draft");
+
+    render([], null, "");
+    const reloaded = [line(1, "测试译文一"), line(2, "测试官方译文", 3)];
+    render(reloaded, reloaded[0].key, reloaded[0].text);
+    assert.deepEqual(calls.selectedKey, [], "a closed line is not reselected");
+    render(reloaded, reloaded[1].key, reloaded[1].text);
+    assert.equal(calls.loadEntries, 1, "one reload per sync");
+  });
+}
