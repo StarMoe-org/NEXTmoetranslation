@@ -4,6 +4,7 @@ import type { RemoteConflict } from "@/components/console/types";
 import { SOURCE_LABELS, buildMoesekaiUrl, storyEntrySourceText } from "@/lib/labels";
 import { eventStoryEntryHasCanonicalIdentity, eventStoryEpisodeNo } from "@/lib/event-story-console";
 import { SIDE_STORY_EDIT_SOURCES } from "@/lib/side-story-console";
+import { sideStoryLineSaveIsNoop } from "@/lib/side-story-editor";
 import { EntryRow } from "@/components/console/EntryRow";
 
 const IconExternalLink = () => (
@@ -217,7 +218,8 @@ export function TranslationEntryWorkspace({
                 remoteHighlightUser={remoteHighlights[entry.key]?.user}
                 isEventStory={isEventStory}
                 isReadOnly={isReadOnly}
-                writesLocked={writesLocked || saving}
+                // A never-stored side-story line has no source to change until a translation is saved.
+                writesLocked={writesLocked || saving || (isSideStory && sideStoryLineSaveIsNoop(entry, entry.text))}
                 eventTxtDraftDirty={eventTxtDraftDirty}
                 hasRemoteConflict={remoteConflict?.key === entry.key}
                 hasCanonicalIdentity={!isEventStory || eventStoryEntryHasCanonicalIdentity(entry)}

@@ -284,6 +284,8 @@ export function useEntryEditor({
     }
     const entry = entries.find((e) => e.key === key);
     if (!entry) return;
+    // Re-sourcing a side-story line the server never stored would store an empty human line.
+    if (sideStoryKind && sideStoryLineSaveIsNoop(entry, entry.text)) return;
     if (isEventStory && !eventStoryEntryHasCanonicalIdentity(entry)) {
       show("当前剧情行缺少权威来源身份，请重新获取剧情后再编辑", "err");
       return;

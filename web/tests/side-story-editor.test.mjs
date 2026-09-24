@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import test from "node:test";
 
 import { loadSourceModule } from "./source-module-harness.mjs";
+
+const require = createRequire(import.meta.url);
+const { createElement } = require("react");
+const { renderToStaticMarkup } = require("react-dom/server");
 
 // All lines and titles below are synthetic test data.
 const { sideStoryLineSaveIsNoop } = loadSourceModule("lib/side-story-editor.ts");
@@ -121,6 +126,39 @@ test("save-and-next on an untranslated line advances without storing an empty hu
   assert.equal(harness.state.editValue, "测试旧译");
   assert.equal(harness.savingRef.current, false);
   assert.deepEqual(harness.state.saving, [true, false]);
+});
+
+test("picking a source on a never-stored line stores nothing", async () => {
+  const harness = editorHarness(() => { throw new Error("no PUT expected"); });
+  await harness.render().handleSourceChange(untranslated.key, "human");
+  assert.deepEqual(harness.calls, []);
+  assert.deepEqual(harness.state.saving, []);
+});
+
+function workspaceHTML(props) {
+  const { TranslationEntryWorkspace } = loadSourceModule("components/console/TranslationEntryWorkspace.tsx");
+  return renderToStaticMarkup(createElement(TranslationEntryWorkspace, {
+    category: "cardStory", field: "101", isEventStory: false, isSideStory: true, isReadOnly: false,
+    loading: false, saving: false, writesLocked: false, filtered: [], selectedKey: null, selectedEntry: null,
+    selectedIndex: -1, selectedEventStoryIdentityMissing: false, remoteHighlights: {}, remoteConflict: null,
+    setRemoteConflict() {}, eventTxtDraftDirty: false, editValue: "", setEditValue() {},
+    editRef: { current: null }, translationEntryListRef: { current: null }, enterSaves: false, setEnterSaves() {},
+    onTextareaKey() {}, navigate() {}, save: async () => true, selectEntry() {}, handleSourceChange() {},
+    ...props,
+  }));
+}
+
+const sourceSelects = (html) => html.match(/<select[^>]*>/g);
+
+test("the source menu is locked only on a never-stored side-story line", () => {
+  const [unsaved, saved] = sourceSelects(workspaceHTML({
+    filtered: [{ ...untranslated, lineRole: "talk", source: "unknown" }, { ...translated, lineRole: "talk" }],
+  }));
+  assert.match(unsaved, /disabled=""/);
+  assert.doesNotMatch(saved, /disabled/);
+  const eventLine = { key: "1|テスト台詞三", episodeNo: "1", japanese: "テスト台詞三", text: "", source: "", revision: 0, segmentId: "s1", sourceHash: "h1" };
+  const [eventSelect] = sourceSelects(workspaceHTML({ category: "eventStory", isEventStory: true, isSideStory: false, filtered: [eventLine] }));
+  assert.doesNotMatch(eventSelect, /disabled/, "event-story rows keep their source menu");
 });
 
 test("a source-change conflict raises the server banner for the line selected when it arrives", async () => {
