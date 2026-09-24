@@ -1251,6 +1251,43 @@ func TestRestoreIsAtomicAndOldBackupClearsAdditiveState(t *testing.T) {
 	}
 }
 
+func TestRestoreRefreshesCachedEventStorySummaries(t *testing.T) {
+	source := setupLegacyBackup(t)
+	translations, contentDir, err := source.manager.materializeBackupPayload(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, result, err := importer.ReadDir(translations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, present, err := readTranslationContent(contentDir)
+	if err != nil || !present {
+		t.Fatalf("content present=%v err=%v", present, err)
+	}
+	database, err := db.Open(filepath.Join(t.TempDir(), "cached-summaries.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	destination := store.New(database)
+	destinationEvents := store.NewEventStore(database)
+	// A fresh instance lists its (empty) events once at startup before the restore.
+	if summaries, err := destinationEvents.List(); err != nil || len(summaries) != 0 {
+		t.Fatalf("summaries before restore = %+v err=%v", summaries, err)
+	}
+	manager := NewManager(source.cfg, files.NewGenerator(destination, destinationEvents, ""), destination, destinationEvents,
+		filepath.Join(t.TempDir(), "work"))
+	candidate := restoreCandidate{payload: payload, result: result, content: content, contentPresent: present}
+	if err := manager.applyRestoreCandidate(context.Background(), candidate, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	summaries, err := destinationEvents.List()
+	if err != nil || len(summaries) != 1 || summaries[0].EventID != 42 {
+		t.Fatalf("summaries after restore = %+v err=%v", summaries, err)
+	}
+}
+
 func TestRestoreRejectsCorruptOrIncompleteLegacyProjection(t *testing.T) {
 	h := setupLegacyBackup(t)
 	translations, _, err := h.manager.materializeBackupPayload(t.TempDir())

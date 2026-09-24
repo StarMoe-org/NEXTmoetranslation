@@ -446,8 +446,15 @@ func (m *Manager) applyRestoreCandidate(ctx context.Context, candidate restoreCa
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return m.store.RestoreBackupContext(ctx, candidate.payload.Categories, candidate.payload.Events,
-		candidate.content.Entries, candidate.content.Events, candidate.content.Lyrics, candidate.contentPresent, actor)
+	if err := m.store.RestoreBackupContext(ctx, candidate.payload.Categories, candidate.payload.Events,
+		candidate.content.Entries, candidate.content.Events, candidate.content.Lyrics, candidate.contentPresent, actor); err != nil {
+		return err
+	}
+	// The restore replaces event stories behind the event store, whose cached
+	// summaries list the events the public rebuild writes. Clearing them while
+	// the content lock is still held makes that rebuild list the restored events.
+	m.eventStr.InvalidateSummaryCache()
+	return nil
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
