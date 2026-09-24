@@ -98,15 +98,16 @@ func (w *SideStoryBackfill) enabled() bool {
 }
 
 // TriggerSideStoryBackfill wakes the worker for an immediate round, after the
-// running one if any. It reports false when the backfill is disabled.
+// running one if any. It reports false when the backfill is disabled; a
+// catalog refresh request is kept for the first round after it is re-enabled.
 func (w *SideStoryBackfill) TriggerSideStoryBackfill(refreshCatalog bool) bool {
-	if !w.enabled() {
-		return false
-	}
 	if refreshCatalog {
 		w.mu.Lock()
 		w.forceCatalog = true
 		w.mu.Unlock()
+	}
+	if !w.enabled() {
+		return false
 	}
 	select {
 	case w.wake <- struct{}{}:

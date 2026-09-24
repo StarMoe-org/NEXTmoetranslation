@@ -360,6 +360,29 @@ func TestSideStoryBackfillRetriesAFailedCatalogAfterADelay(t *testing.T) {
 	}
 }
 
+func TestSideStoryBackfillKeepsACatalogRequestMadeWhileDisabled(t *testing.T) {
+	h := newSideStoryHarness(t)
+	h.round(t)
+	masterdata := func() int {
+		return h.upstream.count("/jp-master/") + h.upstream.count("/cn-master/") + h.upstream.count("/en-master/")
+	}
+	before := masterdata()
+	if err := h.cfg.Set(config.KeySideStoryBackfillOn, "false"); err != nil {
+		t.Fatal(err)
+	}
+	if h.worker.TriggerSideStoryBackfill(true) {
+		t.Fatal("trigger accepted while the setting is off")
+	}
+	if err := h.cfg.Set(config.KeySideStoryBackfillOn, "true"); err != nil {
+		t.Fatal(err)
+	}
+	h.advance(time.Minute)
+	h.round(t)
+	if masterdata() != 2*before {
+		t.Fatalf("catalog requested while disabled: %d masterdata requests after re-enabling, want %d", masterdata(), 2*before)
+	}
+}
+
 func TestSideStoryBackfillHonoursTheRequestDelay(t *testing.T) {
 	h := newSideStoryHarness(t)
 	const delay = 60 * time.Millisecond
