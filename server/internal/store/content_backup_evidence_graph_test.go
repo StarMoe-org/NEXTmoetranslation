@@ -491,13 +491,94 @@ func TestContentBackupEvidenceGraphRejectsExistingImmutableParentConflictWithout
 	}
 }
 
+// Another artifact can link the same evidence id with its own bytes while a
+// seed-style reference names other bytes. The backup keeps that reference
+// unlinked, and the restored database exports the same content.
+func TestContentBackupKeepsReferenceUnlinkedWhenSharedParentHasOtherBytes(t *testing.T) {
+	s := setupLyricsStore(t)
+	saveContentBackupEvidenceGraphSong(t, s, 10, nil)
+	sharedID := ""
+	otherDigest := sha256.Sum256([]byte("OTHER-LIST-OF-SONGS-BYTES"))
+	otherSHA := hex.EncodeToString(otherDigest[:])
+	saveContentBackupEvidenceGraphSong(t, s, 20, func(_ int, identity *model.LyricsSourceFixedIdentity) map[int]bool {
+		if identity.Provider != model.LyricsSourceProviderSekaipedia {
+			return nil
+		}
+		sharedID = identity.IndexEvidenceRefs[0].EvidenceID
+		identity.IndexEvidenceRefs[0].SHA256 = otherSHA
+		return map[int]bool{0: true}
+	})
+	if sharedID == "" {
+		t.Fatal("fixture has no Sekaipedia artifact")
+	}
+	exported, err := s.ExportLyricsContent()
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	parents := 0
+	for _, parent := range exported.SourceIndexEvidence {
+		if parent.EvidenceID == sharedID {
+			parents++
+		}
+	}
+	if parents != 1 {
+		t.Fatalf("shared parent rows=%d, want the one linked by song 10", parents)
+	}
+	for _, link := range exported.SourceArtifactEvidence {
+		if link.EvidenceID == sharedID && link.SHA256 == otherSHA {
+			t.Fatalf("export linked a reference to a parent with other bytes: %+v", link)
+		}
+	}
+	destination := setupLyricsStore(t)
+	if err := destination.ImportTranslationContent(nil, EventContentExport{}, exported); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	again, err := destination.ExportLyricsContent()
+	if err != nil {
+		t.Fatalf("export restored content: %v", err)
+	}
+	firstJSON, err := json.Marshal(exported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondJSON, err := json.Marshal(again)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstJSON, secondJSON) {
+		t.Fatalf("restored export differs: first=%d bytes second=%d bytes", len(firstJSON), len(secondJSON))
+	}
+}
+
 func setupContentBackupEvidenceGraph(t *testing.T) (*Store, LyricsContentExport) {
 	t.Helper()
 	s := setupLyricsStore(t)
-	input, document := publicLyricsV2VirtualSingerFixture(10)
+	saveContentBackupEvidenceGraphSong(t, s, 10, nil)
+	exported, err := s.ExportLyricsContent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, exported
+}
+
+// saveContentBackupEvidenceGraphSong saves and publishes one song whose
+// artifacts carry linked raw evidence. unlink may rewrite an artifact's
+// identity and returns the reference positions that get no evidence row or link.
+func saveContentBackupEvidenceGraphSong(
+	t *testing.T,
+	s *Store,
+	musicID int,
+	unlink func(index int, identity *model.LyricsSourceFixedIdentity) map[int]bool,
+) {
+	t.Helper()
+	input, document := publicLyricsV2VirtualSingerFixture(musicID)
 	evidenceByArtifact := make([][]lyricssource.IndexEvidence, len(document.FixedIdentities))
+	unlinked := make([]map[int]bool, len(document.FixedIdentities))
 	for index, original := range document.FixedIdentities {
 		identity, parents := contentBackupEvidenceForIdentity(t, original, index)
+		if unlink != nil {
+			unlinked[index] = unlink(index, &identity)
+		}
 		evidenceByArtifact[index] = parents
 		document.FixedIdentities[index] = identity
 	}
@@ -527,6 +608,9 @@ func setupContentBackupEvidenceGraph(t *testing.T) (*Store, LyricsContentExport)
 	for index, parents := range evidenceByArtifact {
 		identity := document.FixedIdentities[index]
 		for position, item := range parents {
+			if unlinked[index][position] {
+				continue
+			}
 			if err := insertOrVerifyLyricsIndexEvidenceTx(context.Background(), tx, item,
 				createdAt.Add(time.Duration(evidenceOffset)*time.Millisecond)); err != nil {
 				tx.Rollback()
@@ -547,11 +631,6 @@ func setupContentBackupEvidenceGraph(t *testing.T) (*Store, LyricsContentExport)
 	if _, err := s.PublishLyrics(saved.MusicID, saved.Revision); err != nil {
 		t.Fatal(err)
 	}
-	exported, err := s.ExportLyricsContent()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s, exported
 }
 
 func contentBackupEvidenceForIdentity(t *testing.T, original model.LyricsSourceFixedIdentity, index int) (model.LyricsSourceFixedIdentity, []lyricssource.IndexEvidence) {

@@ -1642,9 +1642,11 @@ type sourceArtifactIdentity struct {
 // repairMissingExportArtifactEvidenceLinks completes evidence links that are
 // derivable from each artifact's own fixed identity. It runs inside the
 // read-only export transaction and therefore only repairs the exported result.
-// A reference whose parent row does not exist gets no link: the embedded editor
-// seed and the lyrics document route store artifacts without raw provider
-// evidence, and the link table cannot hold a row without its parent.
+// A reference gets a link only when its parent row exists with the referenced
+// digest: the embedded editor seed and the lyrics document route store
+// artifacts without raw provider evidence, the link table cannot hold a row
+// without its exact parent, and a seed reference may name an evidence id that
+// the database holds with other bytes.
 func repairMissingExportArtifactEvidenceLinks(ctx context.Context, tx *sql.Tx, lyrics *LyricsContentExport) error {
 	existingLinks := make(map[sourceArtifactIdentity]map[int]bool)
 	for _, record := range lyrics.SourceArtifactEvidence {
@@ -1654,9 +1656,9 @@ func repairMissingExportArtifactEvidenceLinks(ctx context.Context, tx *sql.Tx, l
 		}
 		existingLinks[id][record.Position] = true
 	}
-	loadedEvidence := make(map[sourceEvidenceIdentity]bool)
+	loadedEvidence := make(map[sourceEvidenceIdentity]string)
 	for _, ev := range lyrics.SourceIndexEvidence {
-		loadedEvidence[sourceEvidenceIdentity{provider: model.LyricsSourceProvider(ev.Provider), evidenceID: ev.EvidenceID}] = true
+		loadedEvidence[sourceEvidenceIdentity{provider: model.LyricsSourceProvider(ev.Provider), evidenceID: ev.EvidenceID}] = ev.SHA256
 	}
 	for _, artifact := range lyrics.SourceArtifacts {
 		identity, err := model.DecodeLyricsSourceFixedIdentity([]byte(artifact.FixedIdentityJSON))
@@ -1669,17 +1671,15 @@ func repairMissingExportArtifactEvidenceLinks(ctx context.Context, tx *sql.Tx, l
 				continue
 			}
 			evID := sourceEvidenceIdentity{provider: identity.Provider, evidenceID: ref.EvidenceID}
-			if !loadedEvidence[evID] && tx != nil {
-				// Looked up without the digest so a present parent with different
-				// bytes still reaches the exact-parent check in validation.
+			if _, loaded := loadedEvidence[evID]; !loaded && tx != nil {
 				var record LyricsSourceIndexEvidenceBackupRecord
 				var pageID, revisionID sql.NullInt64
 				err := tx.QueryRowContext(ctx, `SELECT provider,evidence_id,sha256,kind,origin,page_id,revision_id,
 					revision_timestamp,mediawiki_sha1,page_title,canonical_revision_url,categories_json,
 					canonical_request_url,fetched_at,raw_bytes,raw_byte_count,raw_sha256,created_at
 					FROM lyrics_source_index_evidence
-					WHERE provider=? AND evidence_id=?`,
-					string(identity.Provider), ref.EvidenceID).Scan(
+					WHERE provider=? AND evidence_id=? AND sha256=?`,
+					string(identity.Provider), ref.EvidenceID, ref.SHA256).Scan(
 					&record.Provider, &record.EvidenceID, &record.SHA256, &record.Kind, &record.Origin,
 					&pageID, &revisionID, &record.RevisionTimestamp, &record.MediaWikiSHA1, &record.PageTitle,
 					&record.CanonicalRevisionURL, &record.CategoriesJSON, &record.CanonicalRequestURL, &record.FetchedAt,
@@ -1694,12 +1694,12 @@ func repairMissingExportArtifactEvidenceLinks(ctx context.Context, tx *sql.Tx, l
 					}
 					record.RawBytes = append([]byte(nil), record.RawBytes...)
 					lyrics.SourceIndexEvidence = append(lyrics.SourceIndexEvidence, record)
-					loadedEvidence[evID] = true
+					loadedEvidence[evID] = record.SHA256
 				case !errors.Is(err, sql.ErrNoRows):
 					return err
 				}
 			}
-			if !loadedEvidence[evID] {
+			if loadedEvidence[evID] != ref.SHA256 {
 				continue
 			}
 			lyrics.SourceArtifactEvidence = append(lyrics.SourceArtifactEvidence, LyricsSourceArtifactEvidenceBackupRecord{
@@ -1885,15 +1885,16 @@ func validateRestoredLyricsSourceProvenance(lyrics LyricsContentExport, document
 		artifactEvidencePositions[artifactIdentity][record.Position] = true
 		referencedEvidence[evidenceIdentity] = true
 	}
-	// A reference may stay unlinked only when its parent is absent from the
-	// backup, which is how seed and document-route artifacts are stored.
+	// A reference may stay unlinked only when the backup has no parent with the
+	// referenced digest, which is how seed and document-route artifacts are
+	// stored.
 	for artifactIdentity, references := range artifactEvidenceRefs {
 		provider := artifactIdentities[artifactIdentity].Provider
 		for position, reference := range references {
 			if artifactEvidencePositions[artifactIdentity][position] {
 				continue
 			}
-			if _, present := evidenceByIdentity[sourceEvidenceIdentity{provider: provider, evidenceID: reference.EvidenceID}]; present {
+			if parent, present := evidenceByIdentity[sourceEvidenceIdentity{provider: provider, evidenceID: reference.EvidenceID}]; present && parent.SHA256 == reference.SHA256 {
 				return fmt.Errorf("lyrics source artifact %d/%s has incomplete evidence links", artifactIdentity.documentID, artifactIdentity.renditionKey)
 			}
 		}

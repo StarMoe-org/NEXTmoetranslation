@@ -133,8 +133,8 @@ func TestRoutePublishedSongInSeededDatabaseContentBackupRoundTrips(t *testing.T)
 	}
 }
 
-func TestContentBackupStillRejectsPresentButMismatchedParentEvidence(t *testing.T) {
-	t.Run("restore", func(t *testing.T) {
+func TestContentBackupParentEvidenceWithOtherBytes(t *testing.T) {
+	t.Run("restore rejects a link whose parent bytes changed", func(t *testing.T) {
 		_, valid := setupContentBackupEvidenceGraph(t)
 		invalid := cloneLyricsContentExport(t, valid)
 		replaced := false
@@ -170,7 +170,10 @@ func TestContentBackupStillRejectsPresentButMismatchedParentEvidence(t *testing.
 			t.Fatalf("failed restore wrote documents=%d links=%d parents=%d", documents, links, parents)
 		}
 	})
-	t.Run("export", func(t *testing.T) {
+	// A database may hold a seed artifact whose reference names an evidence id
+	// stored with other bytes. The live graph permits that (the seed never
+	// links its references), so the backup must copy it unlinked.
+	t.Run("export leaves a seed reference unlinked when the stored parent has other bytes", func(t *testing.T) {
 		s, _ := seededContentBackupStore(t)
 		exported, err := s.ExportLyricsContent()
 		if err != nil {
@@ -205,8 +208,31 @@ func TestContentBackupStillRejectsPresentButMismatchedParentEvidence(t *testing.
 			artifact.CanonicalRevisionURL, artifact.FetchedAt, raw, len(raw), rawSHA256); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.ExportLyricsContent(); err == nil || !strings.Contains(err.Error(), "no exact parent evidence") {
-			t.Fatalf("export with a mismatched parent error=%v", err)
+		withParent, err := s.ExportLyricsContent()
+		if err != nil {
+			t.Fatalf("export with a same-id parent of other bytes: %v", err)
 		}
+		for _, link := range withParent.SourceArtifactEvidence {
+			if link.DocumentID == artifact.DocumentID && link.RenditionKey == artifact.RenditionKey && link.Position == 0 {
+				t.Fatalf("export linked the reference to a parent with other bytes: %+v", link)
+			}
+		}
+		for _, parent := range withParent.SourceIndexEvidence {
+			if parent.EvidenceID == identity.IndexEvidenceRefs[0].EvidenceID {
+				t.Fatalf("export carried the unreferenced parent %s", parent.EvidenceID)
+			}
+		}
+		exportedBody, err := json.Marshal(exported)
+		if err != nil {
+			t.Fatal(err)
+		}
+		withParentBody, err := json.Marshal(withParent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(exportedBody, withParentBody) {
+			t.Fatal("an unreferenced parent row changed the export")
+		}
+		restoreSeededContentBackup(t, withParent)
 	})
 }
