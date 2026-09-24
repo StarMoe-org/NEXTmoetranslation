@@ -21,6 +21,7 @@ type sideStoryEpisodeRow struct {
 	jpPath, cnPath, enPath  string
 	scriptSHA256, lastError string
 	cnState, enState        string
+	jpRefetch               bool
 }
 
 // SyncSideStoryCatalogContext upserts the masterdata catalog of one kind in a
@@ -155,7 +156,7 @@ func loadSideStoryStoryRows(ctx context.Context, tx *sql.Tx, kind string) (map[s
 
 func loadSideStoryEpisodeRows(ctx context.Context, tx *sql.Tx, kind string) (map[string]sideStoryEpisodeRow, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT story_id,episode_key,scenario_id,title_jp,position,jp_asset_path,cn_asset_path,
-		en_asset_path,script_sha256,last_error,cn_state,en_state FROM side_story_episodes WHERE kind=?`, kind)
+		en_asset_path,script_sha256,last_error,cn_state,en_state,jp_refetch FROM side_story_episodes WHERE kind=?`, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +166,7 @@ func loadSideStoryEpisodeRows(ctx context.Context, tx *sql.Tx, kind string) (map
 		var id, key string
 		var row sideStoryEpisodeRow
 		if err := rows.Scan(&id, &key, &row.scenarioID, &row.titleJP, &row.position, &row.jpPath, &row.cnPath, &row.enPath,
-			&row.scriptSHA256, &row.lastError, &row.cnState, &row.enState); err != nil {
+			&row.scriptSHA256, &row.lastError, &row.cnState, &row.enState, &row.jpRefetch); err != nil {
 			return nil, err
 		}
 		out[id+"\x00"+key] = row
@@ -234,26 +235,46 @@ func syncSideStoryCatalogEpisodeTx(ctx context.Context, tx *sql.Tx, kind, storyI
 		cnState, enState, stamp, kind, storyID, episode.Key); err != nil {
 		return false, 0, err
 	}
+	synced := sideStoryApplyEpisode{scriptSHA256: current.scriptSHA256, cnPath: episode.CNAssetPath, enPath: episode.ENAssetPath,
+		cnState: cnState, enState: enState, jpRefetch: current.jpRefetch, lastError: current.lastError}
 	// A locale left in mismatch or error is not fetched again, so it keeps
 	// its part of last_error.
 	var kept []string
-	previous := sideStoryApplyEpisode{lastError: current.lastError}
-	for _, part := range []string{previous.keptError(model.LocaleChinese, cnState), previous.keptError(model.LocaleEnglish, enState)} {
+	for _, part := range []string{synced.keptError(model.LocaleChinese, cnState), synced.keptError(model.LocaleEnglish, enState)} {
 		if part != "" {
 			kept = append(kept, part)
 		}
 	}
-	if jpChanged {
+	// Without a JP change or a requeue, only a vanished path changes a state.
+	vanished := cnState != current.cnState || enState != current.enState
+	switch {
+	case jpChanged:
 		// A new JP path is fetched on the next round, not after the old path's backoff.
 		if _, err := tx.ExecContext(ctx, `UPDATE side_story_episodes SET jp_refetch=CASE WHEN script_sha256='' THEN 0 ELSE 1 END,
 			attempts=0,next_attempt_at=0,last_error=? WHERE kind=? AND story_id=? AND episode_key=?`,
 			strings.Join(kept, "; "), kind, storyID, episode.Key); err != nil {
 			return false, 0, err
 		}
-	} else if requeued > 0 {
+	case requeued > 0 || (vanished && !synced.queued()):
 		// So is a new CN/EN path, even while the old one waits out a 404 retry.
+		// A vanished path that leaves nothing to fetch ends the retry, as an
+		// apply without a failure does.
 		if _, err := tx.ExecContext(ctx, `UPDATE side_story_episodes SET attempts=0,next_attempt_at=0,last_error=?
 			WHERE kind=? AND story_id=? AND episode_key=?`, strings.Join(kept, "; "), kind, storyID, episode.Key); err != nil {
+			return false, 0, err
+		}
+	case vanished:
+		// The absent locale loses its part; the rest keeps the queued retry.
+		var rest []string
+		for _, locale := range []struct{ name, state string }{
+			{model.LocaleJapanese, ""}, {model.LocaleChinese, cnState}, {model.LocaleEnglish, enState},
+		} {
+			if part := sideStoryErrorPart(current.lastError, locale.name); part != "" && locale.state != SideStoryStateAbsent {
+				rest = append(rest, part)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE side_story_episodes SET last_error=? WHERE kind=? AND story_id=? AND episode_key=?`,
+			strings.Join(rest, "; "), kind, storyID, episode.Key); err != nil {
 			return false, 0, err
 		}
 	}

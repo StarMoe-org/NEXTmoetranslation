@@ -87,6 +87,20 @@ func TestSyncSideStoryCatalogRequeuesChangedOfficialPathsAndMarksRemovedOnesAbse
 	if cn, en := sideStoryEpisodeStates(t, s, "card", "20", "2"); cn != "pending" || en != "pending" {
 		t.Fatalf("requeued states cn=%s en=%s", cn, en)
 	}
+	// Both CN scripts 404; EN fails transiently in episode 1 and imports in episode 2.
+	talk := sideStoryTestTalk{"テスト話者", "テスト台詞一"}
+	missing := SideStoryFetchOutcome{Attempted: true, Missing: true}
+	enReason := "en-US: GET en-a: http 502; GET en-b: http 502"
+	mustApplySideStory(t, s, sideStoryTestNow,
+		SideStoryEpisodeFetch{Kind: "card", StoryID: "20", EpisodeKey: "1", JP: fetchedJP(sideStoryTestScript(t, "test_card_20_01", talk)),
+			CN: missing, EN: SideStoryFetchOutcome{Attempted: true, Err: strings.TrimPrefix(enReason, "en-US: "), Transient: true}},
+		SideStoryEpisodeFetch{Kind: "card", StoryID: "20", EpisodeKey: "2", JP: fetchedJP(sideStoryTestScript(t, "test_card_20_02", talk)),
+			CN: missing, EN: fetchedJP(sideStoryTestScript(t, "test_card_20_02", sideStoryTestTalk{"Tester", "Test line one"}))})
+	backoff := sideStoryTestNow.Unix() + int64(sideStoryBackoffBase/time.Second)
+	if state := sideStoryEpisodeState(t, s, "card", "20", "1"); state.lastError != "zh-CN: not found; "+enReason ||
+		state.attempts != 1 || state.nextAttemptAt != backoff {
+		t.Fatalf("episode 1 before the CN path is removed %+v", state)
+	}
 	removed := sideStoryTestCard("20", 1, "", "en/a")
 	if result := mustSyncSideStoryCatalog(t, s, SideStoryKindCard, removed); result.OfficialRequeued != 0 {
 		t.Fatalf("removed CN path requeued %+v", result)
@@ -94,8 +108,58 @@ func TestSyncSideStoryCatalogRequeuesChangedOfficialPathsAndMarksRemovedOnesAbse
 	if cn, en := sideStoryEpisodeStates(t, s, "card", "20", "1"); cn != "absent" || en != "pending" {
 		t.Fatalf("removed path states cn=%s en=%s", cn, en)
 	}
+	// The absent CN loses its reason; the EN retry keeps its reason and backoff.
+	if state := sideStoryEpisodeState(t, s, "card", "20", "1"); state.lastError != enReason || state.attempts != 1 || state.nextAttemptAt != backoff {
+		t.Fatalf("episode 1 after the CN path is removed %+v", state)
+	}
+	// Nothing is left to retry in episode 2.
+	if state := sideStoryEpisodeState(t, s, "card", "20", "2"); state.lastError != "" || state.attempts != 0 || state.nextAttemptAt != 0 {
+		t.Fatalf("episode 2 after the CN path is removed %+v", state)
+	}
 	if result := mustSyncSideStoryCatalog(t, s, SideStoryKindCard, moved); result.OfficialRequeued != 2 {
 		t.Fatalf("restored CN path requeued %+v", result)
+	}
+}
+
+func TestSyncSideStoryCatalogKeepsTheJPReasonOfAVanishedPathOnlyWhileQueued(t *testing.T) {
+	s := newSideStoryTestStore(t)
+	story := sideStoryTestCard("21", 1, "cn/21", "")
+	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, story)
+	talk := sideStoryTestTalk{"テスト話者", "テスト台詞一"}
+	cn := sideStoryTestScript(t, "test_card_21_01", sideStoryTestTalk{"测试说话人", "测试台词一"}, sideStoryTestTalk{"测试说话人", "测试台词二"})
+	// Episode 1 leaves CN in mismatch; episode 2 leaves CN waiting out a 404.
+	mustApplySideStory(t, s, sideStoryTestNow,
+		SideStoryEpisodeFetch{Kind: "card", StoryID: "21", EpisodeKey: "1", JP: fetchedJP(sideStoryTestScript(t, "test_card_21_01", talk)), CN: fetchedJP(cn)},
+		SideStoryEpisodeFetch{Kind: "card", StoryID: "21", EpisodeKey: "2", JP: fetchedJP(sideStoryTestScript(t, "test_card_21_02", talk)),
+			CN: SideStoryFetchOutcome{Attempted: true, Missing: true}})
+	story.Episodes[0].JPAssetPath += "_v2"
+	mustSyncSideStoryCatalog(t, s, SideStoryKindCard, story)
+	// The JP refetch of episode 1 and the CN retry of episode 2 both time out on JP.
+	timeout := SideStoryFetchOutcome{Attempted: true, Err: "timeout", Transient: true}
+	mustApplySideStory(t, s, sideStoryTestNow,
+		SideStoryEpisodeFetch{Kind: "card", StoryID: "21", EpisodeKey: "1", JP: timeout},
+		SideStoryEpisodeFetch{Kind: "card", StoryID: "21", EpisodeKey: "2", JP: timeout})
+	backoff := sideStoryTestNow.Unix() + int64(sideStoryBackoffBase/time.Second)
+	if state := sideStoryEpisodeState(t, s, "card", "21", "1"); state.lastError != "ja-JP: timeout; zh-CN: TalkData length mismatch (1 != 2)" ||
+		state.attempts != 1 || state.nextAttemptAt != backoff {
+		t.Fatalf("episode 1 before the CN path is removed %+v", state)
+	}
+	if state := sideStoryEpisodeState(t, s, "card", "21", "2"); state.lastError != "ja-JP: timeout" || state.attempts != 1 || state.nextAttemptAt != backoff {
+		t.Fatalf("episode 2 before the CN path is removed %+v", state)
+	}
+
+	story = sideStoryTestCard("21", 1, "", "")
+	story.Episodes[0].JPAssetPath += "_v2"
+	if result := mustSyncSideStoryCatalog(t, s, SideStoryKindCard, story); result.OfficialRequeued != 0 {
+		t.Fatalf("removed CN paths requeued %+v", result)
+	}
+	// Episode 1 still waits for its JP refetch.
+	if state := sideStoryEpisodeState(t, s, "card", "21", "1"); state.lastError != "ja-JP: timeout" || state.attempts != 1 || state.nextAttemptAt != backoff {
+		t.Fatalf("episode 1 after the CN path is removed %+v", state)
+	}
+	// Nothing fetches episode 2 again, so its JP failure is dropped as apply drops that of a refresh.
+	if state := sideStoryEpisodeState(t, s, "card", "21", "2"); state.lastError != "" || state.attempts != 0 || state.nextAttemptAt != 0 {
+		t.Fatalf("episode 2 after the CN path is removed %+v", state)
 	}
 }
 
