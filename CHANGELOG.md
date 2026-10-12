@@ -1,5 +1,11 @@
 # 更新日志
 
+## 热修复：活动剧情场景编号（2026-10-12）
+
+- 活动 168、169、172、173、174 的官方剧情文件里，`ScenarioId` 比活动号小 1。比如活动 168 的文件按 `event_168_01` 到 `event_168_08` 拉取，内部却写着 `event_167_01` 到 `event_167_08`，因为测试活动 166（チアフルカーニバルイベントテストイベント）占用了一个活动号；从 175 起编号恢复一致。文件内容确实是各自活动的剧情。2026-10-12 按 masterdata 逐话核对了全部 218 个有剧情的活动、1776 话：只有这 5 个活动、40 话对不上。第二个测试活动 186 之后的活动没有偏移；只有两话的 World Link 终章 180、218 用的是 `wl_finale_01`、`wl_finale_02`，也一致。旧版要求 `ScenarioId` 与 masterdata 的 `scenarioId` 完全一致，所以每次 CN 同步都有这 40 话补全原始场景失败（`ScenarioId mismatch`），upstream 状态停在 `data sync skipped: eventStories`，`upstream.state.last_data_version` 也一直不更新。
+- 现在两条路径都改为以 masterdata 的 `scenarioId` 为准：官方 CN 导入和原始场景补全。前提是文件内部标签同样是 `event_<活动号>_<话号>` 格式、话号相同、活动号更小；存入的规范 JSON 里，`ScenarioId` 改写为 masterdata 的编号。其他不一致仍然拒收（`TestAdoptRequestedEventScenarioIDOnlyTakesALowerEventLabelOfTheSameEpisode`、`TestOfficialCNImportStoresAnEventFileLabelledOneEventLowerUnderItsMasterScenarioID`、`TestScenarioBackfillAdoptsTheMasterIDOfAnEventFileLabelledOneEventLower`、`TestScenarioBackfillStillRejectsAFileLabelledWithAnotherEpisode`）。
+- 部署不需要迁移，也不改任何译文。部署后的下一次 CN 同步会补全这 5 个活动的原始场景，同步成功后记录当前数据版本。
+
 ## Phase S：卡牌剧情与区域对话（phase-s-20260924）
 
 这一阶段加入卡牌剧情和区域对话的翻译。后台从 JP、CN、EN 服务器回填日文脚本和官方译文，编辑与 agent 逐行校对，管理员按需触发 AI 翻译或重抓，`zh-CN` 与 `en-US` 各自发布公开文件。本阶段新增数据库迁移 v39，只能前进；内容备份升到 `schemaVersion` 2。

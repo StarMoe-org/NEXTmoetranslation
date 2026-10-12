@@ -3,6 +3,7 @@ package translator
 import (
 	"fmt"
 	"log"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -270,7 +271,7 @@ func (t *Translator) buildOfficialCNEpisodes(jpStory, cnStory map[string]any) (m
 					results <- fetchResult{ep: ep, epNo: epNo, scenarioID: scenarioID, err: err}
 					continue
 				}
-				canonical, digest, err := store.CanonicalizeEventScenario(jpScenario, scenarioID)
+				canonical, digest, err := store.CanonicalizeEventScenario(adoptRequestedEventScenarioID(jpScenario, scenarioID), scenarioID)
 				if err != nil {
 					results <- fetchResult{ep: ep, epNo: epNo, scenarioID: scenarioID, err: err}
 					continue
@@ -441,7 +442,7 @@ func (t *Translator) buildSelectedJPPendingEpisodes(jpStory map[string]any, sele
 				jpScenario, err := t.fetchJPScenarioJSON(scenarioPath)
 				canonical, digest := "", ""
 				if err == nil {
-					canonical, digest, err = store.CanonicalizeEventScenario(jpScenario, scenarioID)
+					canonical, digest, err = store.CanonicalizeEventScenario(adoptRequestedEventScenarioID(jpScenario, scenarioID), scenarioID)
 				}
 				results <- fetchResult{ep: ep, epNo: epNo, scenarioID: scenarioID,
 					jpScenario: jpScenario, canonical: canonical, sha256: digest, err: err}
@@ -649,6 +650,39 @@ func (t *Translator) fillEventStoriesJPPending(jpStories []map[string]any, start
 		}
 	}
 	return outcome, nil
+}
+
+var eventScenarioIDPattern = regexp.MustCompile(`^event_(\d+)_(\d+)$`)
+
+// adoptRequestedEventScenarioID lets the masterdata scenarioId the file was
+// fetched by stand for an official file whose own ScenarioId still carries the
+// event number from before a test event took one: the files of events 168,
+// 169, 172, 173 and 174 say event_167_01 … event_173_08, one lower than their
+// event, after the cheerful-carnival test event 166. Only an event_<n>_<ep>
+// label with the same episode and a lower event number is adopted; any other
+// mismatch still fails CanonicalizeEventScenario.
+func adoptRequestedEventScenarioID(value any, requested string) any {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	own, _ := object["ScenarioId"].(string)
+	ownParts := eventScenarioIDPattern.FindStringSubmatch(own)
+	requestedParts := eventScenarioIDPattern.FindStringSubmatch(requested)
+	if own == requested || ownParts == nil || requestedParts == nil || ownParts[2] != requestedParts[2] {
+		return value
+	}
+	ownEvent, ownErr := strconv.Atoi(ownParts[1])
+	requestedEvent, requestedErr := strconv.Atoi(requestedParts[1])
+	if ownErr != nil || requestedErr != nil || ownEvent >= requestedEvent {
+		return value
+	}
+	adopted := make(map[string]any, len(object))
+	for key, field := range object {
+		adopted[key] = field
+	}
+	adopted["ScenarioId"] = requested
+	return adopted
 }
 
 func validateScenarioTalkData(value any) error {
