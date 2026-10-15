@@ -35,6 +35,7 @@ func TestSeedConfigFromEnvSeedsTheSideStorySourceBases(t *testing.T) {
 		"UPSTREAM_EN_MASTERDATA_FALLBACK_URL": config.KeyUpstreamENMasterdataFallbackURL,
 		"UPSTREAM_JP_SCRIPTS_URL":             config.KeyUpstreamJPScriptsURL,
 		"UPSTREAM_JP_SCRIPTS_FALLBACK_URL":    config.KeyUpstreamJPScriptsFallbackURL,
+		"UPSTREAM_JP_SCRIPTS_LIBRARY_URL":     config.KeyUpstreamJPScriptsLibraryURL,
 		"UPSTREAM_CN_SCRIPTS_URL":             config.KeyUpstreamCNScriptsURL,
 		"UPSTREAM_EN_SCRIPTS_URL":             config.KeyUpstreamENScriptsURL,
 	}
@@ -120,7 +121,8 @@ func TestServicesConnectTheSideStoryRunnerAndStopItOnShutdown(t *testing.T) {
 	for _, name := range []string{"UPSTREAM_JP_MASTERDATA_URL", "UPSTREAM_JP_MASTERDATA_FALLBACK_URL",
 		"UPSTREAM_CN_MASTERDATA_URL", "UPSTREAM_CN_MASTERDATA_FALLBACK_URL",
 		"UPSTREAM_EN_MASTERDATA_URL", "UPSTREAM_EN_MASTERDATA_FALLBACK_URL",
-		"UPSTREAM_JP_SCRIPTS_URL", "UPSTREAM_JP_SCRIPTS_FALLBACK_URL", "UPSTREAM_CN_SCRIPTS_URL", "UPSTREAM_EN_SCRIPTS_URL"} {
+		"UPSTREAM_JP_SCRIPTS_URL", "UPSTREAM_JP_SCRIPTS_FALLBACK_URL", "UPSTREAM_JP_SCRIPTS_LIBRARY_URL",
+		"UPSTREAM_CN_SCRIPTS_URL", "UPSTREAM_EN_SCRIPTS_URL"} {
 		t.Setenv(name, upstream.URL)
 	}
 	database, err := db.Open(filepath.Join(t.TempDir(), "side-story-wiring.db"))
@@ -212,7 +214,7 @@ func TestAfterContentRestoreRefreshesTheSideStoryCatalog(t *testing.T) {
 		sources[key] = upstream.URL + "/en-master"
 	}
 	for _, key := range []string{config.KeyUpstreamJPScriptsURL, config.KeyUpstreamJPScriptsFallbackURL,
-		config.KeyUpstreamCNScriptsURL, config.KeyUpstreamENScriptsURL} {
+		config.KeyUpstreamJPScriptsLibraryURL, config.KeyUpstreamCNScriptsURL, config.KeyUpstreamENScriptsURL} {
 		sources[key] = upstream.URL + "/scripts"
 	}
 	if _, err := svc.cfg.SetMany(sources); err != nil {
@@ -272,6 +274,7 @@ func TestInvalidSideStoryEnvFailsBeforeTheDatabaseIsOpened(t *testing.T) {
 		{"backfill batch", "SIDE_STORY_BACKFILL_BATCH=0", "SIDE_STORY_BACKFILL_BATCH must be"},
 		{"script source", "UPSTREAM_JP_SCRIPTS_URL=http://scripts.example.test/assets", "UPSTREAM_JP_SCRIPTS_URL"},
 		{"masterdata source", "UPSTREAM_EN_MASTERDATA_FALLBACK_URL=https://user@en.example.test/master", "UPSTREAM_EN_MASTERDATA_FALLBACK_URL"},
+		{"story library source", "UPSTREAM_JP_SCRIPTS_LIBRARY_URL=https://library.example.test/jp?token=x", "UPSTREAM_JP_SCRIPTS_LIBRARY_URL: upstream.jp_scripts_library_url contains an unsafe upstream URL"},
 		{"trailing carriage return", "UPSTREAM_JP_SCRIPTS_URL=https://scripts.example.test/assets\r", "UPSTREAM_JP_SCRIPTS_URL: upstream.jp_scripts_url must not contain control characters"},
 		{"over-long source", "UPSTREAM_CN_SCRIPTS_URL=https://scripts.example.test/" + strings.Repeat("a", 8192), "UPSTREAM_CN_SCRIPTS_URL: upstream.cn_scripts_url exceeds the 8192-byte"},
 	} {

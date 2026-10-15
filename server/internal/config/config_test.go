@@ -247,7 +247,7 @@ func TestUpstreamURLSettingsFailClosedInProduction(t *testing.T) {
 		KeyUpstreamJPAssetsURL, KeyUpstreamJPAssetsFallbackURL,
 		KeyUpstreamCNAssetsURL, KeyUpstreamCNAssetsFallbackURL,
 		KeyUpstreamENMasterdataURL, KeyUpstreamENMasterdataFallbackURL,
-		KeyUpstreamJPScriptsURL, KeyUpstreamJPScriptsFallbackURL,
+		KeyUpstreamJPScriptsURL, KeyUpstreamJPScriptsFallbackURL, KeyUpstreamJPScriptsLibraryURL,
 		KeyUpstreamCNScriptsURL, KeyUpstreamENScriptsURL, KeyMusicAliasesURL,
 	}
 	unsafe := []string{

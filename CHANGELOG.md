@@ -1,5 +1,12 @@
 # 更新日志
 
+## 热修复：日文剧本最后改读剧情库（2026-10-16）
+
+- 资源站在区域对话 934 的 JP 路径下放的是韩文剧本，2716、2718、2722 放的是繁中剧本。上一条热修复之后这些文件会被拒收，但区域对话只有资源站这一个源（`assets.unipjsk.com/startapp` 没有区域对话），所以一直重抓不到日文。
+- 新增设置 `upstream.jp_scripts_library_url`（env `UPSTREAM_JP_SCRIPTS_LIBRARY_URL`），默认为 `https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/library`，即 SekaiStoryRipper 从游戏里解出的日服剧本库，路径与资源站相同。卡牌剧情和区域对话的日文脚本按资源站、unipjsk（只限卡牌）、剧情库的顺序读取，前面的源 404 或返回的不是日文时才读剧情库。剧情库的文件也要通过日文判据；所有源都不合格时记为错误，已入库的脚本不动；所有源都 404 时仍算缺失（`TestSideStoryJPScriptFallsBackToTheStoryLibrary`、`TestSideStorySourcesDefaultToTheStartappMirrorsAndFollowOverrides`）。这个设置和其他上游设置一样，只在首次启动时由 env 写入，每次启动、打开数据库之前都会校验，之后可以在管理设置里修改（`TestSeedConfigFromEnvSeedsTheSideStorySourceBases`、`TestInvalidSideStoryEnvFailsBeforeTheDatabaseIsOpened`、`TestUpstreamURLSettingsFailClosedInProduction`、web 测试「the admin upstream settings list every env-seeded upstream key the server accepts」）。
+- 2026-10-16 核对过：剧情库里有这 4 个区域对话，正文都是日文，TalkData 分别为 13、12、8、9 行。
+- 部署不需要迁移。部署后用 `POST /api/editor/v1/story/area/<id>/refresh` 重抓这 4 个区域对话。
+
 ## 热修复：官方 CN 剧本是日文时不配对（2026-10-16）
 
 - CN 已经列出、还没有翻译的活动，CN 资源站（`sekai-assets-bdf29c81.seiunx.net/cn-assets`，exmeaning 的 CN 桶也一样）给的是日文剧本。活动 188 至 200 都是这样，CN 的 `events.json` 把它们排在 2027 年。旧版只在 CN 行与日文相同时才不配对，活动 200 第 6 话有一行是日文旧版的措辞，和现在的日文不同，于是这行日文被当成「官方 CN」译文导入，整个活动也被标成 `official_cn`：846 行里有 845 行是空的，同步也就不再为它跑 AI 翻译。

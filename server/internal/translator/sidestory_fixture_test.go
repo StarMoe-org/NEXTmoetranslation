@@ -192,7 +192,8 @@ func configureSideStorySources(t *testing.T, cfg *config.Config, base string) {
 		config.KeyUpstreamCNMasterdataURL: base + "/cn-master", config.KeyUpstreamCNMasterdataFallbackURL: base + "/cn-master",
 		config.KeyUpstreamENMasterdataURL: base + "/en-master", config.KeyUpstreamENMasterdataFallbackURL: base + "/en-master",
 		config.KeyUpstreamJPScriptsURL: base + "/jp-scripts", config.KeyUpstreamJPScriptsFallbackURL: base + "/jp-scripts",
-		config.KeyUpstreamCNScriptsURL: base + "/cn-scripts", config.KeyUpstreamENScriptsURL: base + "/en-scripts",
+		config.KeyUpstreamJPScriptsLibraryURL: base + "/jp-scripts",
+		config.KeyUpstreamCNScriptsURL:        base + "/cn-scripts", config.KeyUpstreamENScriptsURL: base + "/en-scripts",
 	}); err != nil {
 		t.Fatal(err)
 	}

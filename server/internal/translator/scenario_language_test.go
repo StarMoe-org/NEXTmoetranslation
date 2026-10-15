@@ -121,8 +121,9 @@ func TestSideStoryJPScriptInAnotherLanguageMovesOnToTheNextBase(t *testing.T) {
 		t.Fatalf("a Korean primary did not fall through to the Japanese fallback: %+v", outcome)
 	}
 
-	// An area talk has one JP base: the Korean script is an error, neither
-	// missing nor transient, so the stored script stays.
+	// With the story library on the primary, an area talk has one JP base: the
+	// Korean script is an error, neither missing nor transient, so the stored
+	// script stays.
 	const area = "scenario/actionset/group1/test_area_language"
 	upstream.set("/jp-scripts/"+area+".json", testScript("test_area_language", [2]string{"토우야", languageTestKR}))
 	outcome = fetch("jp", store.SideStoryKindArea, area)
@@ -211,5 +212,85 @@ func TestOfficialCNImportIgnoresACNScenarioInJapanese(t *testing.T) {
 	detail, err := events.Detail(200)
 	if err != nil || detail.Meta.Source != "official_cn" || detail.Episodes["1"].TalkData[jpLine1] != "——嗯！全员到齐了！" {
 		t.Fatalf("detail=%+v err=%v", detail, err)
+	}
+}
+
+// The mirrors served area talks 934 (Korean) and 2716/2718/2722 (Traditional
+// Chinese) under their JP names, and the JP fallback has no area talks; the
+// ripper's story library holds the game's JP files under the same paths.
+func TestSideStoryJPScriptFallsBackToTheStoryLibrary(t *testing.T) {
+	upstream := newSideStoryUpstream(t)
+	tr, _, cfg := openTestTranslator(t)
+	configureSideStorySources(t, cfg, upstream.server.URL)
+	if _, err := cfg.SetMany(map[string]string{
+		config.KeyUpstreamJPScriptsFallbackURL: upstream.server.URL + "/jp-fallback",
+		config.KeyUpstreamJPScriptsLibraryURL:  upstream.server.URL + "/jp-library",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fetch := func(kind, path string) store.SideStoryFetchOutcome {
+		t.Helper()
+		outcome, err := tr.fetchSideStoryScriptContext(t.Context(), &sideStoryPacer{}, "jp", kind, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return outcome
+	}
+	japanese := func(outcome store.SideStoryFetchOutcome) bool {
+		return outcome.Script != nil && len(outcome.Script.Talks) == 1 && outcome.Script.Talks[0].Body == languageTestJP
+	}
+	paths := func(path string) []string {
+		var got []string
+		for _, request := range upstream.requested() {
+			if strings.HasSuffix(request.path, "/"+path+".json") {
+				got = append(got, strings.TrimSuffix(request.path, "/"+path+".json"))
+			}
+		}
+		return got
+	}
+
+	const area = "scenario/actionset/group27/test_area_library"
+	upstream.set("/jp-scripts/"+area+".json", testScript("test_area_library", [2]string{"ミク", languageTestTW}))
+	upstream.set("/jp-library/"+area+".json", testScript("test_area_library", [2]string{"ミク", languageTestJP}))
+	if outcome := fetch(store.SideStoryKindArea, area); !japanese(outcome) {
+		t.Fatalf("a Traditional Chinese area talk did not fall through to the library: %+v", outcome)
+	}
+	if got := paths(area); strings.Join(got, ",") != "/jp-scripts,/jp-library" {
+		t.Fatalf("area talk bases requested = %q, want the mirror then the library", got)
+	}
+
+	// The library is checked too: a Korean copy there is an error, not missing.
+	upstream.set("/jp-library/"+area+".json", testScript("test_area_library", [2]string{"토우야", languageTestKR}))
+	if outcome := fetch(store.SideStoryKindArea, area); outcome.Script != nil || outcome.Missing || outcome.Transient ||
+		strings.Count(outcome.Err, "not Japanese text") != 2 {
+		t.Fatalf("both bases in another language = %+v, want a permanent error naming both", outcome)
+	}
+
+	// A script the mirror lacks is read from the library; missing from both
+	// is still missing.
+	upstream.remove("/jp-scripts/" + area + ".json")
+	upstream.set("/jp-library/"+area+".json", testScript("test_area_library", [2]string{"ミク", languageTestJP}))
+	if outcome := fetch(store.SideStoryKindArea, area); !japanese(outcome) {
+		t.Fatalf("an area talk missing from the mirror was not read from the library: %+v", outcome)
+	}
+	upstream.remove("/jp-library/" + area + ".json")
+	if outcome := fetch(store.SideStoryKindArea, area); !outcome.Missing || outcome.Err != "" {
+		t.Fatalf("an area talk missing everywhere = %+v, want Missing", outcome)
+	}
+
+	// Cards try the library after the JP fallback, and only when both fail.
+	const card = "character/member/res_test001/test_card_library"
+	upstream.set("/jp-scripts/"+card+".json", testScript("test_card_library", [2]string{"토우야", languageTestKR}))
+	upstream.set("/jp-library/"+card+".json", testScript("test_card_library", [2]string{"冬弥", languageTestJP}))
+	if outcome := fetch(store.SideStoryKindCard, card); !japanese(outcome) {
+		t.Fatalf("a Korean card script did not fall through to the library: %+v", outcome)
+	}
+	if got := paths(card); strings.Join(got, ",") != "/jp-scripts,/jp-fallback,/jp-library" {
+		t.Fatalf("card bases requested = %q, want the mirror, the fallback, then the library", got)
+	}
+	upstream.set("/jp-fallback/"+card+".json", testScript("test_card_library", [2]string{"冬弥", languageTestJP}))
+	before := upstream.count("/jp-library/" + card + ".json")
+	if outcome := fetch(store.SideStoryKindCard, card); !japanese(outcome) || upstream.count("/jp-library/"+card+".json") != before {
+		t.Fatalf("a Japanese fallback script still read the library: %+v", outcome)
 	}
 }

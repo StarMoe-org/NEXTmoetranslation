@@ -54,6 +54,7 @@ const (
 	KeyUpstreamENMasterdataFallbackURL = "upstream.en_masterdata_fallback_url"
 	KeyUpstreamJPScriptsURL            = "upstream.jp_scripts_url"
 	KeyUpstreamJPScriptsFallbackURL    = "upstream.jp_scripts_fallback_url"
+	KeyUpstreamJPScriptsLibraryURL     = "upstream.jp_scripts_library_url"
 	KeyUpstreamCNScriptsURL            = "upstream.cn_scripts_url"
 	KeyUpstreamENScriptsURL            = "upstream.en_scripts_url"
 	KeyUpstreamFetchConcurrency        = "upstream.fetch_concurrency"
@@ -99,7 +100,7 @@ var settingKeys = map[string]bool{
 	KeyUpstreamCNMasterdataFallbackURL: true, KeyUpstreamJPAssetsURL: true,
 	KeyUpstreamJPAssetsFallbackURL: true, KeyUpstreamCNAssetsURL: true,
 	KeyUpstreamCNAssetsFallbackURL: true, KeyUpstreamENMasterdataURL: true, KeyUpstreamENMasterdataFallbackURL: true,
-	KeyUpstreamJPScriptsURL: true, KeyUpstreamJPScriptsFallbackURL: true, KeyUpstreamCNScriptsURL: true,
+	KeyUpstreamJPScriptsURL: true, KeyUpstreamJPScriptsFallbackURL: true, KeyUpstreamJPScriptsLibraryURL: true, KeyUpstreamCNScriptsURL: true,
 	KeyUpstreamENScriptsURL: true, KeyUpstreamFetchConcurrency: true, KeyMusicAliasesURL: true,
 	KeySchedulerOn: true, KeySideStoryBackfillOn: true, KeyLyricsDiscoveryOn: true, KeyLyricsFetchRevisionOn: true, KeyUpstreamLastDataVersion: true, KeyUpstreamPendingDataVersion: true,
 	KeyBackupS3Enabled: true, KeyBackupS3Endpoint: true, KeyBackupS3Region: true,
@@ -392,7 +393,7 @@ func validateSettingValue(key, value string) error {
 		KeyUpstreamJPAssetsURL, KeyUpstreamJPAssetsFallbackURL,
 		KeyUpstreamCNAssetsURL, KeyUpstreamCNAssetsFallbackURL,
 		KeyUpstreamENMasterdataURL, KeyUpstreamENMasterdataFallbackURL,
-		KeyUpstreamJPScriptsURL, KeyUpstreamJPScriptsFallbackURL,
+		KeyUpstreamJPScriptsURL, KeyUpstreamJPScriptsFallbackURL, KeyUpstreamJPScriptsLibraryURL,
 		KeyUpstreamCNScriptsURL, KeyUpstreamENScriptsURL, KeyMusicAliasesURL:
 		return validateUpstreamURLSetting(key, value)
 	case KeyLLMRequestTimeoutMS:

@@ -47,6 +47,11 @@ const (
 	defaultJPScriptsFallbackURL = "https://assets.unipjsk.com/startapp"
 	defaultCNScriptsURL         = "https://sekai-assets-bdf29c81.seiunx.net/cn-assets/startapp"
 	defaultENScriptsURL         = "https://storage.exmeaning.com/sekai-en-assets"
+
+	// The story library holds the JP scripts the ripper unpacked from the game,
+	// under the same paths. It is tried last for card and area scripts, when the
+	// mirrors miss a script or serve another server's text under its name.
+	defaultJPScriptsLibraryURL = "https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/library"
 )
 
 type sourceFailure struct {
@@ -121,7 +126,9 @@ func (t *Translator) cnAssetBases() []string {
 	)
 }
 
-// sideStoryScriptBases lists the card or area script bases of one server.
+// sideStoryScriptBases lists the card or area script bases of one server. JP
+// ends with the story library, so a script the mirrors miss or serve in
+// another language is read from there.
 func (t *Translator) sideStoryScriptBases(server, kind string) []string {
 	switch server {
 	case "cn":
@@ -129,13 +136,15 @@ func (t *Translator) sideStoryScriptBases(server, kind string) []string {
 	case "en":
 		return t.sourceURLs(config.KeyUpstreamENScriptsURL, defaultENScriptsURL, "", "")
 	}
-	if kind != store.SideStoryKindCard {
-		return t.sourceURLs(config.KeyUpstreamJPScriptsURL, defaultJPScriptsURL, "", "")
+	bases := t.sourceURLs(config.KeyUpstreamJPScriptsURL, defaultJPScriptsURL, "", "")
+	if kind == store.SideStoryKindCard {
+		bases = t.sourceURLs(
+			config.KeyUpstreamJPScriptsURL, defaultJPScriptsURL,
+			config.KeyUpstreamJPScriptsFallbackURL, defaultJPScriptsFallbackURL,
+		)
 	}
-	return t.sourceURLs(
-		config.KeyUpstreamJPScriptsURL, defaultJPScriptsURL,
-		config.KeyUpstreamJPScriptsFallbackURL, defaultJPScriptsFallbackURL,
-	)
+	library := t.sourceURLs(config.KeyUpstreamJPScriptsLibraryURL, defaultJPScriptsLibraryURL, "", "")
+	return dedupeURLs(append(bases, library...))
 }
 
 func (t *Translator) sourceURLs(primaryKey, primaryDefault, fallbackKey, fallbackDefault string) []string {

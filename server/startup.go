@@ -155,6 +155,7 @@ var sideStorySourceEnv = []struct{ env, key string }{
 	{"UPSTREAM_EN_MASTERDATA_FALLBACK_URL", config.KeyUpstreamENMasterdataFallbackURL},
 	{"UPSTREAM_JP_SCRIPTS_URL", config.KeyUpstreamJPScriptsURL},
 	{"UPSTREAM_JP_SCRIPTS_FALLBACK_URL", config.KeyUpstreamJPScriptsFallbackURL},
+	{"UPSTREAM_JP_SCRIPTS_LIBRARY_URL", config.KeyUpstreamJPScriptsLibraryURL},
 	{"UPSTREAM_CN_SCRIPTS_URL", config.KeyUpstreamCNScriptsURL},
 	{"UPSTREAM_EN_SCRIPTS_URL", config.KeyUpstreamENScriptsURL},
 }

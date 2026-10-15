@@ -20,8 +20,8 @@ func TestSideStorySourcesDefaultToTheStartappMirrorsAndFollowOverrides(t *testin
 		got  []string
 		want []string
 	}{
-		{"jp card", tr.sideStoryScriptBases("jp", store.SideStoryKindCard), []string{defaultJPScriptsURL, defaultJPScriptsFallbackURL}},
-		{"jp area", tr.sideStoryScriptBases("jp", store.SideStoryKindArea), []string{defaultJPScriptsURL}},
+		{"jp card", tr.sideStoryScriptBases("jp", store.SideStoryKindCard), []string{defaultJPScriptsURL, defaultJPScriptsFallbackURL, defaultJPScriptsLibraryURL}},
+		{"jp area", tr.sideStoryScriptBases("jp", store.SideStoryKindArea), []string{defaultJPScriptsURL, defaultJPScriptsLibraryURL}},
 		{"cn", tr.sideStoryScriptBases("cn", store.SideStoryKindArea), []string{defaultCNScriptsURL}},
 		{"en", tr.sideStoryScriptBases("en", store.SideStoryKindCard), []string{defaultENScriptsURL}},
 		{"en masterdata", tr.masterdataBases("en"), []string{defaultENMasterdataURL, defaultENMasterdataFallbackURL}},
@@ -32,6 +32,7 @@ func TestSideStorySourcesDefaultToTheStartappMirrorsAndFollowOverrides(t *testin
 	}
 	if defaultJPScriptsURL != "https://storage.exmeaning.com/sekai-jp-assets" ||
 		defaultJPScriptsFallbackURL != "https://assets.unipjsk.com/startapp" ||
+		defaultJPScriptsLibraryURL != "https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/library" ||
 		defaultCNScriptsURL != "https://sekai-assets-bdf29c81.seiunx.net/cn-assets/startapp" ||
 		defaultENScriptsURL != "https://storage.exmeaning.com/sekai-en-assets" ||
 		defaultENMasterdataURL != "https://metadata.pjsk.moe/en/master" ||
@@ -41,7 +42,8 @@ func TestSideStorySourcesDefaultToTheStartappMirrorsAndFollowOverrides(t *testin
 
 	if _, err := cfg.SetMany(map[string]string{
 		config.KeyUpstreamJPScriptsURL: "https://jp.example/assets/", config.KeyUpstreamJPScriptsFallbackURL: "https://jp-fallback.example/assets",
-		config.KeyUpstreamCNScriptsURL: "https://cn.example/assets", config.KeyUpstreamENScriptsURL: "https://en.example/assets",
+		config.KeyUpstreamJPScriptsLibraryURL: "https://jp-library.example/library/",
+		config.KeyUpstreamCNScriptsURL:        "https://cn.example/assets", config.KeyUpstreamENScriptsURL: "https://en.example/assets",
 		config.KeyUpstreamENMasterdataURL: "https://en.example/master", config.KeyUpstreamENMasterdataFallbackURL: "https://en-fallback.example/master",
 	}); err != nil {
 		t.Fatal(err)
@@ -51,8 +53,8 @@ func TestSideStorySourcesDefaultToTheStartappMirrorsAndFollowOverrides(t *testin
 		got  []string
 		want []string
 	}{
-		{"jp card", tr.sideStoryScriptBases("jp", store.SideStoryKindCard), []string{"https://jp.example/assets", "https://jp-fallback.example/assets"}},
-		{"jp area", tr.sideStoryScriptBases("jp", store.SideStoryKindArea), []string{"https://jp.example/assets"}},
+		{"jp card", tr.sideStoryScriptBases("jp", store.SideStoryKindCard), []string{"https://jp.example/assets", "https://jp-fallback.example/assets", "https://jp-library.example/library"}},
+		{"jp area", tr.sideStoryScriptBases("jp", store.SideStoryKindArea), []string{"https://jp.example/assets", "https://jp-library.example/library"}},
 		{"cn", tr.sideStoryScriptBases("cn", store.SideStoryKindCard), []string{"https://cn.example/assets"}},
 		{"en", tr.sideStoryScriptBases("en", store.SideStoryKindArea), []string{"https://en.example/assets"}},
 		{"en masterdata", tr.masterdataBases("en"), []string{"https://en.example/master", "https://en-fallback.example/master"}},

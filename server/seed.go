@@ -77,6 +77,7 @@ func seedConfigFromEnv(cfg *config.Config) error {
 		config.KeyUpstreamENMasterdataFallbackURL: os.Getenv("UPSTREAM_EN_MASTERDATA_FALLBACK_URL"),
 		config.KeyUpstreamJPScriptsURL:            os.Getenv("UPSTREAM_JP_SCRIPTS_URL"),
 		config.KeyUpstreamJPScriptsFallbackURL:    os.Getenv("UPSTREAM_JP_SCRIPTS_FALLBACK_URL"),
+		config.KeyUpstreamJPScriptsLibraryURL:     os.Getenv("UPSTREAM_JP_SCRIPTS_LIBRARY_URL"),
 		config.KeyUpstreamCNScriptsURL:            os.Getenv("UPSTREAM_CN_SCRIPTS_URL"),
 		config.KeyUpstreamENScriptsURL:            os.Getenv("UPSTREAM_EN_SCRIPTS_URL"),
 		config.KeyUpstreamFetchConcurrency:        os.Getenv("UPSTREAM_FETCH_CONCURRENCY"),
