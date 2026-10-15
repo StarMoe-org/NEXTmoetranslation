@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -377,8 +378,9 @@ func (t *Translator) fetchJSONURLOnceContext(ctx context.Context, url string) (a
 }
 
 // fetchJPScenarioJSON fetches a JP scenario from the configured source chain,
-// requiring TalkData before accepting a response. Each source is attempted
-// once before any transient retry, which makes failover immediate.
+// requiring TalkData in Japanese before accepting a response. Each source is
+// attempted once before any transient retry, which makes failover immediate.
+// A source serving another language is skipped and logged, never retried.
 func (t *Translator) fetchJPScenarioJSON(assetPath string) (any, error) {
 	urls := make([]string, 0, len(t.jpAssetBases()))
 	for _, base := range t.jpAssetBases() {
@@ -394,6 +396,11 @@ func (t *Translator) fetchJPScenarioJSON(assetPath string) (any, error) {
 		}
 		result, err := t.fetchJSONURLOnce(url)
 		if err == nil && scenarioHasTalkData(result) {
+			if langErr := errNotJapaneseScenario(result); langErr != nil {
+				log.Printf("[translate] rejected JP scenario %s: %v", url, langErr)
+				failures = append(failures, sourceFailure{url: url, err: fmt.Errorf("GET %s: %w", url, langErr)})
+				continue
+			}
 			return result, nil
 		}
 		if err == nil {
@@ -412,9 +419,13 @@ func (t *Translator) fetchJPScenarioJSON(assetPath string) (any, error) {
 		for _, url := range retryable {
 			result, err := t.fetchJSONURLOnce(url)
 			if err == nil && scenarioHasTalkData(result) {
-				return result, nil
-			}
-			if err == nil {
+				langErr := errNotJapaneseScenario(result)
+				if langErr == nil {
+					return result, nil
+				}
+				log.Printf("[translate] rejected JP scenario %s: %v", url, langErr)
+				err = fmt.Errorf("GET %s: %w", url, langErr)
+			} else if err == nil {
 				incomplete = result
 				err = fmt.Errorf("GET %s: missing TalkData", url)
 			}

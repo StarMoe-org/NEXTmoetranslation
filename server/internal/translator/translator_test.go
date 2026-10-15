@@ -336,7 +336,7 @@ func TestFetchJPScenarioUsesHealthyFallbackImmediately(t *testing.T) {
 	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fallbackCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"TalkData":[{"Body":"hello"}]}`)
+		fmt.Fprint(w, `{"TalkData":[{"Body":"こんにちは"}]}`)
 	}))
 	defer fallback.Close()
 
@@ -538,7 +538,7 @@ func TestBuildJPPendingEpisodesFetchesConcurrently(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 		scenarioID := strings.TrimSuffix(parts[len(parts)-1], ".json")
-		fmt.Fprintf(w, `{"ScenarioId":%q,"Snippets":[],"TalkData":[{"Body":"line","WindowDisplayName":"name"}],"SpecialEffectData":[],"AppearCharacters":[]}`, scenarioID)
+		fmt.Fprintf(w, `{"ScenarioId":%q,"Snippets":[],"TalkData":[{"Body":"せりふ","WindowDisplayName":"name"}],"SpecialEffectData":[],"AppearCharacters":[]}`, scenarioID)
 	}))
 	defer server.Close()
 
@@ -573,11 +573,11 @@ func TestBuildJPPendingEpisodesFetchesConcurrently(t *testing.T) {
 
 func TestOfficialEpisodesKeepJPFieldsWhenChineseMissingOrEqual(t *testing.T) {
 	jp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"ScenarioId":"scenario","Snippets":[],"TalkData":[{"Body":"同文","WindowDisplayName":"初音ミク"},{"Body":"未翻译","WindowDisplayName":"鏡音リン"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+		fmt.Fprint(w, `{"ScenarioId":"scenario","Snippets":[],"TalkData":[{"Body":"おなじぶん","WindowDisplayName":"初音ミク"},{"Body":"みほんやく","WindowDisplayName":"鏡音リン"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer jp.Close()
 	cn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"TalkData":[{"Body":"同文","WindowDisplayName":"初音ミク"},{"Body":"未翻译","WindowDisplayName":"鏡音リン"}]}`)
+		fmt.Fprint(w, `{"TalkData":[{"Body":"おなじぶん","WindowDisplayName":"初音ミク"},{"Body":"みほんやく","WindowDisplayName":"鏡音リン"}]}`)
 	}))
 	defer cn.Close()
 	cfg := openTranslatorConfig(t)
@@ -603,7 +603,7 @@ func TestOfficialEpisodesKeepJPFieldsWhenChineseMissingOrEqual(t *testing.T) {
 		position int
 		field    string
 		key      string
-	}{{0, "body", "同文"}, {1, "speaker", "初音ミク"}, {2, "body", "未翻译"}, {3, "speaker", "鏡音リン"}}
+	}{{0, "body", "おなじぶん"}, {1, "speaker", "初音ミク"}, {2, "body", "みほんやく"}, {3, "speaker", "鏡音リン"}}
 	for index, expected := range want {
 		line := episode.lines[index]
 		if line.ScenarioPosition != expected.position || line.Field != expected.field || line.JPKey != expected.key || line.Text != "" {
@@ -616,8 +616,8 @@ func TestRetryOfficialTalkLengthMismatchPreservesExistingEvent(t *testing.T) {
 	tr, events, cfg := openTestTranslator(t)
 	if err := events.ImportOrdered(101, model.EventStoryMeta{Source: model.SourceLLM}, []store.OrderedEpisode{{
 		EpisodeNo: "1", ScenarioID: "old", Title: "旧标题", TitleSource: model.SourceLLM,
-		TalkKeys: []string{"旧原文"}, TalkData: map[string]string{"旧原文": "保留译文"},
-		TalkSources: map[string]string{"旧原文": model.SourceLLM},
+		TalkKeys: []string{"旧げんぶん"}, TalkData: map[string]string{"旧げんぶん": "保留译文"},
+		TalkSources: map[string]string{"旧げんぶん": model.SourceLLM},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -634,7 +634,7 @@ func TestRetryOfficialTalkLengthMismatchPreservesExistingEvent(t *testing.T) {
 		case "/cn-master/events.json":
 			fmt.Fprint(w, `[{"id":101}]`)
 		case "/jp-assets/event_story/asset/scenario/scenario.json":
-			fmt.Fprint(w, `{"ScenarioId":"scenario","Snippets":[],"TalkData":[{"Body":"一"},{"Body":"二"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+			fmt.Fprint(w, `{"ScenarioId":"scenario","Snippets":[],"TalkData":[{"Body":"いち"},{"Body":"に"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 		case "/cn-assets/event_story/asset/scenario/scenario.json":
 			fmt.Fprint(w, `{"TalkData":[{"Body":"第一"}]}`)
 		default:
@@ -669,7 +669,7 @@ func TestRetryOfficialPreservesEmptyEpisodeIdentity(t *testing.T) {
 		case "/cn-assets/event_story/asset/scenario/empty.json":
 			fmt.Fprint(w, `{"TalkData":[]}`)
 		case "/jp-assets/event_story/asset/scenario/content.json":
-			fmt.Fprint(w, `{"ScenarioId":"content","Snippets":[],"TalkData":[{"Body":"原文"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+			fmt.Fprint(w, `{"ScenarioId":"content","Snippets":[],"TalkData":[{"Body":"げんぶん"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 		case "/cn-assets/event_story/asset/scenario/content.json":
 			fmt.Fprint(w, `{"TalkData":[{"Body":"译文"}]}`)
 		default:
@@ -704,7 +704,7 @@ func TestRetryResponseUsesPersistedPendingSourceAfterPartialAI(t *testing.T) {
 		case "/cn-master/eventStories.json", "/cn-master/events.json":
 			fmt.Fprint(w, `[]`)
 		case "/jp-assets/event_story/asset/scenario/scenario.json":
-			fmt.Fprint(w, `{"ScenarioId":"scenario","Snippets":[],"TalkData":[{"Body":"一"},{"Body":"二"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+			fmt.Fprint(w, `{"ScenarioId":"scenario","Snippets":[],"TalkData":[{"Body":"いち"},{"Body":"に"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 		case "/llm/chat/completions":
 			w.Header().Set("Content-Type", "text/event-stream")
 			chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{
@@ -731,7 +731,7 @@ func TestRetryResponseUsesPersistedPendingSourceAfterPartialAI(t *testing.T) {
 		t.Fatalf("partial AI retry result=%v err=%v", result, err)
 	}
 	detail, err := events.Detail(103)
-	if err != nil || detail.Meta.Source != "jp_pending" || detail.Episodes["1"].TalkData["一"] != "译一" || detail.Episodes["1"].TalkData["二"] != "" {
+	if err != nil || detail.Meta.Source != "jp_pending" || detail.Episodes["1"].TalkData["いち"] != "译一" || detail.Episodes["1"].TalkData["に"] != "" {
 		t.Fatalf("partial AI detail=%+v err=%v", detail, err)
 	}
 }
@@ -743,7 +743,7 @@ func TestJPPendingEpisodeFailureDoesNotPartiallyReplaceEvent(t *testing.T) {
 			http.Error(w, "missing", http.StatusNotFound)
 			return
 		}
-		fmt.Fprint(w, `{"ScenarioId":"one","Snippets":[],"TalkData":[{"Body":"一","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+		fmt.Fprint(w, `{"ScenarioId":"one","Snippets":[],"TalkData":[{"Body":"いち","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer assets.Close()
 	configureSourceURLs(t, cfg, map[string]string{config.KeyUpstreamJPAssetsURL: assets.URL})
@@ -771,8 +771,8 @@ func TestMalformedEventEpisodeIdentitiesFailClosedBeforeFetch(t *testing.T) {
 	tr, events, cfg := openTestTranslator(t)
 	if err := events.ImportOrdered(104, model.EventStoryMeta{Source: model.SourceLLM}, []store.OrderedEpisode{{
 		EpisodeNo: "1", ScenarioID: "old", Title: "旧标题", TitleSource: model.SourceLLM,
-		TalkKeys: []string{"旧原文"}, TalkData: map[string]string{"旧原文": "保留译文"},
-		TalkSources: map[string]string{"旧原文": model.SourceLLM},
+		TalkKeys: []string{"旧げんぶん"}, TalkData: map[string]string{"旧げんぶん": "保留译文"},
+		TalkSources: map[string]string{"旧げんぶん": model.SourceLLM},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -827,7 +827,7 @@ func TestOfficialEpisodeFailureDoesNotPartiallyReplaceExistingEvent(t *testing.T
 	tr, events, cfg := openTestTranslator(t)
 	if err := events.ImportOrdered(93, model.EventStoryMeta{Source: model.SourceLLM}, []store.OrderedEpisode{{
 		EpisodeNo: "1", ScenarioID: "old", Title: "旧标题", TitleSource: model.SourceHuman,
-		TalkKeys: []string{"旧原文"}, TalkData: map[string]string{"旧原文": "保留译文"}, TalkSources: map[string]string{"旧原文": model.SourceLLM},
+		TalkKeys: []string{"旧げんぶん"}, TalkData: map[string]string{"旧げんぶん": "保留译文"}, TalkSources: map[string]string{"旧げんぶん": model.SourceLLM},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -859,7 +859,7 @@ func TestOfficialEpisodeFailureDoesNotPartiallyReplaceExistingEvent(t *testing.T
 			http.Error(w, "missing", http.StatusNotFound)
 			return
 		}
-		fmt.Fprint(w, `{"ScenarioId":"one","Snippets":[],"TalkData":[{"Body":"一","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+		fmt.Fprint(w, `{"ScenarioId":"one","Snippets":[],"TalkData":[{"Body":"いち","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer jpAssets.Close()
 	cnAssets := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -918,7 +918,7 @@ func TestRetryEventStorySyncFallbackFailurePreservesExistingEvent(t *testing.T) 
 			http.Error(w, "missing", http.StatusNotFound)
 			return
 		}
-		fmt.Fprint(w, `{"ScenarioId":"one","Snippets":[],"TalkData":[{"Body":"一","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+		fmt.Fprint(w, `{"ScenarioId":"one","Snippets":[],"TalkData":[{"Body":"いち","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer jpAssets.Close()
 	configureSourceURLs(t, cfg, map[string]string{
@@ -940,7 +940,7 @@ func TestSyncBackfillsSkippedHumanEventScenarioWithoutChangingTranslations(t *te
 	tr, events, cfg := openTestTranslator(t)
 	if err := events.ImportOrdered(92, model.EventStoryMeta{Source: model.SourceHuman}, []store.OrderedEpisode{{
 		EpisodeNo: "1", ScenarioID: "human-scenario", Title: "人工标题", TitleSource: model.SourceHuman,
-		TalkKeys: []string{"原文"}, TalkData: map[string]string{"原文": "人工译文"}, TalkSources: map[string]string{"原文": model.SourcePinned},
+		TalkKeys: []string{"げんぶん"}, TalkData: map[string]string{"げんぶん": "人工译文"}, TalkSources: map[string]string{"げんぶん": model.SourcePinned},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -965,7 +965,7 @@ func TestSyncBackfillsSkippedHumanEventScenarioWithoutChangingTranslations(t *te
 	}))
 	defer cnMaster.Close()
 	assets := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"ScenarioId":"human-scenario","Snippets":[{"Action":1,"ReferenceIndex":0}],"TalkData":[{"Body":"原文","WindowDisplayName":"角色","Voices":[]}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+		fmt.Fprint(w, `{"ScenarioId":"human-scenario","Snippets":[{"Action":1,"ReferenceIndex":0}],"TalkData":[{"Body":"げんぶん","WindowDisplayName":"角色","Voices":[]}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer assets.Close()
 	configureSourceURLs(t, cfg, map[string]string{
@@ -1003,8 +1003,8 @@ func TestRollingScenarioReplacementBackfillPreservesRecoveryLocalesAndRestoresEx
 	oldCanonical, oldDigest, err := store.CanonicalizeEventScenario(map[string]any{
 		"ScenarioId": "old-scenario", "Snippets": []any{},
 		"TalkData": []any{
-			map[string]any{"Body": "共有原文", "WindowDisplayName": "旧話者", "Voices": []any{}},
-			map[string]any{"Body": "変更前", "WindowDisplayName": "", "Voices": []any{}},
+			map[string]any{"Body": "共有げんぶん", "WindowDisplayName": "旧話者", "Voices": []any{}},
+			map[string]any{"Body": "へんこうまえ", "WindowDisplayName": "", "Voices": []any{}},
 		},
 		"SpecialEffectData": []any{}, "AppearCharacters": []any{},
 	}, "old-scenario")
@@ -1016,13 +1016,13 @@ func TestRollingScenarioReplacementBackfillPreservesRecoveryLocalesAndRestoresEx
 	if err := events.ImportOrdered(88, model.EventStoryMeta{Source: model.SourceHuman}, []store.OrderedEpisode{{
 		EpisodeNo: "1", ScenarioID: "old-scenario", ScenarioCanonicalJSON: oldCanonical, ScenarioSHA256: oldDigest,
 		Title: "旧人工标题", TitleSource: model.SourceHuman, SourceTitle: "旧原題",
-		TalkKeys:    []string{"共有原文", "変更前"},
-		TalkData:    map[string]string{"共有原文": "人工共享", "変更前": "人工旧译"},
-		TalkSources: map[string]string{"共有原文": model.SourceHuman, "変更前": model.SourcePinned},
+		TalkKeys:    []string{"共有げんぶん", "へんこうまえ"},
+		TalkData:    map[string]string{"共有げんぶん": "人工共享", "へんこうまえ": "人工旧译"},
+		TalkSources: map[string]string{"共有げんぶん": model.SourceHuman, "へんこうまえ": model.SourcePinned},
 		Lines: []store.OrderedLine{
-			{JPKey: "共有原文", Text: "人工共享", Source: model.SourceHuman, ScenarioPosition: 0, Field: "body"},
+			{JPKey: "共有げんぶん", Text: "人工共享", Source: model.SourceHuman, ScenarioPosition: 0, Field: "body"},
 			{JPKey: "旧話者", Text: "", Source: model.SourceUnknown, ScenarioPosition: 1, Field: "speaker"},
-			{JPKey: "変更前", Text: "人工旧译", Source: model.SourcePinned, ScenarioPosition: 2, Field: "body"},
+			{JPKey: "へんこうまえ", Text: "人工旧译", Source: model.SourcePinned, ScenarioPosition: 2, Field: "body"},
 		},
 	}}); err != nil {
 		database.Close()
@@ -1036,9 +1036,9 @@ func TestRollingScenarioReplacementBackfillPreservesRecoveryLocalesAndRestoresEx
 	var sharedSegment, changedSegment model.EventStorySegment
 	for _, segment := range oldDetail.Episodes["1"].Segments {
 		switch segment.Japanese {
-		case "共有原文":
+		case "共有げんぶん":
 			sharedSegment = segment
-		case "変更前":
+		case "へんこうまえ":
 			changedSegment = segment
 		}
 	}
@@ -1046,12 +1046,12 @@ func TestRollingScenarioReplacementBackfillPreservesRecoveryLocalesAndRestoresEx
 		database.Close()
 		t.Fatalf("old source segments=%+v", oldDetail.Episodes["1"].Segments)
 	}
-	if err := events.UpdateLineLocale(88, "1", "共有原文", sharedSegment.ID, sharedSegment.SourceHash,
+	if err := events.UpdateLineLocale(88, "1", "共有げんぶん", sharedSegment.ID, sharedSegment.SourceHash,
 		"Shared English", model.SourceHuman, "talk", model.LocaleEnglish, "editor"); err != nil {
 		database.Close()
 		t.Fatal(err)
 	}
-	if err := events.UpdateLineLocale(88, "1", "変更前", changedSegment.ID, changedSegment.SourceHash,
+	if err := events.UpdateLineLocale(88, "1", "へんこうまえ", changedSegment.ID, changedSegment.SourceHash,
 		"Old English", model.SourceHuman, "talk", model.LocaleEnglish, "editor"); err != nil {
 		database.Close()
 		t.Fatal(err)
@@ -1070,9 +1070,9 @@ func TestRollingScenarioReplacementBackfillPreservesRecoveryLocalesAndRestoresEx
 		`INSERT INTO event_story_episodes(event_id, episode_no, scenario_id, title, title_source, position)
 		 VALUES (88, '1', 'new-scenario', '新人工标题', 'human', 0)`,
 		`INSERT INTO event_story_lines(event_id, episode_no, jp_key, cn_text, source, position)
-		 VALUES (88, '1', '共有原文', '人工共享', 'human', 0)`,
+		 VALUES (88, '1', '共有げんぶん', '人工共享', 'human', 0)`,
 		`INSERT INTO event_story_lines(event_id, episode_no, jp_key, cn_text, source, position)
-		 VALUES (88, '1', '変更後', '人工新译', 'pinned', 1)`,
+		 VALUES (88, '1', 'へんこうご', '人工新译', 'pinned', 1)`,
 	} {
 		if _, err := legacy.Exec(statement); err != nil {
 			legacy.Close()
@@ -1117,7 +1117,7 @@ func TestRollingScenarioReplacementBackfillPreservesRecoveryLocalesAndRestoresEx
 	}))
 	defer cnMaster.Close()
 	assets := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"ScenarioId":"new-scenario","Snippets":[],"TalkData":[{"Body":"共有原文","WindowDisplayName":"新話者","Voices":[]},{"Body":"変更後","WindowDisplayName":"","Voices":[]}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+		fmt.Fprint(w, `{"ScenarioId":"new-scenario","Snippets":[],"TalkData":[{"Body":"共有げんぶん","WindowDisplayName":"新話者","Voices":[]},{"Body":"へんこうご","WindowDisplayName":"","Voices":[]}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer assets.Close()
 	configureSourceURLs(t, cfg, map[string]string{
@@ -1140,11 +1140,11 @@ func TestRollingScenarioReplacementBackfillPreservesRecoveryLocalesAndRestoresEx
 	texts := map[string]string{}
 	for _, segment := range snapshot.Segments {
 		texts[segment.Japanese] = segment.Text
-		if segment.Japanese == "変更前" || segment.ID == changedSegment.ID {
+		if segment.Japanese == "へんこうまえ" || segment.ID == changedSegment.ID {
 			t.Fatalf("snapshot exposed stale segment=%+v", segment)
 		}
 	}
-	if texts["共有原文"] != "Shared English" || texts["変更後"] != "" {
+	if texts["共有げんぶん"] != "Shared English" || texts["へんこうご"] != "" {
 		t.Fatalf("backfilled snapshot texts=%+v", texts)
 	}
 
@@ -1170,8 +1170,8 @@ func TestRollingScenarioReplacementBackfillPreservesRecoveryLocalesAndRestoresEx
 	destinationEvents := store.NewEventStore(destinationDB)
 	if err := destinationEvents.ImportOrdered(88, model.EventStoryMeta{Source: model.SourceHuman}, []store.OrderedEpisode{{
 		EpisodeNo: "1", ScenarioID: "new-scenario", Title: "新人工标题", TitleSource: model.SourceHuman,
-		TalkKeys: []string{"共有原文", "変更後"}, TalkData: map[string]string{"共有原文": "人工共享", "変更後": "人工新译"},
-		TalkSources: map[string]string{"共有原文": model.SourceHuman, "変更後": model.SourcePinned},
+		TalkKeys: []string{"共有げんぶん", "へんこうご"}, TalkData: map[string]string{"共有げんぶん": "人工共享", "へんこうご": "人工新译"},
+		TalkSources: map[string]string{"共有げんぶん": model.SourceHuman, "へんこうご": model.SourcePinned},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1260,7 +1260,7 @@ func TestOfficialSyncRechecksProtectedEditInsideImportTransaction(t *testing.T) 
 	tr, events, cfg := openTestTranslator(t)
 	canonical, digest, err := store.CanonicalizeEventScenario(map[string]any{
 		"ScenarioId": "scenario", "Snippets": []any{},
-		"TalkData":          []any{map[string]any{"Body": "旧原文", "WindowDisplayName": "角色", "Voices": []any{}}},
+		"TalkData":          []any{map[string]any{"Body": "旧げんぶん", "WindowDisplayName": "角色", "Voices": []any{}}},
 		"SpecialEffectData": []any{}, "AppearCharacters": []any{},
 	}, "scenario")
 	if err != nil {
@@ -1268,7 +1268,7 @@ func TestOfficialSyncRechecksProtectedEditInsideImportTransaction(t *testing.T) 
 	}
 	if err := events.ImportOrdered(96, model.EventStoryMeta{Source: model.SourceLLM}, []store.OrderedEpisode{{
 		EpisodeNo: "1", ScenarioID: "scenario", ScenarioCanonicalJSON: canonical, ScenarioSHA256: digest,
-		TalkKeys: []string{"旧原文"}, TalkData: map[string]string{"旧原文": "旧机器译文"}, TalkSources: map[string]string{"旧原文": model.SourceLLM},
+		TalkKeys: []string{"旧げんぶん"}, TalkData: map[string]string{"旧げんぶん": "旧机器译文"}, TalkSources: map[string]string{"旧げんぶん": model.SourceLLM},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1295,9 +1295,9 @@ func TestOfficialSyncRechecksProtectedEditInsideImportTransaction(t *testing.T) 
 	var edited atomic.Bool
 	jpAssets := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if edited.CompareAndSwap(false, true) {
-			editResult <- events.UpdateLine(96, "1", "旧原文", "网络窗口人工编辑", model.SourceHuman, "talk")
+			editResult <- events.UpdateLine(96, "1", "旧げんぶん", "网络窗口人工编辑", model.SourceHuman, "talk")
 		}
-		fmt.Fprint(w, `{"ScenarioId":"scenario","Snippets":[],"TalkData":[{"Body":"新原文","WindowDisplayName":"角色","Voices":[]}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+		fmt.Fprint(w, `{"ScenarioId":"scenario","Snippets":[],"TalkData":[{"Body":"新げんぶん","WindowDisplayName":"角色","Voices":[]}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer jpAssets.Close()
 	cnAssets := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1321,8 +1321,8 @@ func TestOfficialSyncRechecksProtectedEditInsideImportTransaction(t *testing.T) 
 		t.Fatalf("protected official sync outcome=%+v", outcome)
 	}
 	detail, err := events.Detail(96)
-	if err != nil || detail.Episodes["1"].TalkData["旧原文"] != "网络窗口人工编辑" ||
-		detail.Episodes["1"].TalkSources["旧原文"] != model.SourceHuman {
+	if err != nil || detail.Episodes["1"].TalkData["旧げんぶん"] != "网络窗口人工编辑" ||
+		detail.Episodes["1"].TalkSources["旧げんぶん"] != model.SourceHuman {
 		t.Fatalf("protected official detail=%+v err=%v", detail, err)
 	}
 }
@@ -1335,10 +1335,10 @@ func TestJPPendingSyncRechecksProtectedEventCreatedDuringFetch(t *testing.T) {
 		if once.CompareAndSwap(false, true) {
 			created <- events.ImportOrdered(97, model.EventStoryMeta{Source: model.SourceHuman}, []store.OrderedEpisode{{
 				EpisodeNo: "1", ScenarioID: "manual", Title: "人工标题", TitleSource: model.SourceHuman,
-				TalkKeys: []string{"人工原文"}, TalkData: map[string]string{"人工原文": "人工译文"}, TalkSources: map[string]string{"人工原文": model.SourceHuman},
+				TalkKeys: []string{"人工げんぶん"}, TalkData: map[string]string{"人工げんぶん": "人工译文"}, TalkSources: map[string]string{"人工げんぶん": model.SourceHuman},
 			}})
 		}
-		fmt.Fprint(w, `{"ScenarioId":"remote","Snippets":[],"TalkData":[{"Body":"远端原文","WindowDisplayName":"角色","Voices":[]}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+		fmt.Fprint(w, `{"ScenarioId":"remote","Snippets":[],"TalkData":[{"Body":"远端げんぶん","WindowDisplayName":"角色","Voices":[]}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer assets.Close()
 	configureSourceURLs(t, cfg, map[string]string{config.KeyUpstreamJPAssetsURL: assets.URL})
@@ -1357,7 +1357,7 @@ func TestJPPendingSyncRechecksProtectedEventCreatedDuringFetch(t *testing.T) {
 		t.Fatalf("protected JP-pending outcome=%+v", outcome)
 	}
 	detail, err := events.Detail(97)
-	if err != nil || detail.Episodes["1"].Title != "人工标题" || detail.Episodes["1"].TalkData["人工原文"] != "人工译文" {
+	if err != nil || detail.Episodes["1"].Title != "人工标题" || detail.Episodes["1"].TalkData["人工げんぶん"] != "人工译文" {
 		t.Fatalf("protected JP-pending detail=%+v err=%v", detail, err)
 	}
 }
@@ -1365,8 +1365,8 @@ func TestJPPendingSyncRechecksProtectedEventCreatedDuringFetch(t *testing.T) {
 func TestAutomaticEventAIRechecksProtectedEditAfterNetwork(t *testing.T) {
 	tr, events, cfg := openTestTranslator(t)
 	if err := events.ImportOrdered(98, model.EventStoryMeta{Source: "jp_pending"}, []store.OrderedEpisode{{
-		EpisodeNo: "1", ScenarioID: "scenario", TalkKeys: []string{"原文"},
-		TalkData: map[string]string{"原文": ""}, TalkSources: map[string]string{"原文": model.SourceUnknown},
+		EpisodeNo: "1", ScenarioID: "scenario", TalkKeys: []string{"げんぶん"},
+		TalkData: map[string]string{"げんぶん": ""}, TalkSources: map[string]string{"げんぶん": model.SourceUnknown},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1374,7 +1374,7 @@ func TestAutomaticEventAIRechecksProtectedEditAfterNetwork(t *testing.T) {
 	var edited atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if edited.CompareAndSwap(false, true) {
-			editResult <- events.UpdateLine(98, "1", "原文", "人工译文", model.SourceHuman, "talk")
+			editResult <- events.UpdateLine(98, "1", "げんぶん", "人工译文", model.SourceHuman, "talk")
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{
@@ -1406,8 +1406,8 @@ func TestAutomaticEventAIRechecksProtectedEditAfterNetwork(t *testing.T) {
 		t.Fatalf("protected automatic translation count=%d", translated)
 	}
 	detail, err := events.Detail(98)
-	if err != nil || detail.Meta.Source != "jp_pending" || detail.Episodes["1"].TalkData["原文"] != "人工译文" ||
-		detail.Episodes["1"].TalkSources["原文"] != model.SourceHuman {
+	if err != nil || detail.Meta.Source != "jp_pending" || detail.Episodes["1"].TalkData["げんぶん"] != "人工译文" ||
+		detail.Episodes["1"].TalkSources["げんぶん"] != model.SourceHuman {
 		t.Fatalf("protected automatic detail=%+v err=%v", detail, err)
 	}
 }
@@ -1415,8 +1415,8 @@ func TestAutomaticEventAIRechecksProtectedEditAfterNetwork(t *testing.T) {
 func TestManualEventAIRechecksProtectedEditAfterNetwork(t *testing.T) {
 	tr, events, cfg := openTestTranslator(t)
 	if err := events.ImportOrdered(89, model.EventStoryMeta{Source: "jp_pending"}, []store.OrderedEpisode{{
-		EpisodeNo: "1", ScenarioID: "scenario", TalkKeys: []string{"原文"},
-		TalkData: map[string]string{"原文": ""}, TalkSources: map[string]string{"原文": model.SourceUnknown},
+		EpisodeNo: "1", ScenarioID: "scenario", TalkKeys: []string{"げんぶん"},
+		TalkData: map[string]string{"げんぶん": ""}, TalkSources: map[string]string{"げんぶん": model.SourceUnknown},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1424,7 +1424,7 @@ func TestManualEventAIRechecksProtectedEditAfterNetwork(t *testing.T) {
 	var edited atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if edited.CompareAndSwap(false, true) {
-			editResult <- events.UpdateLine(89, "1", "原文", "网络窗口人工译文", model.SourcePinned, "talk")
+			editResult <- events.UpdateLine(89, "1", "げんぶん", "网络窗口人工译文", model.SourcePinned, "talk")
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{
@@ -1452,8 +1452,8 @@ func TestManualEventAIRechecksProtectedEditAfterNetwork(t *testing.T) {
 		t.Fatalf("protected manual translation count=%d", translated)
 	}
 	detail, err := events.Detail(89)
-	if err != nil || detail.Meta.Source != "jp_pending" || detail.Episodes["1"].TalkData["原文"] != "网络窗口人工译文" ||
-		detail.Episodes["1"].TalkSources["原文"] != model.SourcePinned {
+	if err != nil || detail.Meta.Source != "jp_pending" || detail.Episodes["1"].TalkData["げんぶん"] != "网络窗口人工译文" ||
+		detail.Episodes["1"].TalkSources["げんぶん"] != model.SourcePinned {
 		t.Fatalf("protected manual detail=%+v err=%v", detail, err)
 	}
 }
@@ -1461,9 +1461,9 @@ func TestManualEventAIRechecksProtectedEditAfterNetwork(t *testing.T) {
 func TestManualEventAIFillsUntouchedGapInPartiallyHumanStory(t *testing.T) {
 	tr, events, cfg := openTestTranslator(t)
 	if err := events.ImportOrdered(105, model.EventStoryMeta{Source: model.SourceHuman}, []store.OrderedEpisode{{
-		EpisodeNo: "1", ScenarioID: "scenario", TalkKeys: []string{"人工原文", "待补原文"},
-		TalkData:    map[string]string{"人工原文": "人工译文", "待补原文": ""},
-		TalkSources: map[string]string{"人工原文": model.SourceHuman, "待补原文": model.SourceUnknown},
+		EpisodeNo: "1", ScenarioID: "scenario", TalkKeys: []string{"人工げんぶん", "待补げんぶん"},
+		TalkData:    map[string]string{"人工げんぶん": "人工译文", "待补げんぶん": ""},
+		TalkSources: map[string]string{"人工げんぶん": model.SourceHuman, "待补げんぶん": model.SourceUnknown},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1489,10 +1489,10 @@ func TestManualEventAIFillsUntouchedGapInPartiallyHumanStory(t *testing.T) {
 	}
 	detail, err := events.Detail(105)
 	if err != nil || detail.Meta.Source != model.SourceHuman ||
-		detail.Episodes["1"].TalkData["人工原文"] != "人工译文" ||
-		detail.Episodes["1"].TalkSources["人工原文"] != model.SourceHuman ||
-		detail.Episodes["1"].TalkData["待补原文"] != "机器补译" ||
-		detail.Episodes["1"].TalkSources["待补原文"] != model.SourceLLM {
+		detail.Episodes["1"].TalkData["人工げんぶん"] != "人工译文" ||
+		detail.Episodes["1"].TalkSources["人工げんぶん"] != model.SourceHuman ||
+		detail.Episodes["1"].TalkData["待补げんぶん"] != "机器补译" ||
+		detail.Episodes["1"].TalkSources["待补げんぶん"] != model.SourceLLM {
 		t.Fatalf("manual gap fill detail=%+v err=%v", detail, err)
 	}
 }

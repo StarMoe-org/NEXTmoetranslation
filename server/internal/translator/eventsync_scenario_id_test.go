@@ -68,7 +68,7 @@ func laggedScenarioUpstream(t *testing.T, ownLabel func(ep string) string, withO
 			fmt.Fprint(w, `[{"id":168}]`)
 		case strings.HasPrefix(r.URL.Path, "/jp-assets/event_story/event_cheerheart_2025/scenario/event_168_"):
 			ep := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/jp-assets/event_story/event_cheerheart_2025/scenario/event_168_"), ".json")
-			fmt.Fprintf(w, `{"ScenarioId":%q,"Snippets":[{"Action":1,"ReferenceIndex":0}],"TalkData":[{"Body":"原文%s","WindowDisplayName":"遥","Voices":[]}],"SpecialEffectData":[],"AppearCharacters":[]}`,
+			fmt.Fprintf(w, `{"ScenarioId":%q,"Snippets":[{"Action":1,"ReferenceIndex":0}],"TalkData":[{"Body":"げんぶん%s","WindowDisplayName":"遥","Voices":[]}],"SpecialEffectData":[],"AppearCharacters":[]}`,
 				ownLabel(ep), ep)
 		case strings.HasPrefix(r.URL.Path, "/cn-assets/event_story/event_cheerheart_2025/scenario/event_168_"):
 			ep := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/cn-assets/event_story/event_cheerheart_2025/scenario/event_168_"), ".json")
@@ -110,9 +110,9 @@ func TestScenarioBackfillAdoptsTheMasterIDOfAnEventFileLabelledOneEventLower(t *
 	tr, events, cfg := openTestTranslator(t)
 	if err := events.ImportOrdered(168, model.EventStoryMeta{Source: model.SourceHuman}, []store.OrderedEpisode{
 		{EpisodeNo: "1", ScenarioID: "event_168_01", Title: "齐聚的偶像们", TitleSource: model.SourceHuman,
-			TalkKeys: []string{"原文01"}, TalkData: map[string]string{"原文01": "人工译文一"}, TalkSources: map[string]string{"原文01": model.SourceHuman}},
+			TalkKeys: []string{"げんぶん01"}, TalkData: map[string]string{"げんぶん01": "人工译文一"}, TalkSources: map[string]string{"げんぶん01": model.SourceHuman}},
 		{EpisodeNo: "2", ScenarioID: "event_168_02", Title: "真正的偶像", TitleSource: model.SourceHuman,
-			TalkKeys: []string{"原文02"}, TalkData: map[string]string{"原文02": "人工译文二"}, TalkSources: map[string]string{"原文02": model.SourceHuman}},
+			TalkKeys: []string{"げんぶん02"}, TalkData: map[string]string{"げんぶん02": "人工译文二"}, TalkSources: map[string]string{"げんぶん02": model.SourceHuman}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -147,9 +147,9 @@ func TestScenarioBackfillStillRejectsAFileLabelledWithAnotherEpisode(t *testing.
 	tr, events, cfg := openTestTranslator(t)
 	if err := events.ImportOrdered(168, model.EventStoryMeta{Source: model.SourceHuman}, []store.OrderedEpisode{
 		{EpisodeNo: "1", ScenarioID: "event_168_01", Title: "齐聚的偶像们", TitleSource: model.SourceHuman,
-			TalkKeys: []string{"原文01"}, TalkData: map[string]string{"原文01": "人工译文一"}, TalkSources: map[string]string{"原文01": model.SourceHuman}},
+			TalkKeys: []string{"げんぶん01"}, TalkData: map[string]string{"げんぶん01": "人工译文一"}, TalkSources: map[string]string{"げんぶん01": model.SourceHuman}},
 		{EpisodeNo: "2", ScenarioID: "event_168_02", Title: "真正的偶像", TitleSource: model.SourceHuman,
-			TalkKeys: []string{"原文02"}, TalkData: map[string]string{"原文02": "人工译文二"}, TalkSources: map[string]string{"原文02": model.SourceHuman}},
+			TalkKeys: []string{"げんぶん02"}, TalkData: map[string]string{"げんぶん02": "人工译文二"}, TalkSources: map[string]string{"げんぶん02": model.SourceHuman}},
 	}); err != nil {
 		t.Fatal(err)
 	}

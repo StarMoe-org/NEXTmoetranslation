@@ -1,5 +1,12 @@
 # 更新日志
 
+## 热修复：拒收不是日文的日文剧本（2026-10-16）
+
+- 资源站 `storage.exmeaning.com/sekai-jp-assets` 有一些 JP 路径给的是别的服务器的剧本：活动 168、169、172、173、174 共 40 话是台服繁中，卡牌 1116、1117 前篇、1118 后篇、1231 前篇和区域对话 934 是韩文，区域对话 2716、2718、2722 是中文。这些文件里的 `ScenarioId` 看不出问题，这 5 个活动的日服原版同样标成低一期（见 2026-10-12 的热修复）。活动剧情的日文默认取自 `assets.unipjsk.com`，没有受影响；卡牌剧情和区域对话的日文取自这个资源站，上面 4 话卡牌剧情和 4 个区域对话已经入库，日文键是韩文或繁中。
+- 现在按正文判断：统计 TalkData 正文的假名、韩文、汉字和拉丁字母，假名数的 4 倍要大于汉字数，四类都没有（只有符号）时放行，与 SekaiStoryRipper 0.11.2 的判据一致。活动剧情的日文剧本（`fetchJPScenarioJSON`，也用于 AI 翻译）和卡牌剧情、区域对话的日文脚本，遇到不合格的源就记一行日志，当作这个源失败，换下一个源，不重试这个源。卡牌剧情的下一个源是 `assets.unipjsk.com/startapp`；区域对话只有一个源，所以记为错误，已入库的脚本和译文保持不动。官方 CN、EN 脚本不检查（`TestJapaneseScenarioCheckRejectsOtherServersText`、`TestFetchJPScenarioSkipsASourceServingAnotherLanguage`、`TestSideStoryJPScriptInAnotherLanguageMovesOnToTheNextBase`）。
+- 2026-10-16 核对过：unipjsk 的全部 1776 话活动剧情，以及资源站的全部 2804 个卡牌剧情和 2881 个区域对话，除上面 8 个串服文件外都符合这条判据，正常数据的行为不变。翻译包里原先用纯汉字或英文冒充日文的测试剧本，改成了带假名的文本。
+- 部署不需要迁移。已经入库的 4 话卡牌剧情，部署后用 `POST /api/editor/v1/story/card/<id>/refresh` 重抓，就会从 unipjsk 取到日文；4 个区域对话要等资源站或其他源有了日文才能重抓。
+
 ## 热修复：Sekaipedia 罗马音注音（2026-10-15）
 
 - Sekaipedia 导入用罗马音列去对齐可见歌词，推出汉字读音；几种对齐同样好时取第一种，所以来源错位或对齐并列时，会给出 `{本日|ほ}`、`25{時|にじゅうごじ}`、`6{日|いか}`、`{今日|きょ}`、`{彁|べぼぴー}` 这样的读音。现在来源对齐只在读音合理、有可见假名锚定、且没有并列时才采用；数字、拉丁字母和按字母读的词不会吞掉汉字的读音；单个音拍的读音只保留可见假名逼出来的文字游戏（如 `{共鳴|な}`）。信不过的行退回字典读音；字典也读不出的行走最后的宽松兜底，同样拒绝并列和被替换的假名（`TestSekaipediaSourceReadingPlausibility`、`TestSekaipediaExactSourceKeepsSingleMoraWordplay`、`TestSekaipediaRubyRejectsMisalignedSourceReadings`、`TestSekaipediaLenientLastResortStaysAnchored`、`TestSekaipediaHybridRubyRejectsLetterNameReadings`）。

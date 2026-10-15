@@ -43,10 +43,10 @@ func TestFailedEventScenarioIsRetriedAfterLaterEventImports(t *testing.T) {
 				http.Error(w, "missing", http.StatusNotFound)
 				return
 			}
-			fmt.Fprint(w, `{"ScenarioId":"fifty","Snippets":[],"TalkData":[{"Body":"五十原文","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+			fmt.Fprint(w, `{"ScenarioId":"fifty","Snippets":[],"TalkData":[{"Body":"五十げんぶん","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 			return
 		}
-		fmt.Fprint(w, `{"ScenarioId":"fiftyone","Snippets":[],"TalkData":[{"Body":"五十一原文","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+		fmt.Fprint(w, `{"ScenarioId":"fiftyone","Snippets":[],"TalkData":[{"Body":"五十一げんぶん","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer jpAssets.Close()
 	cnAssets := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +115,7 @@ func TestTitleOnlyOfficialEventsDoNotEndTheOfficialScan(t *testing.T) {
 			fmt.Fprint(w, `[{"id":60},{"id":61},{"id":62},{"id":63}]`)
 		case strings.HasPrefix(r.URL.Path, "/jp-assets/"):
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/jp-assets/event_story/asset/scenario/"), ".json")
-			fmt.Fprintf(w, `{"ScenarioId":%q,"Snippets":[],"TalkData":[{"Body":"原文%s","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`, id, id)
+			fmt.Fprintf(w, `{"ScenarioId":%q,"Snippets":[],"TalkData":[{"Body":"げんぶん%s","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`, id, id)
 		case strings.HasPrefix(r.URL.Path, "/cn-assets/"):
 			// only the newest event has official talk text; the rest are title-only
 			if strings.HasSuffix(r.URL.Path, "/s63.json") {
@@ -146,9 +146,9 @@ func TestPartiallyTranslatedOfficialEpisodeKeepsUntranslatedLines(t *testing.T) 
 	_, events, cfg := openTestTranslator(t)
 	jpAssets := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, `{"ScenarioId":"scenario","Snippets":[],"TalkData":[
-			{"Body":"一","WindowDisplayName":"角色"},
-			{"Body":"二","WindowDisplayName":"角色"},
-			{"Body":"三","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+			{"Body":"いち","WindowDisplayName":"角色"},
+			{"Body":"に","WindowDisplayName":"角色"},
+			{"Body":"さん","WindowDisplayName":"角色"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
 	}))
 	defer jpAssets.Close()
 	cnAssets := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -189,7 +189,7 @@ func TestPartiallyTranslatedOfficialEpisodeKeepsUntranslatedLines(t *testing.T) 
 	}
 	bodies := 0
 	for _, key := range ordered.Episodes[0].TalkKeys {
-		if key == "一" || key == "二" || key == "三" {
+		if key == "いち" || key == "に" || key == "さん" {
 			bodies++
 		}
 	}
@@ -204,7 +204,7 @@ func TestPartiallyTranslatedOfficialEpisodeKeepsUntranslatedLines(t *testing.T) 
 	for _, target := range targets {
 		targetKeys = append(targetKeys, target.JP)
 	}
-	if len(targetKeys) != 2 || targetKeys[0] != "二" || targetKeys[1] != "三" {
+	if len(targetKeys) != 2 || targetKeys[0] != "に" || targetKeys[1] != "さん" {
 		t.Fatalf("AI gap-fill targets = %v, want [二 三]", targetKeys)
 	}
 }

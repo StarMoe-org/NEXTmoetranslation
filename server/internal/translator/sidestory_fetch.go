@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -73,8 +74,9 @@ func (t *Translator) getSideStoryUpstream(ctx context.Context, pacer *sideStoryP
 }
 
 // fetchSideStoryScriptContext fetches one script from the server's bases in
-// order. A response without TalkData or with an invalid script moves on to the
-// next base; every base answering 404 makes the script Missing. The script is
+// order. A response without TalkData, with an invalid script or, for JP, not
+// in Japanese moves on to the next base; every base answering 404 makes the
+// script Missing. The script is
 // parsed under its own ScenarioId, which is only a label; the asset path
 // identifies it. Only context errors are returned as errors.
 func (t *Translator) fetchSideStoryScriptContext(ctx context.Context, pacer *sideStoryPacer, server, kind, assetPath string) (store.SideStoryFetchOutcome, error) {
@@ -94,6 +96,9 @@ func (t *Translator) fetchSideStoryScriptContext(ctx context.Context, pacer *sid
 				err = fmt.Errorf("GET %s: decode: %w", url, err)
 			} else if !scenarioHasTalkData(value) {
 				err = fmt.Errorf("GET %s: missing TalkData", url)
+			} else if langErr := sideStoryLanguageError(server, value); langErr != nil {
+				log.Printf("[side-story] rejected %s script %s: %v", server, url, langErr)
+				err = fmt.Errorf("GET %s: %w", url, langErr)
 			} else {
 				scenarioID, _ := asMap(value)["ScenarioId"].(string)
 				script, parseErr := store.ParseSideStoryScript(value, scenarioID)
@@ -119,6 +124,16 @@ func (t *Translator) fetchSideStoryScriptContext(ctx context.Context, pacer *sid
 		outcome.Err = truncateStatusDetail(strings.Join(failures, "; "), 400)
 	}
 	return outcome, nil
+}
+
+// sideStoryLanguageError checks the language of a JP script, which the lines
+// are keyed by; the official CN and EN scripts are checked against the JP one
+// when they are applied.
+func sideStoryLanguageError(server string, value any) error {
+	if server != "jp" {
+		return nil
+	}
+	return errNotJapaneseScenario(value)
 }
 
 // fetchSideStoryEpisodeContext fetches an episode's JP script and, when it is
