@@ -136,3 +136,80 @@ func TestSideStoryJPScriptInAnotherLanguageMovesOnToTheNextBase(t *testing.T) {
 		t.Fatalf("CN script = %+v, want it accepted", outcome)
 	}
 }
+
+// The CN mirror serves the Japanese text of an episode CN has listed but not
+// translated yet, here an older revision with one line worded differently.
+// That line must not become the official translation, and the event must not
+// be imported as official CN.
+func TestOfficialCNImportIgnoresACNScenarioInJapanese(t *testing.T) {
+	const (
+		jpLine1  = "——うむ！　全員そろったな！"
+		jpLine2  = "いえ。これは僕が永峯さんにお会いして日が浅い分、\n客観視できたから閃いたにすぎないと思います"
+		oldLine2 = "いえ。これは僕が今日初めて永峯さんにお会いした分、\n客観視できたから閃いたにすぎないと思います"
+	)
+	talks := func(lines ...string) string {
+		parts := make([]string, 0, len(lines))
+		for _, line := range lines {
+			parts = append(parts, fmt.Sprintf(`{"Body":%q,"WindowDisplayName":"司","Voices":[]}`, line))
+		}
+		return strings.Join(parts, ",")
+	}
+	cnBody := talks(jpLine1, oldLine2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/jp-master/eventStories.json":
+			fmt.Fprint(w, `[{"eventId":200,"assetbundleName":"event_direction_2026","eventStoryEpisodes":[{"episodeNo":1,"scenarioId":"event_200_01","title":"道を決める前に"}]}]`)
+		case "/cn-master/eventStories.json":
+			fmt.Fprint(w, `[{"eventId":200,"eventStoryEpisodes":[{"episodeNo":1,"title":"在确定道路之前"}]}]`)
+		case "/cn-master/events.json":
+			fmt.Fprint(w, `[{"id":200}]`)
+		case "/jp-assets/event_story/event_direction_2026/scenario/event_200_01.json":
+			fmt.Fprintf(w, `{"ScenarioId":"event_200_01","Snippets":[],"TalkData":[%s],"SpecialEffectData":[],"AppearCharacters":[]}`, talks(jpLine1, jpLine2))
+		case "/cn-assets/event_story/event_direction_2026/scenario/event_200_01.json":
+			fmt.Fprintf(w, `{"ScenarioId":"event_200_01","TalkData":[%s]}`, cnBody)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+
+	tr, events, cfg := openTestTranslator(t)
+	configureLocalSources(t, cfg, upstream.URL)
+	jpStories, err := tr.fetchMasterdata("eventStories.json", "jp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cnStories, err := tr.fetchMasterdata("eventStories.json", "cn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	episodes, hasTalk, hasTitleOnly, errs := tr.buildOfficialCNEpisodes(jpStories[0], cnStories[0])
+	if len(errs) != 0 || hasTalk || !hasTitleOnly {
+		t.Fatalf("hasTalk=%v hasTitleOnly=%v errs=%v, want title only", hasTalk, hasTitleOnly, errs)
+	}
+	if text := episodes["1"].talkData[jpLine2]; text != "" {
+		t.Fatalf("the Japanese CN line became a translation: %q", text)
+	}
+
+	outcome, err := tr.syncEventStoriesCNOnly(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Processed != 0 || len(outcome.PartialErrors) != 0 {
+		t.Fatalf("outcome = %+v, want nothing imported and no error", outcome)
+	}
+	if detail, err := events.Detail(200); err == nil && detail.Meta.Source == "official_cn" {
+		t.Fatalf("event 200 was imported as official CN: %+v", detail.Meta)
+	}
+
+	// Once CN publishes Chinese, the episode is imported as before.
+	cnBody = `{"Body":"——嗯！全员到齐了！","WindowDisplayName":"司"},{"Body":"不。这只是因为我和永峰先生认识不久，\n才能客观地看待问题。","WindowDisplayName":"司"}`
+	outcome, err = tr.syncEventStoriesCNOnly(0, 1)
+	if err != nil || outcome.Processed != 1 {
+		t.Fatalf("outcome=%+v err=%v, want the Chinese import", outcome, err)
+	}
+	detail, err := events.Detail(200)
+	if err != nil || detail.Meta.Source != "official_cn" || detail.Episodes["1"].TalkData[jpLine1] != "——嗯！全员到齐了！" {
+		t.Fatalf("detail=%+v err=%v", detail, err)
+	}
+}

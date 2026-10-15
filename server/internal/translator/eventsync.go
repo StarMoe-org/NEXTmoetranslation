@@ -317,6 +317,14 @@ func (t *Translator) buildOfficialCNEpisodes(jpStory, cnStory map[string]any) (m
 			errs = append(errs, fmt.Errorf("episode %d (%s): TalkData entries must be objects", epNo, scenarioID))
 			continue
 		}
+		// The CN mirror serves the Japanese text of a scenario CN has listed
+		// but not translated yet. It pairs no line, like a script repeating
+		// the Japanese, so the episode stays untranslated rather than failing
+		// every sync until CN publishes it.
+		if langErr := errNotChineseScenario(cnScenario); langErr != nil {
+			log.Printf("[translate] official CN scenario %s/%s ignored: %v", asset, scenarioID, langErr)
+			cnTalk = make([]map[string]any, len(jpTalk))
+		}
 		talkData := map[string]string{}
 		speakerNames := map[string]string{}
 		var talkOrder []string

@@ -1,5 +1,12 @@
 # 更新日志
 
+## 热修复：官方 CN 剧本是日文时不配对（2026-10-16）
+
+- CN 已经列出、还没有翻译的活动，CN 资源站（`sekai-assets-bdf29c81.seiunx.net/cn-assets`，exmeaning 的 CN 桶也一样）给的是日文剧本。活动 188 至 200 都是这样，CN 的 `events.json` 把它们排在 2027 年。旧版只在 CN 行与日文相同时才不配对，活动 200 第 6 话有一行是日文旧版的措辞，和现在的日文不同，于是这行日文被当成「官方 CN」译文导入，整个活动也被标成 `official_cn`：846 行里有 845 行是空的，同步也就不再为它跑 AI 翻译。
+- 现在官方 CN 导入（CN 同步和 `POST /api/event-story/retry`）先检查 CN 剧本的文字：汉字要多于假名的 10 倍、多于韩文的 10 倍、也多于拉丁字母（判据见新包 `scenariolang`，与 SekaiStoryRipper 0.11.2 一致）。不符合的一话当作 CN 还没有翻译，不配对任何一行，日志记一行；不报错，所以不会让每次同步都卡在这些活动上。CN 发布中文之后照常导入（`TestOfficialCNImportIgnoresACNScenarioInJapanese`、`TestEachLanguageRuleTakesItsOwnTextOnly`、`TestLanguageRuleThresholds`、`TestCountScenarioReadsTheBodiesOnly`）。日文剧本的检查也改用这个包。
+- 2026-10-16 核对过：exmeaning CN 桶的 6997 个剧本里，被这条判据拒收的 350 个全是日文为主的文本，没有误判的中文剧本。站内的卡牌剧情和区域对话没有导入过日文的官方译文，原有的「官方脚本与日文相同时保持 pending」规则已经挡住了它们，这次不改。
+- 部署不需要迁移。活动 200 部署后用 `POST /api/event-story/retry` 重抓，会改回 `jp_pending`，那一行日文译文随之清掉，再由 AI 补译。
+
 ## 热修复：拒收不是日文的日文剧本（2026-10-16）
 
 - 资源站 `storage.exmeaning.com/sekai-jp-assets` 有一些 JP 路径给的是别的服务器的剧本：活动 168、169、172、173、174 共 40 话是台服繁中，卡牌 1116、1117 前篇、1118 后篇、1231 前篇和区域对话 934 是韩文，区域对话 2716、2718、2722 是中文。这些文件里的 `ScenarioId` 看不出问题，这 5 个活动的日服原版同样标成低一期（见 2026-10-12 的热修复）。活动剧情的日文默认取自 `assets.unipjsk.com`，没有受影响；卡牌剧情和区域对话的日文取自这个资源站，上面 4 话卡牌剧情和 4 个区域对话已经入库，日文键是韩文或繁中。
