@@ -1,5 +1,14 @@
 # 更新日志
 
+## 热修复：Sekaipedia 罗马音注音（2026-10-15）
+
+- Sekaipedia 导入用罗马音列去对齐可见歌词，推出汉字读音；几种对齐同样好时取第一种，所以来源错位或对齐并列时，会给出 `{本日|ほ}`、`25{時|にじゅうごじ}`、`6{日|いか}`、`{今日|きょ}`、`{彁|べぼぴー}` 这样的读音。现在来源对齐只在读音合理、有可见假名锚定、且没有并列时才采用；数字、拉丁字母和按字母读的词不会吞掉汉字的读音；单个音拍的读音只保留可见假名逼出来的文字游戏（如 `{共鳴|な}`）。信不过的行退回字典读音；字典也读不出的行走最后的宽松兜底，同样拒绝并列和被替换的假名（`TestSekaipediaSourceReadingPlausibility`、`TestSekaipediaExactSourceKeepsSingleMoraWordplay`、`TestSekaipediaRubyRejectsMisalignedSourceReadings`、`TestSekaipediaLenientLastResortStaysAnchored`、`TestSekaipediaHybridRubyRejectsLetterNameReadings`）。
+- 对齐有表级预算，假名候选终点有上限，每个区域只做一遍 DP：2,101 字的一行从 38 秒降到几毫秒（`TestSekaipediaRubyAlignmentTimeIsBounded`）。
+- 显式 `{{ruby}}` 保留刻意的单音拍读音；汉字释义和与嵌套分段对不上的拆分读音直接丢弃，不再让整张表失败（`TestSekaipediaWholeLineRubyKeepsExplicitSegmentReadings`、`TestSekaipediaExplicitRubyWithoutPlausibleSplitKeepsOnlyBase`、`TestSekaipediaExplicitRubyKeepsSingleMoraAndSegmentSplitFallback`）。
+- 仍然得不到可信读音的行会让整首歌导入失败。报错写明行号和原因，不带歌词原文，仍匹配 `ErrUnsupportedTable`（禁用策略下为 `ErrCatalogRenditionConflict`）（`TestSekaipediaLineRubyErrorNamesLineAndReason`）。
+- 在 2026-10-14 的审计语料上，不可能的读音从 331 行降到 18 行；人工核对过的 203 行里，有 187 行与导入结果一致。有 3 个 Sekaipedia 版本（oldid 288942、330645、326668）的并列行字典也读不出，现在导入时报错，它们以前给出的读音本来就是错的。离线 `lyrics-recovery` 重放这 3 首之前，要先更新它们的抓取记录；编辑器搜索也不再列出它们的 Sekaipedia 结果。
+- 部署不需要迁移，已发布的歌词不变。
+
 ## 热修复：活动剧情场景编号（2026-10-12）
 
 - 活动 168、169、172、173、174 的官方剧情文件里，`ScenarioId` 比活动号小 1。比如活动 168 的文件按 `event_168_01` 到 `event_168_08` 拉取，内部却写着 `event_167_01` 到 `event_167_08`，因为测试活动 166（チアフルカーニバルイベントテストイベント）占用了一个活动号；从 175 起编号恢复一致。文件内容确实是各自活动的剧情。2026-10-12 按 masterdata 逐话核对了全部 218 个有剧情的活动、1776 话：只有这 5 个活动、40 话对不上。第二个测试活动 186 之后的活动没有偏移；只有两话的 World Link 终章 180、218 用的是 `wl_finale_01`、`wl_finale_02`，也一致。旧版要求 `ScenarioId` 与 masterdata 的 `scenarioId` 完全一致，所以每次 CN 同步都有这 40 话补全原始场景失败（`ScenarioId mismatch`），upstream 状态停在 `data sync skipped: eventStories`，`upstream.state.last_data_version` 也一直不更新。
