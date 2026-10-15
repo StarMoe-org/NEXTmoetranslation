@@ -1,6 +1,7 @@
 package lyricssource
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -868,6 +869,12 @@ func parseSekaipediaSongLegacy(content string, policy PerformerSegmentationPolic
 	}
 	if err != nil {
 		if policy == PerformerSegmentationDisabled {
+			// A line that failed the table is named in the text only, so the
+			// outcome is still classified as a policy conflict.
+			var lineErr *sekaipediaLineError
+			if errors.As(err, &lineErr) {
+				return sekaipediaSongExtraction{}, fmt.Errorf("%w: %v", ErrCatalogRenditionConflict, lineErr)
+			}
 			return sekaipediaSongExtraction{}, ErrCatalogRenditionConflict
 		}
 		return sekaipediaSongExtraction{}, err
@@ -1033,9 +1040,12 @@ func applySekaipediaExactMissingRomajiFallback(tabs map[string]string) map[strin
 					recordEvidence("visible\x00"+visible, params["romaji"])
 				}
 				for lineIndex := range japaneseLines {
-					spans, ok := deriveSekaipediaRuby(
+					// Evidence that other lines reuse never comes from the lenient
+					// last resort, which may keep a guessed split.
+					spans, ok := deriveSekaipediaRubyMode(
 						sekaipediaColumnLineText(japaneseLines[lineIndex]),
 						sekaipediaColumnLineText(romajiLines[lineIndex]),
+						false,
 					)
 					if !ok {
 						continue

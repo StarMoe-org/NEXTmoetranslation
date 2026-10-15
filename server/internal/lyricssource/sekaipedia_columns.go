@@ -1,6 +1,7 @@
 package lyricssource
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"unicode"
@@ -490,7 +491,40 @@ func deriveSekaipediaLocalLineRuby(
 	for _, segment := range romajiLines[lineIndex].segments {
 		romanized.WriteString(segment.text)
 	}
-	return deriveSekaipediaRuby(japanese.String(), romanized.String())
+	spans, ok := deriveSekaipediaRuby(japanese.String(), romanized.String())
+	if !ok {
+		return nil, false
+	}
+	return keepSekaipediaSegmentRuby(japaneseLines[lineIndex].segments, spans)
+}
+
+// keepSekaipediaSegmentRuby keeps a segment's own ruby (an explicit {{ruby}}
+// reading) inside a whole-line derivation, which reads the line without it.
+// When the line ruby cannot be split at that segment's edges it is rejected,
+// so the segment-local derivation that honours the explicit reading is used.
+func keepSekaipediaSegmentRuby(segments []sekaipediaColumnSegment, spans []RubySpan) ([]RubySpan, bool) {
+	texts := make([]string, len(segments))
+	explicit := false
+	for index, segment := range segments {
+		texts[index] = segment.text
+		explicit = explicit || len(segment.ruby) > 0 && rubySpansValidForText(segment.text, segment.ruby)
+	}
+	if !explicit {
+		return spans, true
+	}
+	split, ok := splitRubySpansByTexts(spans, texts)
+	if !ok || len(split) != len(segments) {
+		return nil, false
+	}
+	result := make([]RubySpan, 0, len(spans))
+	for index, segment := range segments {
+		if len(segment.ruby) > 0 && rubySpansValidForText(segment.text, segment.ruby) {
+			result = appendRubySpans(result, segment.ruby...)
+			continue
+		}
+		result = appendRubySpans(result, split[index]...)
+	}
+	return result, true
 }
 
 type sekaipediaSourceGroupSegments struct {
@@ -595,7 +629,9 @@ func deriveSekaipediaColumnRubyFallback(
 	for _, line := range romajiLines {
 		romanized.WriteString(sekaipediaColumnLineText(line))
 	}
-	spans, ok := deriveSekaipediaRuby(japanese.String(), romanized.String())
+	// The lines are mismatched, so a line the source cannot read is left to
+	// its own dictionary reading rather than a lenient alignment of the block.
+	spans, ok := deriveSekaipediaRubyMode(japanese.String(), romanized.String(), false)
 	if !ok {
 		return nil, false
 	}
@@ -912,6 +948,14 @@ func buildSekaipediaStructuredLines(
 			return nil, 0, err
 		}
 	}
+	lineRubyError := func(lineIndex int, text, romanized string, err error) error {
+		if romanized == "" && len(romajiLines) == len(japaneseLines) {
+			romanized = sekaipediaColumnLineText(romajiLines[lineIndex])
+		}
+		return &sekaipediaLineError{
+			line: lineIndex + 1, text: text, reason: sekaipediaRubyFailureReason(text, romanized), err: err,
+		}
+	}
 	result := make([]StructuredLine, len(japaneseLines))
 	totalSegments := 0
 	for lineIndex, line := range japaneseLines {
@@ -947,17 +991,17 @@ func buildSekaipediaStructuredLines(
 						} else if dictionary, dictionaryErr := generateRubySpans(text); dictionaryErr == nil {
 							ruby = dictionary
 						} else {
-							return nil, 0, dictionaryErr
+							return nil, 0, lineRubyError(lineIndex, text, "", dictionaryErr)
 						}
 					} else if dictionary, dictionaryErr := generateRubySpans(text); dictionaryErr == nil {
 						ruby = dictionary
 					} else {
-						return nil, 0, dictionaryErr
+						return nil, 0, lineRubyError(lineIndex, text, "", dictionaryErr)
 					}
 				default:
 					dictionary, dictionaryErr := generateRubySpans(text)
 					if dictionaryErr != nil {
-						return nil, 0, dictionaryErr
+						return nil, 0, lineRubyError(lineIndex, text, "", dictionaryErr)
 					}
 					ruby = dictionary
 				}
@@ -989,13 +1033,13 @@ func buildSekaipediaStructuredLines(
 					var dictionaryErr error
 					generatedSegmentRuby, dictionaryErr = generateRubySpansForTexts(texts)
 					if dictionaryErr != nil {
-						return nil, 0, dictionaryErr
+						return nil, 0, lineRubyError(lineIndex, text, "", dictionaryErr)
 					}
 				}
 			} else if dictionaryRuby, dictionaryErr := generateRubySpansForTexts(texts); dictionaryErr == nil {
 				generatedSegmentRuby = dictionaryRuby
 			} else {
-				return nil, 0, dictionaryErr
+				return nil, 0, lineRubyError(lineIndex, text, "", dictionaryErr)
 			}
 		}
 		segments := make([]LyricsSegment, len(line.segments))
@@ -1003,9 +1047,10 @@ func buildSekaipediaStructuredLines(
 			ruby := []RubySpan{{Text: segment.text}}
 			if aligned {
 				var ok bool
-				ruby, ok = deriveSekaipediaRuby(segment.text, romajiLines[lineIndex].segments[segmentIndex].text)
+				romanized := romajiLines[lineIndex].segments[segmentIndex].text
+				ruby, ok = deriveSekaipediaRuby(segment.text, romanized)
 				if !ok {
-					return nil, 0, ErrUnsupportedTable
+					return nil, 0, lineRubyError(lineIndex, segment.text, romanized, ErrUnsupportedTable)
 				}
 			} else if generatedRuby {
 				ruby = generatedSegmentRuby[segmentIndex]
@@ -1022,7 +1067,9 @@ func buildSekaipediaStructuredLines(
 		}
 		compactedSegments, compacted := compactSekaipediaLyricsSegments(segments, line.segments)
 		if !compacted {
-			return nil, 0, ErrUnsupportedTable
+			return nil, 0, &sekaipediaLineError{
+				line: lineIndex + 1, text: text, reason: "performer segments do not merge", err: ErrUnsupportedTable,
+			}
 		}
 		result[lineIndex] = StructuredLine{
 			Japanese: text, StanzaBreakBefore: line.stanzaBreakBefore,
@@ -1031,6 +1078,25 @@ func buildSekaipediaStructuredLines(
 		totalSegments -= len(segments) - len(compactedSegments)
 	}
 	return result, totalSegments, nil
+}
+
+// sekaipediaLineError names the lyric line that failed a table and why; err
+// (ErrUnsupportedTable) stays matchable with errors.Is. Like the other source
+// diagnostics, Error() carries no lyric text, since it reaches server logs;
+// the line text stays in text for a caller that takes it with errors.As.
+type sekaipediaLineError struct {
+	line   int
+	text   string
+	reason string
+	err    error
+}
+
+func (failure *sekaipediaLineError) Error() string {
+	return fmt.Sprintf("line %d: %s: %v", failure.line, failure.reason, failure.err)
+}
+
+func (failure *sekaipediaLineError) Unwrap() error {
+	return failure.err
 }
 
 func sekaipediaColumnsAligned(japanese, romaji []sekaipediaColumnLine) bool {

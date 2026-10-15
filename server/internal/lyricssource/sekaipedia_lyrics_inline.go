@@ -185,19 +185,28 @@ func parseSekaipediaExplicitRubyEvents(
 		combinedReading.WriteString(event.text)
 	}
 	spans, ok := sekaipediaExplicitRubySpans(combinedBase.String(), combinedReading.String())
-	if !ok {
-		return nil, ErrUnsupportedTable
+	var split [][]RubySpan
+	if ok {
+		split, ok = splitRubySpansByTexts(spans, texts)
+		ok = ok && len(split) == len(baseEvents)
 	}
-	spans = markRubyReadingEvidence(
-		spans, model.LyricsSourceReadingEvidenceExplicitSourceKana, "",
-	)
-	split, ok := splitRubySpansByTexts(spans, texts)
-	if !ok || len(split) != len(baseEvents) {
-		return nil, ErrUnsupportedTable
+	if !ok {
+		// A phrase gloss such as 怒れる人 read ラングラー, or a reading that is
+		// itself Han (犯人 glossed 答え), has no plausible per-base split. Like the
+		// display glosses above, keep only the visible base and leave its ruby to
+		// the row's source transliteration or generation instead of inventing one.
+		// One group span over the whole base ({怒れる人|らんぐらあ}) is not an
+		// option: the ruby contract (rubySpansValidForText and the store's
+		// public and document validators) only allows Han in a ruby base. A
+		// reading that splits but not at the nested segment edges is kept out
+		// the same way.
+		return baseEvents, nil
 	}
 	result := append([]sekaipediaInlineLyricEvent(nil), baseEvents...)
 	for index := range result {
-		result[index].ruby = split[index]
+		result[index].ruby = markRubyReadingEvidence(
+			split[index], model.LyricsSourceReadingEvidenceExplicitSourceKana, "",
+		)
 	}
 	return result, nil
 }

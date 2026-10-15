@@ -19,6 +19,12 @@ type sekaipediaRubyRegion struct {
 	kana     []rune
 	variable bool
 	annotate bool
+	// numerals are the candidate pronunciations of a digit run (source
+	// alignment only); empty when the run is not read as a number.
+	numerals [][]rune
+	// free marks visible Latin or digit text that the source sings from
+	// other words: it may absorb any kana, including none.
+	free bool
 }
 
 type sekaipediaRubyAlignment struct {
@@ -39,7 +45,7 @@ type sekaipediaHybridRubyAlignment struct {
 	count      int
 	cost       int
 	ends       []int
-	signature  string
+	signature  uint64
 	equivalent bool
 }
 
@@ -80,6 +86,14 @@ func applySekaipediaFixedReviewedOrthography(japanese string, source []RubySpan)
 }
 
 func deriveSekaipediaRuby(japanese, romanized string) ([]RubySpan, bool) {
+	return deriveSekaipediaRubyMode(japanese, romanized, true)
+}
+
+// deriveSekaipediaRubyMode tries the source alignment, the hybrid and the
+// dictionary in turn. With lastResort, a line none of them can read falls back
+// to a lenient source alignment; a caller that has its own fallback (such as
+// per-line dictionary readings) passes false.
+func deriveSekaipediaRubyMode(japanese, romanized string, lastResort bool) ([]RubySpan, bool) {
 	if japanese == "" || !utf8.ValidString(japanese) {
 		return nil, false
 	}
@@ -92,10 +106,39 @@ func deriveSekaipediaRuby(japanese, romanized string) ([]RubySpan, bool) {
 	if dictionary, err := generateRubySpans(japanese); err == nil && rubySpansValidForText(japanese, dictionary) {
 		return dictionary, true
 	}
-	return nil, false
+	if !lastResort {
+		return nil, false
+	}
+	return deriveSekaipediaLastResortRuby(japanese, romanized)
+}
+
+// deriveSekaipediaLastResortRuby reads a line that neither the source, the
+// hybrid nor the dictionary can read in full, with the lenient source
+// alignment (see alignSekaipediaSourceRubyRegions): plausible readings only,
+// no tie and no substituted kana, every visible kana run between two bases
+// matched, and at least as many visible kana kept as edits needed, so
+// 彁が笑った romanized "waratta" fails instead of reading 彁 as わ.
+func deriveSekaipediaLastResortRuby(japanese, romanized string) ([]RubySpan, bool) {
+	source, ok := deriveSekaipediaSourceRubyMode(japanese, romanized, true)
+	if !ok {
+		return nil, false
+	}
+	return applySekaipediaFixedReviewedOrthography(japanese, source), true
 }
 
 func deriveSekaipediaSourceRuby(japanese, romanized string) ([]RubySpan, bool) {
+	return deriveSekaipediaSourceRubyMode(japanese, romanized, false)
+}
+
+func deriveSekaipediaSourceRubyMode(japanese, romanized string, lenient bool) ([]RubySpan, bool) {
+	return deriveSekaipediaSourceRubyDiagnosed(japanese, romanized, lenient, nil)
+}
+
+// deriveSekaipediaSourceRubyDiagnosed is deriveSekaipediaSourceRubyMode that
+// records in diagnosis why the lenient alignment failed.
+func deriveSekaipediaSourceRubyDiagnosed(
+	japanese, romanized string, lenient bool, diagnosis *sekaipediaAlignmentDiagnosis,
+) ([]RubySpan, bool) {
 	if japanese == "" || romanized == "" || !utf8.ValidString(japanese) || !utf8.ValidString(romanized) {
 		return nil, false
 	}
@@ -108,33 +151,63 @@ func deriveSekaipediaSourceRuby(japanese, romanized string) ([]RubySpan, bool) {
 	}
 	var target strings.Builder
 	wordReadings := make([][]rune, 0, len(words))
+	wordBoundaries := map[int]bool{0: true}
+	// An opaque source has words that are not romaji ("party night" for
+	// パーリナイ, "BEBOP" for ビバップ); spelled out as letter names they match
+	// nothing visible, so only the last-resort lenient pass may align them,
+	// and even then never as a base's reading.
+	opaque := false
+	letterNames := []int{0}
 	for _, word := range words {
 		kana, ok := romanizeSekaipediaWordToKana(word)
 		if !ok {
 			if sekaipediaIgnorableRomanizedWord(word) {
 				continue
 			}
+			if diagnosis != nil {
+				diagnosis.unconverted = true
+			}
 			return nil, false
 		}
+		_, romaji := romanizeSekaipediaWordToKanaStrict(word)
+		opaque = opaque || !romaji
 		reading := []rune(kana)
+		for range reading {
+			count := letterNames[len(letterNames)-1]
+			if !romaji {
+				count++
+			}
+			letterNames = append(letterNames, count)
+		}
 		wordReadings = append(wordReadings, reading)
 		target.WriteString(kana)
+		wordBoundaries[utf8.RuneCountInString(target.String())] = true
 	}
 	targetRunes := []rune(target.String())
 	if len(targetRunes) == 0 {
 		return nil, false
 	}
-	if spans, aligned := rubySpansFromKanaReading(japanese, targetRunes); aligned && sekaipediaSourceRubyPlausible(spans) {
-		return markRubyReadingEvidence(
-			spans, model.LyricsSourceReadingEvidenceSourceTransliteration, "",
-		), true
+	hints := sekaipediaSourceAlignmentHints{
+		wordBoundaries: wordBoundaries,
+		sourceWords:    sekaipediaASCIIWords(norm.NFKC.String(html.UnescapeString(romanized))),
+		letterNames:    letterNames,
+		numerals:       true,
 	}
-	if spans, aligned := rubySpansFromSourceKanaReading(japanese, targetRunes); aligned && sekaipediaSourceRubyPlausible(spans) {
-		return markRubyReadingEvidence(
-			spans, model.LyricsSourceReadingEvidenceSourceTransliteration, "",
-		), true
+	var spans []RubySpan
+	aligned := false
+	if !opaque {
+		spans, aligned = sekaipediaSourceRubySpans(japanese, targetRunes, hints)
+		if !aligned {
+			wordHints := hints
+			wordHints.wordBoundaries = nil
+			spans, aligned = deriveSekaipediaSourceWordRuby(japanese, wordReadings, wordHints)
+		}
 	}
-	spans, aligned := deriveSekaipediaSourceWordRuby(japanese, wordReadings)
+	if !aligned && lenient {
+		hints.lenient = true
+		hints.diagnosis = diagnosis
+		spans, aligned = sekaipediaSourceRubySpans(japanese, targetRunes, hints)
+	}
 	if !aligned {
 		return nil, false
 	}
@@ -149,9 +222,13 @@ func deriveSekaipediaSourceRuby(japanese, romanized string) ([]RubySpan, bool) {
 // token boundaries, but the retained ruby comes from the fixed-source words.
 // Nothing moves across a segment, source row, side, or rendition, and tied or
 // otherwise ambiguous mappings fail closed.
-func deriveSekaipediaSourceWordRuby(japanese string, wordReadings [][]rune) ([]RubySpan, bool) {
+func deriveSekaipediaSourceWordRuby(
+	japanese string, wordReadings [][]rune, hints sekaipediaSourceAlignmentHints,
+) ([]RubySpan, bool) {
 	japaneseRunes := []rune(japanese)
-	if len(wordReadings) < 2 || len(wordReadings) > len(japaneseRunes) || initializeFuriganaTokenizer() != nil {
+	if len(wordReadings) < 2 || len(wordReadings) > len(japaneseRunes) ||
+		!sekaipediaAlignmentWithinBudget(len(japaneseRunes), len(wordReadings)) ||
+		initializeFuriganaTokenizer() != nil {
 		return nil, false
 	}
 	tokenBoundaries := map[int]bool{}
@@ -177,6 +254,11 @@ func deriveSekaipediaSourceWordRuby(japanese string, wordReadings [][]rune) ([]R
 		cost  int
 		spans []RubySpan
 	}
+	type piece struct {
+		reading []rune
+		ok      bool
+	}
+	dictionaryReadings := map[[2]int]piece{}
 	memo := map[state]result{}
 	var solve func(int, int) result
 	solve = func(wordIndex, start int) result {
@@ -191,7 +273,11 @@ func deriveSekaipediaSourceWordRuby(japanese string, wordReadings [][]rune) ([]R
 			return result{}
 		}
 		remainingWords := len(wordReadings) - wordIndex - 1
-		lastEnd := len(japaneseRunes) - remainingWords
+		maxCost := max(1, len(wordReadings[wordIndex])/3)
+		// Every visible Han and kana reads at least one kana, so a piece much
+		// longer than its word's reading plus the allowed edits cannot match
+		// it; the slack covers punctuation and spaces that read nothing.
+		lastEnd := min(len(japaneseRunes)-remainingWords, start+len(wordReadings[wordIndex])+maxCost+sekaipediaKanaRegionSlack)
 		best := result{}
 		for end := start + 1; end <= lastEnd; end++ {
 			if !tokenBoundaries[end] {
@@ -201,23 +287,20 @@ func deriveSekaipediaSourceWordRuby(japanese string, wordReadings [][]rune) ([]R
 			if !containsKanji(text) {
 				continue
 			}
-			dictionary, ok := kagomeKanaReading(text)
-			if !ok {
+			cached, found := dictionaryReadings[[2]int{start, end}]
+			if !found {
+				cached.reading, cached.ok = kagomeKanaReading(text)
+				dictionaryReadings[[2]int{start, end}] = cached
+			}
+			if !cached.ok {
 				continue
 			}
-			cost := sekaipediaKanaEditDistance(wordReadings[wordIndex], dictionary)
-			maxCost := len(wordReadings[wordIndex]) / 3
-			if maxCost < 1 {
-				maxCost = 1
-			}
+			cost := sekaipediaKanaEditDistance(wordReadings[wordIndex], cached.reading)
 			if cost > maxCost {
 				continue
 			}
-			spans, ok := rubySpansFromKanaReading(text, wordReadings[wordIndex])
+			spans, ok := sekaipediaSourceRubySpans(text, wordReadings[wordIndex], hints)
 			if !ok {
-				spans, ok = rubySpansFromSourceKanaReading(text, wordReadings[wordIndex])
-			}
-			if !ok || !sekaipediaSourceRubyPlausible(spans) {
 				continue
 			}
 			child := solve(wordIndex+1, end)
@@ -245,6 +328,13 @@ func deriveSekaipediaSourceWordRuby(japanese string, wordReadings [][]rune) ([]R
 	return aligned.spans, aligned.count == 1 && rubySpansValidForText(japanese, aligned.spans)
 }
 
+// sekaipediaSourceRubyPlausible rejects source-aligned readings that can only
+// come from a shifted alignment: a reading that starts with a kana no word can
+// begin with (it was cut from the previous base's reading), a single mora over
+// two or more Han (the rest moved onto a neighbour), or one too long for its
+// base (it swallowed a neighbour's or a digit run's reading). A reading shorter
+// than its Han count is otherwise allowed, because lyrics deliberately write
+// whole-word readings such as 王子様 read きみ.
 func sekaipediaSourceRubyPlausible(spans []RubySpan) bool {
 	for _, span := range spans {
 		if span.Reading == "" {
@@ -256,11 +346,349 @@ func sekaipediaSourceRubyPlausible(spans []RubySpan) bool {
 				hanCount++
 			}
 		}
-		if hanCount == 0 || len([]rune(span.Reading)) > 4*hanCount+2 {
+		if !sekaipediaPlausibleSourceReading(hanCount, []rune(span.Reading)) {
 			return false
 		}
 	}
 	return true
+}
+
+func sekaipediaPlausibleSourceReading(hanCount int, reading []rune) bool {
+	return sekaipediaPlausibleSourceReadingMode(hanCount, reading, false)
+}
+
+// sekaipediaPlausibleSourceReadingMode applies sekaipediaPlausibleSourceReading;
+// singleMora lets two or more Han share one mora (see
+// sekaipediaSingleMoraAllowed).
+func sekaipediaPlausibleSourceReadingMode(hanCount int, reading []rune, singleMora bool) bool {
+	if len(reading) == 0 {
+		return false
+	}
+	return sekaipediaPlausibleSourceShape(
+		hanCount, len(reading), reading[0], sekaipediaKanaMoraCount(reading), singleMora,
+	)
+}
+
+// sekaipediaPlausibleSourceShape is sekaipediaPlausibleSourceReadingMode for a
+// reading given by its length, first kana and mora count, so that an
+// alignment can check every candidate end in constant time.
+func sekaipediaPlausibleSourceShape(hanCount, length int, first rune, mora int, singleMora bool) bool {
+	return hanCount > 0 && length > 0 && length <= 4*hanCount+2 &&
+		!sekaipediaKanaCannotStartWord(first) && (hanCount < 2 || singleMora || mora >= 2)
+}
+
+// sekaipediaMoraPrefix counts, for each offset of target, the kana before it
+// that make a mora of their own.
+func sekaipediaMoraPrefix(target []rune) []int {
+	prefix := make([]int, len(target)+1)
+	for index, current := range target {
+		prefix[index+1] = prefix[index]
+		if !sekaipediaKanaSmallVowel(current) {
+			prefix[index+1]++
+		}
+	}
+	return prefix
+}
+
+// sekaipediaSingleMoraAllowed reports whether the exact alignment may read
+// regions[index] as target[start:end] when that is a single mora over several
+// Han. An explicit {{ruby}} reading is the author's own, so it always may
+// (共鳴 read な). A romanized one may only when the reading starts a source
+// word and that word goes on in the okurigana right after the base:
+// 共鳴らして "narashite" (な|らして) and 背負い込んで "shoikonde" (しょ|い). A mora
+// cut from the previous word, a word that ends with the base (今日も "kyo
+// mo"), or one that goes on in the next base (正解(世界) "sekai" split せ|かい)
+// is still rejected. The exact alignment must also be the only one.
+func sekaipediaSingleMoraAllowed(
+	regions []sekaipediaRubyRegion, index, start, end int, hints *sekaipediaSourceAlignmentHints,
+) bool {
+	switch {
+	case hints == nil:
+		return false
+	case hints.explicit:
+		return true
+	}
+	return hints.wordBoundaries[start] && !hints.wordBoundaries[end] &&
+		index+1 < len(regions) && len(regions[index+1].kana) > 0
+}
+
+// sekaipediaSourceEndsPlausible checks the readings of an exact alignment,
+// allowing a single mora over several Han only as sekaipediaSingleMoraAllowed
+// does.
+func sekaipediaSourceEndsPlausible(
+	regions []sekaipediaRubyRegion, target []rune, ends []int, hints *sekaipediaSourceAlignmentHints,
+) bool {
+	if len(ends) != len(regions) {
+		return false
+	}
+	start := 0
+	for index, region := range regions {
+		end := ends[index]
+		if end < start || end > len(target) {
+			return false
+		}
+		if region.annotate && (!sekaipediaPlausibleSourceReadingMode(
+			utf8.RuneCountInString(region.text), target[start:end],
+			sekaipediaSingleMoraAllowed(regions, index, start, end, hints),
+		) || hints.spellsLetterNames(start, end)) {
+			return false
+		}
+		start = end
+	}
+	return true
+}
+
+// sekaipediaSourceRubySpans aligns one source (romaji or explicit kana)
+// pronunciation against visible text. The exact kana-anchored alignment runs
+// first and must be unique among plausible readings (see
+// sekaipediaSourceEndsPlausible); the edit-distance alignment (see
+// alignSekaipediaSourceRubyRegions) covers source typos and fails closed
+// rather than keep the first of several alignments, which used to put one
+// kana on the first base and the rest on the next. Its result must pass the
+// strict sekaipediaSourceRubyPlausible. A line beyond the alignment budget
+// fails closed.
+func sekaipediaSourceRubySpans(
+	japanese string, target []rune, hints sekaipediaSourceAlignmentHints,
+) ([]RubySpan, bool) {
+	regions := sekaipediaSourceRubyRegions(japanese, hints)
+	if !sekaipediaAlignmentWithinBudget(len(target), len(regions)) {
+		if hints.diagnosis != nil {
+			hints.diagnosis.overBudget = true
+		}
+		return nil, false
+	}
+	if ends, ok := alignSekaipediaRubyRegions(regions, target, &hints); ok &&
+		sekaipediaSourceEndsPlausible(regions, target, ends, &hints) {
+		if spans, built := sekaipediaRubySpansFromEnds(japanese, regions, target, ends, false); built {
+			return spans, true
+		}
+	}
+	if ends, ok := alignSekaipediaSourceRubyRegions(regions, target, hints); ok {
+		if spans, built := sekaipediaRubySpansFromEnds(japanese, regions, target, ends, true); built &&
+			sekaipediaSourceRubyPlausible(spans) {
+			return spans, true
+		}
+	}
+	return nil, false
+}
+
+// sekaipediaAlignmentBudget bounds the (kana + 1) x (regions + 1) table of a
+// source or hybrid alignment. A lyric line may be up to 8 KiB and anyone can
+// edit the wiki, so a line beyond the budget fails closed to the dictionary
+// instead of spending seconds on its alignment.
+const sekaipediaAlignmentBudget = 12000
+
+// sekaipediaKanaRegionSlack is how many more source kana than it shows a
+// visible kana run may absorb in the edit-distance alignment.
+const sekaipediaKanaRegionSlack = 4
+
+// spellsLetterNames reports whether target[start:end] contains kana
+// of a source word spelled out as letter names.
+func (hints *sekaipediaSourceAlignmentHints) spellsLetterNames(start, end int) bool {
+	return hints != nil && len(hints.letterNames) > end && hints.letterNames[end] > hints.letterNames[start]
+}
+
+func sekaipediaAlignmentWithinBudget(targetLength, regionCount int) bool {
+	return (targetLength+1)*(regionCount+1) <= sekaipediaAlignmentBudget
+}
+
+type sekaipediaSourceAlignmentHints struct {
+	// wordBoundaries are the kana offsets between source words, when known.
+	wordBoundaries map[int]bool
+	// sourceWords are the Latin and digit words of a romanized source; nil
+	// for an explicit kana reading.
+	sourceWords []string
+	// letterNames counts, for each kana offset, the kana before it that spell
+	// out a word that is not romaji; no base reading may contain them.
+	letterNames []int
+	// numerals reads every other digit run as a Japanese number, so its kana
+	// stays on the digits instead of moving onto the next base.
+	numerals bool
+	// explicit marks a kana reading written for exactly this base (a
+	// {{ruby}} template) rather than a romanization of the whole line.
+	explicit bool
+	// lenient searches plausible readings only and reads a source with
+	// words that are not romaji; it is the last resort when no dictionary
+	// reading exists either (see alignSekaipediaSourceRubyRegions).
+	lenient bool
+	// diagnosis, when set, records why the edit alignment failed.
+	diagnosis *sekaipediaAlignmentDiagnosis
+}
+
+// sekaipediaAlignmentDiagnosis records why a source alignment was not
+// trusted, for the error of a line that gets no ruby.
+type sekaipediaAlignmentDiagnosis struct {
+	unconverted bool // a source word does not romanize to kana
+	overBudget  bool // the line is beyond sekaipediaAlignmentBudget
+	unaligned   bool // no plausible alignment exists
+	tied        bool // equally good alignments read a base differently
+	substituted bool // the best alignment substitutes a kana
+	unanchored  bool // it drops visible kana or needs more edits than it keeps
+}
+
+// reasons lists the recorded failures, most specific first.
+func (diagnosis sekaipediaAlignmentDiagnosis) reasons() []string {
+	var reasons []string
+	for _, reason := range []struct {
+		failed bool
+		text   string
+	}{
+		{diagnosis.unconverted, "a source word does not romanize"},
+		{diagnosis.overBudget, "the line is beyond the alignment budget"},
+		{diagnosis.unaligned, "no plausible source alignment"},
+		{diagnosis.tied, "tied source alignments"},
+		{diagnosis.substituted, "the source alignment substitutes kana"},
+		{diagnosis.unanchored, "the source drops visible kana"},
+	} {
+		if reason.failed {
+			reasons = append(reasons, reason.text)
+		}
+	}
+	return reasons
+}
+
+// sekaipediaRubyFailureReason explains why japanese got no trusted ruby from
+// romanized: what the last-resort source alignment rejected, and which Han
+// the dictionary cannot read.
+func sekaipediaRubyFailureReason(japanese, romanized string) string {
+	var reasons []string
+	if strings.TrimSpace(romanized) == "" {
+		reasons = append(reasons, "no romanized source")
+	} else {
+		var diagnosis sekaipediaAlignmentDiagnosis
+		if _, ok := deriveSekaipediaSourceRubyDiagnosed(japanese, romanized, true, &diagnosis); !ok {
+			reasons = append(reasons, diagnosis.reasons()...)
+		}
+		if len(reasons) == 0 {
+			reasons = append(reasons, "no trusted source alignment")
+		}
+	}
+	if initializeFuriganaTokenizer() == nil {
+		var unread []string
+		for _, token := range furiganaTokenizer.Tokenize(japanese) {
+			if containsKanji(token.Surface) {
+				if _, ok := tokenRubySpans(token, false); !ok {
+					unread = append(unread, token.Surface)
+				}
+			}
+		}
+		if len(unread) > 0 {
+			reasons = append(reasons, "the dictionary cannot read "+strings.Join(unread, ", "))
+		}
+	}
+	return strings.Join(reasons, "; ")
+}
+
+// sekaipediaSourceRubyRegions classifies the visible Latin and digit text for
+// a source alignment. A Latin or digit token that the romanization repeats
+// (MEIKO, 1st, the 436 of "kono 436 no reiji") carries none of the source
+// kana. One it does not repeat is sung from other words (15cm "juugo senchi",
+// HP "tairyoku", ℃ "do"), so it may absorb kana, but how much stays
+// unknown; any tie over it fails closed. With numerals enabled, a digit-only
+// run gets its numeral pronunciations instead.
+func sekaipediaSourceRubyRegions(japanese string, hints sekaipediaSourceAlignmentHints) []sekaipediaRubyRegion {
+	regions := sekaipediaRubyRegions(japanese)
+	type token struct {
+		start, end int
+		letter     bool
+		matched    bool
+	}
+	starts := make([]int, len(regions)+1)
+	var flat []rune
+	for index, region := range regions {
+		starts[index] = len(flat)
+		if len(region.kana) == 0 && !region.annotate {
+			flat = append(flat, []rune(strings.ToLower(norm.NFKC.String(region.text)))...)
+		} else {
+			flat = append(flat, ' ')
+		}
+	}
+	starts[len(regions)] = len(flat)
+	remaining := map[string]int{}
+	for _, word := range hints.sourceWords {
+		remaining[word]++
+	}
+	tokens := []token{}
+	for index := 0; index < len(flat); {
+		if !sekaipediaASCIIAlphanumeric(flat[index]) {
+			index++
+			continue
+		}
+		current := token{start: index}
+		for index < len(flat) && sekaipediaASCIIAlphanumeric(flat[index]) {
+			current.letter = current.letter || flat[index] >= 'a' && flat[index] <= 'z'
+			index++
+		}
+		current.end = index
+		if word := string(flat[current.start:current.end]); remaining[word] > 0 {
+			remaining[word]--
+			current.matched = true
+		}
+		tokens = append(tokens, current)
+	}
+	for index := range regions {
+		region := &regions[index]
+		if len(region.kana) > 0 || region.annotate {
+			continue
+		}
+		matched, unmatchedLetters := false, false
+		for _, current := range tokens {
+			if current.end <= starts[index] || current.start >= starts[index+1] {
+				continue
+			}
+			matched = matched || current.matched
+			unmatchedLetters = unmatchedLetters || !current.matched && current.letter
+		}
+		romanized := hints.sourceWords != nil
+		switch {
+		case romanized && matched && region.variable:
+			region.variable = false
+		case romanized && unmatchedLetters:
+			region.variable = true
+			region.free = true
+		case region.variable && hints.numerals:
+			region.numerals = sekaipediaNumeralReadings(norm.NFKC.String(region.text))
+		}
+	}
+	return regions
+}
+
+func sekaipediaASCIIAlphanumeric(current rune) bool {
+	return current >= 'a' && current <= 'z' || current >= '0' && current <= '9'
+}
+
+func sekaipediaDigitWord(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, current := range value {
+		if current < '0' || current > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// sekaipediaKanaCannotStartWord reports small kana, the moraic nasal, the
+// long-vowel mark, and iteration marks, none of which can open a reading.
+func sekaipediaKanaCannotStartWord(current rune) bool {
+	return strings.ContainsRune("ぁぃぅぇぉっゃゅょゎゕゖんゝゞァィゥェォッャュョヮヵヶンヽヾーｧｨｩｪｫｯｬｭｮﾝｰ", current)
+}
+
+func sekaipediaKanaMoraCount(reading []rune) int {
+	count := 0
+	for _, current := range reading {
+		if !sekaipediaKanaSmallVowel(current) {
+			count++
+		}
+	}
+	return count
+}
+
+// sekaipediaKanaSmallVowel reports small kana that join the previous kana's
+// mora instead of making their own (the small っ makes one).
+func sekaipediaKanaSmallVowel(current rune) bool {
+	return strings.ContainsRune("ぁぃぅぇぉゃゅょゎァィゥェォャュョヮｧｨｩｪｫｬｭｮ", current)
 }
 
 // rubySpansFromKanaReading aligns one complete kana pronunciation against the
@@ -283,6 +711,10 @@ func deriveSekaipediaHybridRuby(japanese, romanized string) ([]RubySpan, bool) {
 	}
 	var target strings.Builder
 	wordBoundaries := map[int]bool{}
+	// opaque marks the kana of source words that are not romaji (BEBOP, a
+	// truncated "jouj"): spelled out as letter names, they may stand beside a
+	// dictionary reading but never become a base's own reading.
+	var opaque []bool
 	repairedLeadingDictionaryWord := false
 	for wordIndex, word := range words {
 		kana, converted := romanizeSekaipediaWordToKana(word)
@@ -298,11 +730,15 @@ func deriveSekaipediaHybridRuby(japanese, romanized string) ([]RubySpan, bool) {
 				return nil, false
 			}
 		}
+		_, romaji := romanizeSekaipediaWordToKanaStrict(word)
+		for range []rune(kana) {
+			opaque = append(opaque, !romaji)
+		}
 		target.WriteString(kana)
 		wordBoundaries[len([]rune(target.String()))] = true
 	}
 	targetRunes := []rune(target.String())
-	if len(targetRunes) == 0 {
+	if len(targetRunes) == 0 || !sekaipediaAlignmentWithinBudget(len(targetRunes), len(regions)) {
 		return nil, false
 	}
 	ends, aligned := alignSekaipediaHybridRubyRegions(regions, targetRunes, wordBoundaries)
@@ -317,11 +753,13 @@ func deriveSekaipediaHybridRuby(japanese, romanized string) ([]RubySpan, bool) {
 		case region.annotate && len(region.dictionary) > 0:
 			result = appendRubySpans(result, region.dictionary...)
 		case region.annotate:
-			spans, ok := rubySpansFromKanaReading(region.text, targetRunes[start:end])
-			if !ok {
-				spans, ok = rubySpansFromSourceKanaReading(region.text, targetRunes[start:end])
+			for _, letterName := range opaque[start:end] {
+				if letterName {
+					return nil, false
+				}
 			}
-			if !ok || !sekaipediaSourceRubyPlausible(spans) {
+			spans, ok := sekaipediaSourceRubySpans(region.text, targetRunes[start:end], sekaipediaSourceAlignmentHints{})
+			if !ok {
 				return nil, false
 			}
 			result = appendRubySpans(result, markRubyReadingEvidence(
@@ -465,7 +903,7 @@ func alignSekaipediaHybridRubyRegions(
 		}
 		if regionIndex == len(regions) {
 			if pos == len(target) {
-				return sekaipediaHybridRubyAlignment{count: 1, equivalent: true}
+				return sekaipediaHybridRubyAlignment{count: 1, signature: sekaipediaSignatureSeed, equivalent: true}
 			}
 			return sekaipediaHybridRubyAlignment{}
 		}
@@ -488,8 +926,18 @@ func alignSekaipediaHybridRubyRegions(
 			}
 		}
 
+		// One pass gives a dictionary reading's distance to every end.
+		var dictionaryDistances []int
+		if len(region.dictionaryKana) > 0 {
+			dictionaryDistances = sekaipediaEditDistanceRows(target[pos:], region.dictionaryKana, false, false)
+		}
 		best := sekaipediaHybridRubyAlignment{}
+		// candidateEnds ascend, so the source reading's hash grows with them.
+		readingHash, hashedEnd := uint64(sekaipediaSignatureSeed), pos
 		for _, end := range candidateEnds {
+			for ; hashedEnd < end; hashedEnd++ {
+				readingHash = sekaipediaSignatureMix(readingHash, uint64(target[hashedEnd]))
+			}
 			if region.annotate && len(region.dictionary) == 0 {
 				crossedBoundaries := wordBoundaryCounts[end] - wordBoundaryCounts[pos]
 				if crossedBoundaries > 1 || crossedBoundaries == 1 && !wordBoundaries[end] {
@@ -514,14 +962,14 @@ func alignSekaipediaHybridRubyRegions(
 			}
 			switch {
 			case len(region.dictionaryKana) > 0:
-				edgeCost += 100 * sekaipediaKanaEditDistance(target[pos:end], region.dictionaryKana)
+				edgeCost += 100 * dictionaryDistances[end-pos]
 			case len(region.fixedKana) > 0:
 				edgeCost += 100 * sekaipediaKanaEditDistance(target[pos:end], region.fixedKana)
 			}
 			cost := edgeCost + child.cost
 			signature := child.signature
 			if region.annotate && len(region.dictionary) == 0 {
-				signature = string(target[pos:end]) + "\x00" + signature
+				signature = sekaipediaSignatureMix(sekaipediaSignatureMix(signature, readingHash), uint64(end-pos))
 			}
 			switch {
 			case best.count == 0 || cost < best.cost:
@@ -573,8 +1021,20 @@ func preferSekaipediaDictionaryRuby(source []RubySpan) []RubySpan {
 
 func rubySpansFromKanaReading(japanese string, targetRunes []rune) ([]RubySpan, bool) {
 	regions := sekaipediaRubyRegions(japanese)
-	ends, ok := alignSekaipediaRubyRegions(regions, targetRunes)
+	ends, ok := alignSekaipediaRubyRegions(regions, targetRunes, nil)
 	if !ok {
+		return nil, false
+	}
+	return sekaipediaRubySpansFromEnds(japanese, regions, targetRunes, ends, false)
+}
+
+// sekaipediaRubySpansFromEnds builds ruby from aligned region ends. The exact
+// alignment requires every variable region to consume kana; the edit-distance
+// alignment requires it of annotated regions only.
+func sekaipediaRubySpansFromEnds(
+	japanese string, regions []sekaipediaRubyRegion, targetRunes []rune, ends []int, source bool,
+) ([]RubySpan, bool) {
+	if len(ends) != len(regions) {
 		return nil, false
 	}
 	result := make([]RubySpan, 0, len(regions))
@@ -582,44 +1042,10 @@ func rubySpansFromKanaReading(japanese string, targetRunes []rune) ([]RubySpan, 
 	for index, region := range regions {
 		end := ends[index]
 		reading := ""
-		if region.variable && end <= start {
+		if end < start || end <= start && (region.annotate || region.variable && !region.free && !source) {
 			return nil, false
 		}
 		if region.annotate {
-			reading = string(targetRunes[start:end])
-			if !validGeneratedRubyReading(reading) {
-				return nil, false
-			}
-		}
-		span := RubySpan{Text: region.text, Reading: reading}
-		if len(result) > 0 && result[len(result)-1].Reading == "" && span.Reading == "" {
-			result[len(result)-1].Text += span.Text
-		} else {
-			result = append(result, span)
-		}
-		start = end
-	}
-	if start != len(targetRunes) || !rubySpansValidForText(japanese, result) {
-		return nil, false
-	}
-	return result, true
-}
-
-func rubySpansFromSourceKanaReading(japanese string, targetRunes []rune) ([]RubySpan, bool) {
-	regions := sekaipediaRubyRegions(japanese)
-	ends, ok := alignSekaipediaSourceRubyRegions(regions, targetRunes)
-	if !ok {
-		return nil, false
-	}
-	result := make([]RubySpan, 0, len(regions))
-	start := 0
-	for index, region := range regions {
-		end := ends[index]
-		reading := ""
-		if region.annotate {
-			if end <= start {
-				return nil, false
-			}
 			reading = string(targetRunes[start:end])
 			if !validGeneratedRubyReading(reading) {
 				return nil, false
@@ -645,15 +1071,16 @@ func rubySpansFromSourceKanaReading(japanese string, targetRunes []rune) ([]Ruby
 // is stripped from the canonical kana; the punctuated fallback restores those
 // token boundaries and keeps the shared punctuation as unannotated text.
 func sekaipediaExplicitRubySpans(base, reading string) ([]RubySpan, bool) {
-	kana := canonicalizeSekaipediaSourceKana(reading)
-	spans, ok := rubySpansFromKanaReading(base, kana)
-	if !ok {
-		spans, ok = rubySpansFromSourceKanaReading(base, kana)
+	// A gloss written in Han (犯人 glossed 答え) is no pronunciation; reading
+	// only its kana would give 犯人 the reading え.
+	if containsKanji(reading) {
+		return nil, false
 	}
-	if ok && sekaipediaSourceRubyPlausible(spans) {
+	explicit := sekaipediaSourceAlignmentHints{numerals: true, explicit: true}
+	if spans, ok := sekaipediaSourceRubySpans(base, canonicalizeSekaipediaSourceKana(reading), explicit); ok {
 		return spans, true
 	}
-	spans, ok = rubySpansFromPunctuatedSourceReading(base, reading)
+	spans, ok := rubySpansFromPunctuatedSourceReading(base, reading)
 	if !ok || !sekaipediaSourceRubyPlausible(spans) {
 		return nil, false
 	}
@@ -672,11 +1099,10 @@ func rubySpansFromPunctuatedSourceReading(japanese, reading string) ([]RubySpan,
 	spans := make([]RubySpan, 0, len(japaneseTokens)*2)
 	for index, japaneseToken := range japaneseTokens {
 		kana := canonicalizeSekaipediaSourceKana(readingTokens[index])
-		tokenSpans, aligned := rubySpansFromKanaReading(japaneseToken, kana)
+		tokenSpans, aligned := sekaipediaSourceRubySpans(
+			japaneseToken, kana, sekaipediaSourceAlignmentHints{numerals: true, explicit: true},
+		)
 		if !aligned {
-			tokenSpans, aligned = rubySpansFromSourceKanaReading(japaneseToken, kana)
-		}
-		if !aligned || !sekaipediaSourceRubyPlausible(tokenSpans) {
 			return nil, false
 		}
 		spans = append(spans, tokenSpans...)
@@ -721,63 +1147,320 @@ func sekaipediaRubySeparator(current rune) bool {
 	return unicode.Is(unicode.Po, current)
 }
 
-func alignSekaipediaSourceRubyRegions(regions []sekaipediaRubyRegion, target []rune) ([]int, bool) {
-	type state struct {
-		region int
-		pos    int
+// alignSekaipediaSourceRubyRegions aligns a source pronunciation that may
+// contain typos or missing and extra sounds. Alignments are ranked by kana edit
+// distance, then by the number of implausible readings and of visible kana runs
+// between two bases that the source drops entirely, then by the number of
+// readings with fewer kana than their base has Han, then by visible separators
+// off a source word boundary, then by the number of visible kana kept as
+// matched anchors. Implausible readings are ranked rather than excluded, so an
+// implausible best alignment is rejected instead of replaced by a costlier,
+// plausible-looking one. A short reading is only a tie-break: when okurigana
+// kana could match in two places (時代柄暗い話題 read "jidaigara kurai wadai"),
+// the split that leaves 時代柄暗 two kana loses, while a lone special reading
+// such as 王子様 read "kimi" is still kept.
+//
+// The best alignment must also be trustworthy. An exact (zero-cost) tie that
+// only moves an okurigana kana between bases keeps the first, shortest split,
+// as 指し示す (sashishimesu) always has; a tie that moves a visible separator,
+// a digit run or unmatched Latin text, or a costly tie that gives a base
+// another reading, fails closed. For a romanized source it also fails closed
+// when it needs more edits than it keeps visible kana, or drops a visible kana
+// run between two bases (君が笑った romanized "waratta"): the source is then a
+// different or truncated line, and nothing anchors either base. An explicit
+// kana reading legitimately skips plain kana between its bases (愛と愛 read
+// め め), so those two checks do not apply to it. hints.lenient, the last
+// resort when no dictionary reading exists either, searches plausible readings
+// only, so an implausible best split does not hide a plausible one; it keeps
+// those two checks and also rejects any tie that reads a base differently
+// (色欲是空　愛憎交々 split after shikiyoku or after zekuu) and any edit that
+// substitutes a kana (本日の…は read "honjitsu wa …"), leaving such a line to
+// the dictionary-only fallback.
+//
+// Each visible kana run absorbs at most sekaipediaKanaRegionSlack more source
+// kana than it shows, its edit distances for every end come from one dynamic
+// programming pass, and the caller keeps the table within
+// sekaipediaAlignmentBudget.
+func alignSekaipediaSourceRubyRegions(
+	regions []sekaipediaRubyRegion, target []rune, hints sekaipediaSourceAlignmentHints,
+) ([]int, bool) {
+	diagnosis := hints.diagnosis
+	if diagnosis == nil {
+		diagnosis = &sekaipediaAlignmentDiagnosis{}
+	}
+	if !sekaipediaAlignmentWithinBudget(len(target), len(regions)) {
+		diagnosis.overBudget = true
+		return nil, false
+	}
+	interior := make([]bool, len(regions))
+	annotatedAfter := false
+	for index := len(regions) - 1; index >= 0; index-- {
+		interior[index] = annotatedAfter
+		annotatedAfter = annotatedAfter || regions[index].annotate
+	}
+	annotatedBefore := false
+	for index, region := range regions {
+		interior[index] = interior[index] && annotatedBefore && len(region.kana) > 0
+		annotatedBefore = annotatedBefore || region.annotate
 	}
 	type result struct {
-		valid bool
-		cost  int
-		ends  []int
+		valid       bool
+		cost        int
+		implausible int
+		dropped     int
+		short       int
+		misses      int
+		matched     int
+		substituted int
+		end         int
+		readings    uint64
+		breaks      uint64
+		ambiguous   bool
+		// readingTie marks any tie that reads a base differently, which the
+		// lenient pass rejects even at zero cost.
+		readingTie bool
 	}
-	memo := map[state]result{}
+	// compare is negative when left is the better alignment and zero on a tie.
+	compare := func(left, right result) int {
+		for _, pair := range [][2]int{
+			{left.cost, right.cost}, {left.implausible, right.implausible}, {left.dropped, right.dropped},
+			{left.short, right.short}, {left.misses, right.misses}, {right.matched, left.matched},
+		} {
+			if pair[0] != pair[1] {
+				if pair[0] < pair[1] {
+					return -1
+				}
+				return 1
+			}
+		}
+		return 0
+	}
+	width := len(target) + 1
+	moraPrefix := sekaipediaMoraPrefix(target)
+	memo := make([]result, len(regions)*width)
+	solved := make([]bool, len(regions)*width)
 	var solve func(int, int) result
 	solve = func(regionIndex, pos int) result {
-		key := state{region: regionIndex, pos: pos}
-		if cached, exists := memo[key]; exists {
-			return cached
-		}
 		if regionIndex == len(regions) {
 			return result{valid: pos == len(target)}
 		}
+		key := regionIndex*width + pos
+		if solved[key] {
+			return memo[key]
+		}
 		region := regions[regionIndex]
-		candidateEnds := []int{}
+		separator := !region.variable && len(region.kana) == 0
+		firstEnd, lastEnd := pos, pos
+		var distances, indels, matches []int
 		switch {
 		case len(region.kana) > 0:
-			for end := pos; end <= len(target); end++ {
-				candidateEnds = append(candidateEnds, end)
+			lastEnd = min(len(target), pos+len(region.kana)+sekaipediaKanaRegionSlack)
+			distances = sekaipediaEditDistanceRows(target[pos:lastEnd], region.kana, true, true)
+			matches = sekaipediaCommonSubsequenceRows(target[pos:lastEnd], region.kana)
+			if hints.lenient {
+				indels = sekaipediaEditDistanceRowsCost(target[pos:lastEnd], region.kana, true, true, 2)
 			}
-		case !region.variable:
-			candidateEnds = append(candidateEnds, pos)
+		case separator:
 		default:
-			firstEnd := pos
+			lastEnd = len(target)
 			if region.annotate {
-				firstEnd++
+				firstEnd = pos + 1
 			}
-			for end := firstEnd; end <= len(target); end++ {
-				candidateEnds = append(candidateEnds, end)
+			if len(region.numerals) > 0 {
+				lastEnd = min(lastEnd, pos+sekaipediaLongestReading(region.numerals)+4)
+				distances = sekaipediaNumeralDistanceRows(target[pos:lastEnd], region.numerals)
 			}
 		}
+		separatorMiss := 0
+		if separator && hints.wordBoundaries != nil && pos != len(target) && !hints.wordBoundaries[pos] {
+			separatorMiss = 1
+		}
+		hanCount := utf8.RuneCountInString(region.text)
+		readingHash := uint64(sekaipediaSignatureSeed)
 		best := result{}
-		for _, end := range candidateEnds {
+		for end := pos; end <= lastEnd; end++ {
+			if end > pos {
+				readingHash = sekaipediaSignatureMix(readingHash, uint64(target[end-1]))
+			}
+			if end < firstEnd {
+				continue
+			}
+			plausible := true
+			if region.annotate {
+				plausible = sekaipediaPlausibleSourceShape(
+					hanCount, end-pos, target[pos], moraPrefix[end]-moraPrefix[pos], false,
+				) && !hints.spellsLetterNames(pos, end)
+				if hints.lenient && !plausible {
+					continue
+				}
+			}
 			child := solve(regionIndex+1, end)
 			if !child.valid {
 				continue
 			}
-			cost := child.cost
-			if len(region.kana) > 0 {
-				cost += sekaipediaKanaEditDistance(target[pos:end], region.kana)
+			candidate := child
+			candidate.end = end
+			candidate.misses += separatorMiss
+			switch {
+			case len(region.kana) > 0:
+				candidate.cost += distances[end-pos]
+				candidate.matched += matches[end-pos]
+				if interior[regionIndex] && end == pos {
+					candidate.dropped++
+				}
+				if indels != nil && indels[end-pos] != distances[end-pos] {
+					candidate.substituted++
+				}
+			case len(region.numerals) > 0:
+				candidate.cost += distances[end-pos]
+				if distances[end-pos] > 0 {
+					candidate.substituted++
+				}
 			}
-			if !best.valid || cost < best.cost {
-				best = result{valid: true, cost: cost, ends: append([]int{end}, child.ends...)}
+			if region.annotate {
+				candidate.readings = sekaipediaSignatureMix(
+					sekaipediaSignatureMix(child.readings, readingHash), uint64(end-pos),
+				)
+				if !plausible {
+					candidate.implausible++
+				}
+				if end-pos < hanCount {
+					candidate.short++
+				}
+			}
+			switch {
+			case separator:
+				candidate.breaks = sekaipediaSignatureMix(child.breaks, uint64(pos)<<1)
+			case region.variable && !region.annotate:
+				// A digit run or Latin text: which kana it takes is a break too, so
+				// 6日 read "muika" as む|いか or むい|か is a tie, not a reading.
+				candidate.breaks = sekaipediaSignatureMix(
+					sekaipediaSignatureMix(child.breaks, uint64(pos)<<1|1), uint64(end),
+				)
+			}
+			switch order := compare(candidate, best); {
+			case !best.valid || order < 0:
+				best = candidate
+			case order == 0:
+				best.ambiguous = best.ambiguous || candidate.ambiguous || candidate.breaks != best.breaks ||
+					best.cost > 0 && candidate.readings != best.readings
+				best.readingTie = best.readingTie || candidate.readingTie || candidate.readings != best.readings
+				best.substituted = max(best.substituted, candidate.substituted)
 			}
 		}
-		memo[key] = best
+		memo[key], solved[key] = best, true
 		return best
 	}
 	aligned := solve(0, 0)
-	return aligned.ends, aligned.valid && len(aligned.ends) == len(regions)
+	if !aligned.valid {
+		diagnosis.unaligned = true
+		return nil, false
+	}
+	ends := make([]int, len(regions))
+	pos := 0
+	for index := range regions {
+		pos = memo[index*width+pos].end
+		ends[index] = pos
+	}
+	anchored := aligned.dropped == 0 && aligned.matched >= aligned.cost
+	if hints.lenient {
+		diagnosis.tied = aligned.ambiguous || aligned.readingTie
+		diagnosis.substituted = aligned.substituted > 0
+		diagnosis.unanchored = !anchored
+		return ends, anchored && !aligned.ambiguous && !aligned.readingTie && aligned.substituted == 0
+	}
+	return ends, !aligned.ambiguous && aligned.implausible == 0 && (hints.explicit || anchored)
+}
+
+const sekaipediaSignatureSeed = 0x6a09e667f3bcc908
+
+// sekaipediaSignatureMix folds value into an alignment signature (splitmix64).
+func sekaipediaSignatureMix(seed, value uint64) uint64 {
+	mixed := seed ^ (value + 0x9e3779b97f4a7c15)
+	mixed = (mixed ^ (mixed >> 30)) * 0xbf58476d1ce4e5b9
+	mixed = (mixed ^ (mixed >> 27)) * 0x94d049bb133111eb
+	return mixed ^ (mixed >> 31)
+}
+
+// sekaipediaEditDistanceRows returns, for every prefix length r of
+// pronunciation, the edit distance from pronunciation[:r] to expected, in one
+// dynamic programming pass. source selects source-mode kana equivalence; with
+// freeSokuon an expected sokuon the pronunciation leaves out costs nothing
+// (as in sekaipediaKanaEditDistanceMode).
+func sekaipediaEditDistanceRows(pronunciation, expected []rune, source, freeSokuon bool) []int {
+	return sekaipediaEditDistanceRowsCost(pronunciation, expected, source, freeSokuon, 1)
+}
+
+// sekaipediaEditDistanceRowsCost is sekaipediaEditDistanceRows with the given
+// substitution cost; 2 counts only insertions and deletions, so a prefix whose
+// two distances agree has an optimal alignment without substitutions.
+func sekaipediaEditDistanceRowsCost(pronunciation, expected []rune, source, freeSokuon bool, substitutionCost int) []int {
+	skip := func(current rune) int {
+		if freeSokuon && current == 'っ' {
+			return 0
+		}
+		return 1
+	}
+	rows := make([]int, len(pronunciation)+1)
+	previous := make([]int, len(expected)+1)
+	current := make([]int, len(expected)+1)
+	for index, shown := range expected {
+		previous[index+1] = previous[index] + skip(shown)
+	}
+	rows[0] = previous[len(expected)]
+	for row, spoken := range pronunciation {
+		current[0] = row + 1
+		for column, shown := range expected {
+			substitution := previous[column]
+			if !sekaipediaKanaEquivalentMode(spoken, shown, source) {
+				substitution += substitutionCost
+			}
+			current[column+1] = min(substitution, previous[column+1]+1, current[column]+skip(shown))
+		}
+		previous, current = current, previous
+		rows[row+1] = previous[len(expected)]
+	}
+	return rows
+}
+
+// sekaipediaCommonSubsequenceRows returns, for every prefix length r of
+// pronunciation, how many kana of visible pronunciation[:r] keeps in order
+// (their longest common subsequence under source-mode kana equivalence).
+func sekaipediaCommonSubsequenceRows(pronunciation, visible []rune) []int {
+	rows := make([]int, len(pronunciation)+1)
+	previous := make([]int, len(visible)+1)
+	current := make([]int, len(visible)+1)
+	for row, spoken := range pronunciation {
+		current[0] = 0
+		for column, shown := range visible {
+			if sekaipediaKanaEquivalentMode(spoken, shown, true) {
+				current[column+1] = previous[column] + 1
+			} else {
+				current[column+1] = max(previous[column+1], current[column])
+			}
+		}
+		previous, current = current, previous
+		rows[row+1] = previous[len(visible)]
+	}
+	return rows
+}
+
+// sekaipediaNumeralDistanceRows returns, for every prefix length of
+// pronunciation, its smallest edit distance to one of a digit run's numeral
+// readings.
+func sekaipediaNumeralDistanceRows(pronunciation []rune, numerals [][]rune) []int {
+	var best []int
+	for _, reading := range numerals {
+		rows := sekaipediaEditDistanceRows(pronunciation, reading, true, false)
+		if best == nil {
+			best = rows
+			continue
+		}
+		for index := range best {
+			best[index] = min(best[index], rows[index])
+		}
+	}
+	return best
 }
 
 func sekaipediaHasJapaneseScript(value string) bool {
@@ -950,29 +1633,41 @@ func sekaipediaKanaVowel(value []rune) rune {
 	}
 }
 
-func alignSekaipediaRubyRegions(regions []sekaipediaRubyRegion, target []rune) ([]int, bool) {
-	type state struct {
-		region int
-		pos    int
+// alignSekaipediaRubyRegions finds the unique exact alignment of target
+// against regions. With source hints it considers only plausible readings
+// (sekaipediaSingleMoraAllowed decides single-mora ones) and reads a digit run
+// as its longest matching numeral, so 6日 read "muika" is むい|か rather than
+// む|いか.
+func alignSekaipediaRubyRegions(
+	regions []sekaipediaRubyRegion, target []rune, source *sekaipediaSourceAlignmentHints,
+) ([]int, bool) {
+	plausibleOnly := source != nil
+	width := len(target) + 1
+	memo := make([]sekaipediaRubyAlignment, len(regions)*width)
+	solved := make([]bool, len(regions)*width)
+	dictionaries := make([][]rune, len(regions))
+	dictionaryKnown := make([]bool, len(regions))
+	var moraPrefix []int
+	if plausibleOnly {
+		moraPrefix = sekaipediaMoraPrefix(target)
 	}
-	memo := map[state]sekaipediaRubyAlignment{}
 	var solve func(int, int) sekaipediaRubyAlignment
 	solve = func(regionIndex, pos int) sekaipediaRubyAlignment {
-		key := state{region: regionIndex, pos: pos}
-		if cached, exists := memo[key]; exists {
-			return cached
-		}
 		if regionIndex == len(regions) {
 			if pos == len(target) {
 				return sekaipediaRubyAlignment{count: 1, ends: []int{}}
 			}
 			return sekaipediaRubyAlignment{}
 		}
+		key := regionIndex*width + pos
+		if solved[key] {
+			return memo[key]
+		}
 		region := regions[regionIndex]
 		candidateEnds := []int{}
 		switch {
 		case len(region.kana) > 0:
-			if end, matches := sekaipediaKanaPrefix(target, pos, region.kana); matches {
+			if end, matches := sekaipediaKanaPrefixMode(target, pos, region.kana, plausibleOnly); matches {
 				candidateEnds = append(candidateEnds, end)
 			}
 		case !region.variable:
@@ -990,17 +1685,36 @@ func alignSekaipediaRubyRegions(regions []sekaipediaRubyRegion, target []rune) (
 				}
 				break
 			}
-			for end := pos + 1; end <= len(target); end++ {
+			firstEnd := pos + 1
+			if region.free {
+				firstEnd = pos
+			}
+			hanCount := utf8.RuneCountInString(region.text)
+			for end := firstEnd; end <= len(target); end++ {
+				if region.annotate && plausibleOnly && (!sekaipediaPlausibleSourceShape(
+					hanCount, end-pos, target[pos], moraPrefix[end]-moraPrefix[pos],
+					sekaipediaSingleMoraAllowed(regions, regionIndex, pos, end, source),
+				) || source.spellsLetterNames(pos, end)) {
+					continue
+				}
 				if len(nextFixed) == 0 {
 					candidateEnds = append(candidateEnds, end)
 					continue
 				}
-				if _, matches := sekaipediaKanaPrefix(target, end, nextFixed); matches {
+				if _, matches := sekaipediaKanaPrefixMode(target, end, nextFixed, plausibleOnly); matches {
 					candidateEnds = append(candidateEnds, end)
 				}
 			}
 			if region.annotate {
-				candidateEnds = constrainSekaipediaRubyCandidateEnds(region.text, target, pos, candidateEnds)
+				if !dictionaryKnown[regionIndex] {
+					if reading, ok := kagomeKanaReading(region.text); ok {
+						dictionaries[regionIndex] = reading
+					}
+					dictionaryKnown[regionIndex] = true
+				}
+				candidateEnds = constrainSekaipediaRubyCandidateEnds(dictionaries[regionIndex], target, pos, candidateEnds)
+			} else if len(region.numerals) > 0 {
+				candidateEnds = sekaipediaNumeralCandidateEnds(region.numerals, target, pos, candidateEnds)
 			}
 		}
 		result := sekaipediaRubyAlignment{}
@@ -1018,16 +1732,18 @@ func alignSekaipediaRubyRegions(regions []sekaipediaRubyRegion, target []rune) (
 				break
 			}
 		}
-		memo[key] = result
+		memo[key], solved[key] = result, true
 		return result
 	}
 	result := solve(0, 0)
 	return result.ends, result.count == 1 && len(result.ends) == len(regions)
 }
 
-func constrainSekaipediaRubyCandidateEnds(text string, target []rune, start int, candidateEnds []int) []int {
-	dictionary, ok := kagomeKanaReading(text)
-	if !ok {
+// constrainSekaipediaRubyCandidateEnds keeps the ends at which a base reads as
+// its dictionary reading, when any does; dictionary is nil when the base has
+// none.
+func constrainSekaipediaRubyCandidateEnds(dictionary []rune, target []rune, start int, candidateEnds []int) []int {
+	if len(dictionary) == 0 {
 		return candidateEnds
 	}
 	matched := make([]int, 0, len(candidateEnds))
@@ -1045,11 +1761,15 @@ func constrainSekaipediaRubyCandidateEnds(text string, target []rune, start int,
 }
 
 func sekaipediaKanaPrefix(target []rune, start int, expected []rune) (int, bool) {
+	return sekaipediaKanaPrefixMode(target, start, expected, false)
+}
+
+func sekaipediaKanaPrefixMode(target []rune, start int, expected []rune, source bool) (int, bool) {
 	if start < 0 || len(target)-start < len(expected) {
 		return start, false
 	}
 	for index, current := range expected {
-		if !sekaipediaKanaEquivalent(current, target[start+index]) {
+		if !sekaipediaKanaEquivalentMode(current, target[start+index], source) {
 			return start, false
 		}
 	}
@@ -1057,27 +1777,59 @@ func sekaipediaKanaPrefix(target []rune, start int, expected []rune) (int, bool)
 }
 
 func sekaipediaKanaEquivalent(left, right rune) bool {
+	return sekaipediaKanaEquivalentMode(left, right, false)
+}
+
+// sekaipediaKanaEquivalentMode compares visible kana with a pronunciation.
+// Source mode (romaji or explicit kana aligned against visible text) also
+// reads the counter ヶ/ヵ (一ヶ月, 三ヶ日, ヶ所) and the archaic ヱ/ヰ as the
+// kana that the source spells.
+func sekaipediaKanaEquivalentMode(left, right rune, source bool) bool {
 	if left == right {
 		return true
 	}
-	for _, pair := range [][2]rune{
-		{'ぁ', 'あ'}, {'ぃ', 'い'}, {'ぅ', 'う'}, {'ぇ', 'え'}, {'ぉ', 'お'},
-		{'じ', 'ぢ'}, {'ず', 'づ'},
-		{'は', 'わ'}, {'へ', 'え'}, {'を', 'お'},
-	} {
-		if left == pair[0] && right == pair[1] || left == pair[1] && right == pair[0] {
-			return true
-		}
+	if left > right {
+		left, right = right, left
+	}
+	switch left {
+	case 'ぁ':
+		return right == 'あ'
+	case 'ぃ':
+		return right == 'い'
+	case 'ぅ':
+		return right == 'う'
+	case 'ぇ':
+		return right == 'え'
+	case 'ぉ':
+		return right == 'お'
+	case 'じ':
+		return right == 'ぢ'
+	case 'ず':
+		return right == 'づ'
+	case 'は':
+		return right == 'わ'
+	case 'え':
+		return right == 'へ' || source && right == 'ゑ'
+	case 'お':
+		return right == 'を'
+	case 'い':
+		return source && right == 'ゐ'
+	case 'か', 'が', 'こ':
+		return source && (right == 'ゖ' || right == 'ゕ')
 	}
 	return false
 }
 
 func sekaipediaKanaSlicesEqual(left, right []rune) bool {
+	return sekaipediaKanaSlicesEqualMode(left, right, false)
+}
+
+func sekaipediaKanaSlicesEqualMode(left, right []rune, source bool) bool {
 	if len(left) != len(right) {
 		return false
 	}
 	for index := range left {
-		if !sekaipediaKanaEquivalent(left[index], right[index]) {
+		if !sekaipediaKanaEquivalentMode(left[index], right[index], source) {
 			return false
 		}
 	}
@@ -1085,20 +1837,34 @@ func sekaipediaKanaSlicesEqual(left, right []rune) bool {
 }
 
 func sekaipediaKanaEditDistance(left, right []rune) int {
+	return sekaipediaKanaEditDistanceMode(left, right, false, false)
+}
+
+// sekaipediaKanaEditDistanceMode is the edit distance from a pronunciation
+// (left) to visible or expected kana (right). With visible set, a visible
+// sokuon the source leaves out costs nothing: romaji often drops gemination
+// (星ッ read "sei", 殴ったって spelled "nagutatte").
+func sekaipediaKanaEditDistanceMode(left, right []rune, source, visible bool) int {
+	skip := func(current rune) int {
+		if visible && current == 'っ' {
+			return 0
+		}
+		return 1
+	}
 	previous := make([]int, len(right)+1)
-	for index := range previous {
-		previous[index] = index
+	for index, current := range right {
+		previous[index+1] = previous[index] + skip(current)
 	}
 	for leftIndex, leftRune := range left {
 		current := make([]int, len(right)+1)
 		current[0] = leftIndex + 1
 		for rightIndex, rightRune := range right {
 			substitution := previous[rightIndex]
-			if !sekaipediaKanaEquivalent(leftRune, rightRune) {
+			if !sekaipediaKanaEquivalentMode(leftRune, rightRune, source) {
 				substitution++
 			}
 			deletion := previous[rightIndex+1] + 1
-			insertion := current[rightIndex] + 1
+			insertion := current[rightIndex] + skip(rightRune)
 			current[rightIndex+1] = min(substitution, deletion, insertion)
 		}
 		previous = current
@@ -1268,4 +2034,138 @@ func romanizeSekaipediaWordToKanaMode(value string, allowLetterNames bool) (stri
 		}
 	}
 	return result.String(), result.Len() > 0
+}
+
+// sekaipediaNumeralCandidateEnds keeps the longest end at which a digit run
+// reads as one of its numeral pronunciations; the exact alignment needs one.
+// 6 reads む or むい and 10 reads と or とお, so the shortest would move the
+// rest onto the next base (6{日|いか}, 10{年|おねん}).
+func sekaipediaNumeralCandidateEnds(numerals [][]rune, target []rune, start int, candidateEnds []int) []int {
+	longest := -1
+	for _, end := range candidateEnds {
+		if end < start || end > len(target) || end <= longest {
+			continue
+		}
+		for _, reading := range numerals {
+			if sekaipediaKanaSlicesEqualMode(target[start:end], reading, true) {
+				longest = end
+				break
+			}
+		}
+	}
+	if longest < 0 {
+		return nil
+	}
+	return []int{longest}
+}
+
+func sekaipediaLongestReading(readings [][]rune) int {
+	longest := 0
+	for _, reading := range readings {
+		longest = max(longest, len(reading))
+	}
+	return longest
+}
+
+var (
+	sekaipediaDigitKana = [10]string{"ぜろ", "いち", "に", "さん", "よん", "ご", "ろく", "なな", "はち", "きゅう"}
+	// Alternative final readings of a digit: 4時 よじ, 7時 しちじ, 9月 くがつ,
+	// 1つ ひとつ, 2人 ふたり, 3日 みっか, 0時 れいじ.
+	sekaipediaDigitVariants = [10][]string{
+		{"れい", "まる"}, {"ひと", "いっ"}, {"ふた", "ふつ"}, {"み", "みっ"}, {"よ", "し", "よっ"},
+		{"いつ"}, {"む", "むっ", "むい", "ろっ"}, {"しち", "なの"}, {"や", "やっ", "よう", "はっ"}, {"く", "ここの"},
+	}
+)
+
+// sekaipediaNumeralReadings returns candidate pronunciations of a digit run:
+// the Japanese number (with the usual sound changes on its last digit or
+// unit), native counting for small numbers, and digit by digit. It returns
+// nil for anything that is not a plain ASCII digit run.
+func sekaipediaNumeralReadings(digits string) [][]rune {
+	if !sekaipediaDigitWord(digits) || len(digits) > 12 {
+		return nil
+	}
+	seen := map[string]bool{}
+	result := [][]rune{}
+	add := func(value string) {
+		if value != "" && !seen[value] {
+			seen[value] = true
+			result = append(result, []rune(value))
+		}
+	}
+	if len(digits) > 1 {
+		for _, zero := range []string{"ぜろ", "れい", "まる"} {
+			var reading strings.Builder
+			for _, current := range digits {
+				if current == '0' {
+					reading.WriteString(zero)
+				} else {
+					reading.WriteString(sekaipediaDigitKana[current-'0'])
+				}
+			}
+			add(reading.String())
+		}
+	}
+	if len(digits) > 1 && digits[0] == '0' || len(digits) > 8 {
+		return result
+	}
+	value := 0
+	for _, current := range digits {
+		value = value*10 + int(current-'0')
+	}
+	standard := sekaipediaJapaneseNumber(value)
+	add(standard)
+	switch {
+	case value < 10:
+		for _, variant := range sekaipediaDigitVariants[value] {
+			add(variant)
+		}
+	case value%10 != 0:
+		prefix := sekaipediaJapaneseNumber(value - value%10)
+		for _, variant := range sekaipediaDigitVariants[value%10] {
+			add(prefix + variant)
+		}
+	case value == 10:
+		add("とお")
+		add("と")
+	case value == 20:
+		add("はた")
+		add("はつ")
+	}
+	// Gemination before a counter: 一回 いっかい, 六本 ろっぽん, 八個 はっこ,
+	// 十分 じゅっぷん/じっぷん, 百回 ひゃっかい.
+	for _, pair := range [][2]string{
+		{"いち", "いっ"}, {"ろく", "ろっ"}, {"はち", "はっ"}, {"じゅう", "じゅっ"}, {"じゅう", "じっ"}, {"ひゃく", "ひゃっ"},
+	} {
+		if strings.HasSuffix(standard, pair[0]) {
+			add(strings.TrimSuffix(standard, pair[0]) + pair[1])
+		}
+	}
+	return result
+}
+
+func sekaipediaJapaneseNumber(value int) string {
+	if value == 0 {
+		return "ぜろ"
+	}
+	var result strings.Builder
+	if value >= 10000 {
+		result.WriteString(sekaipediaJapaneseNumber(value / 10000))
+		result.WriteString("まん")
+		value %= 10000
+	}
+	thousands := [10]string{"", "せん", "にせん", "さんぜん", "よんせん", "ごせん", "ろくせん", "ななせん", "はっせん", "きゅうせん"}
+	hundreds := [10]string{"", "ひゃく", "にひゃく", "さんびゃく", "よんひゃく", "ごひゃく", "ろっぴゃく", "ななひゃく", "はっぴゃく", "きゅうひゃく"}
+	result.WriteString(thousands[value/1000])
+	result.WriteString(hundreds[value/100%10])
+	if tens := value / 10 % 10; tens > 0 {
+		if tens > 1 {
+			result.WriteString(sekaipediaDigitKana[tens])
+		}
+		result.WriteString("じゅう")
+	}
+	if units := value % 10; units > 0 {
+		result.WriteString(sekaipediaDigitKana[units])
+	}
+	return result.String()
 }
