@@ -26,6 +26,7 @@ import (
 	"moesekai/server/internal/searchindex"
 	"moesekai/server/internal/sse"
 	"moesekai/server/internal/store"
+	"moesekai/server/internal/textfonts"
 	"moesekai/server/internal/translator"
 	"moesekai/server/internal/upstream"
 )
@@ -53,6 +54,13 @@ type services struct {
 
 func buildServices(env startupEnv, settings runtimeSettings, database *db.DB) *services {
 	st := store.New(database)
+	if raw := os.Getenv("MYSEKAI_FONT_CATALOG_URL"); raw != "" {
+		loader, err := textfonts.New(raw)
+		if err != nil {
+			fatal("MYSEKAI_FONT_CATALOG_URL", err)
+		}
+		st.SetMysekaiFontProvider(loader)
+	}
 	applyEmbeddedLyricsEditorSeed(st)
 
 	tokenTTL, err := parseTTL(envOr("TOKEN_TTL_HOURS", "168"))

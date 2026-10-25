@@ -17,6 +17,7 @@ func TestMysekaiSourceEditsPublicationAndRestore(t *testing.T) {
 	}
 	defer database.Close()
 	s := New(database)
+	s.SetMysekaiFontProvider(testMysekaiFonts{})
 	step := 0
 	hash := mysekaiDigest([]byte("original"))
 	line := MysekaiLine{ID: "synthetic-a", Kind: "text", Step: &step, Text: "Original", SourceHash: hash}

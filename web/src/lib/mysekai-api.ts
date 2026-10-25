@@ -1,4 +1,6 @@
 import { apiFetch } from "./api";
+import type { FontCoverage } from "./mysekai-fonts";
+export const getMysekaiFontCoverage = () => apiFetch<FontCoverage>("/mysekai/font-coverage");
 
 export interface MysekaiLine { id: string; kind: "text" | "speaker" | "tweet"; step: number | null; text: string; sourceHash: string; speaker?: string; speakerUnit?: number; cues?: string[] }
 export interface MysekaiScript { key: string; scriptHash: string; contents: Record<string, unknown>[]; lines: MysekaiLine[] }

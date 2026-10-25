@@ -32,7 +32,8 @@ func (s *Store) SnapshotContext(ctx context.Context, path string) error {
 
 // Store provides CRUD over translation entries backed by SQLite.
 type Store struct {
-	db *db.DB
+	db           *db.DB
+	mysekaiFonts MysekaiFontProvider
 
 	mu            sync.RWMutex
 	changeHooks   []func()

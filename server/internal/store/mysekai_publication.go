@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"moesekai/server/internal/textfonts"
 	"sort"
 	"strings"
 	"time"
@@ -152,7 +153,7 @@ func validateMysekaiPublication(region, locale, revision string, files map[strin
 	return nil
 }
 
-func mysekaiBuildPublication(ctx context.Context, tx *sql.Tx, region, locale, expectedSource string) (string, map[string]json.RawMessage, error) {
+func mysekaiBuildPublication(ctx context.Context, tx *sql.Tx, region, locale, expectedSource string, fonts textfonts.Catalog) (string, map[string]json.RawMessage, error) {
 	var revision, catalogRaw string
 	err := tx.QueryRowContext(ctx, `SELECT c.revision,s.catalog FROM mysekai_current_sources c JOIN mysekai_sources s ON s.region=c.region AND s.revision=c.revision WHERE c.region=?`, region).Scan(&revision, &catalogRaw)
 	if err != nil {
@@ -207,6 +208,9 @@ func mysekaiBuildPublication(ctx context.Context, tx *sql.Tx, region, locale, ex
 			for _, l := range part.Lines {
 				d := drafts[l.ID]
 				if d.SourceHash == l.SourceHash && strings.TrimSpace(d.Text) != "" {
+					if missing := fonts.Missing(d.Text); len(missing) > 0 {
+						return "", nil, fmt.Errorf("译文字体不支持 %s（%s）；草稿已保留，请修改文字或联系管理员更新字体", strings.Join(missing, " "), l.ID)
+					}
 					entries = append(entries, MysekaiOverlayEntry{l.ID, l.SourceHash, d.Text, "human"})
 				}
 			}
@@ -268,6 +272,14 @@ func mysekaiBuildPublication(ctx context.Context, tx *sql.Tx, region, locale, ex
 // SetMysekaiPublication switches only the public pointer. Previous immutable
 // files and every human draft remain available for pinned sessions and rollback.
 func (s *Store) SetMysekaiPublication(ctx context.Context, r MysekaiPublicationRequest, action, actor string) (MysekaiChannel, error) {
+	var fonts textfonts.Catalog
+	if action == "publish" {
+		var err error
+		fonts, err = s.MysekaiFontCoverage(ctx)
+		if err != nil {
+			return MysekaiChannel{}, err
+		}
+	}
 	if err := mysekaiScope(r.Region, r.Locale); err != nil {
 		return MysekaiChannel{}, err
 	}
@@ -295,7 +307,7 @@ func (s *Store) SetMysekaiPublication(ctx context.Context, r MysekaiPublicationR
 			return channel, ErrMysekaiConflict
 		}
 		var files map[string]json.RawMessage
-		publication, files, err = mysekaiBuildPublication(ctx, tx, r.Region, r.Locale, r.SourceRevision)
+		publication, files, err = mysekaiBuildPublication(ctx, tx, r.Region, r.Locale, r.SourceRevision, fonts)
 		if err != nil {
 			return channel, err
 		}

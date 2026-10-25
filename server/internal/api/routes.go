@@ -21,6 +21,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	// Translations
 	mux.HandleFunc("GET /api/mysekai/scripts", s.auth.RequireAuth(s.handleMysekaiList))
+	mux.HandleFunc("GET /api/mysekai/font-coverage", s.auth.RequireAuth(s.handleMysekaiFontCoverage))
 	mux.HandleFunc("GET /api/mysekai/script", s.auth.RequireAuth(s.handleMysekaiDetail))
 	mux.HandleFunc("GET /api/mysekai/publications", s.auth.RequireAuth(s.handleMysekaiPublicationHistory))
 	mux.HandleFunc("POST /api/editor/v1/mysekai/source", s.auth.RequireAdmin(s.strictContentMutation(s.handleMysekaiSource)))

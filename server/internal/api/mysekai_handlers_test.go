@@ -10,6 +10,7 @@ import (
 
 func TestMysekaiEditorAPIAndPublicationAdmission(t *testing.T) {
 	h := setupLegacyAPI(t)
+	h.store.SetMysekaiFontProvider(testMysekaiFonts{})
 	hash := strings.Repeat("a", 64)
 	catalog := map[string]any{"schema": "moly-text-source/1", "region": "jp", "revision": hash, "scripts": []any{map[string]any{"key": "synthetic", "lines": []any{map[string]any{"id": "one", "kind": "text", "step": 0, "text": "Original", "sourceHash": hash}}}}}
 	response := doJSON(t, "POST", h.server.URL+"/api/editor/v1/mysekai/source", h.token, map[string]any{"catalog": catalog, "expectedRevision": ""})

@@ -4,7 +4,8 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { useToast } from "@/app/providers";
 import { readUTF8File } from "@/components/EventStoryTxtImport";
 import { getProjectionStatus } from "@/lib/api";
-import { getMysekaiDetail, getMysekaiHistory, getMysekaiList, importMysekai, publishMysekai, saveMysekai, type MysekaiDetail, type MysekaiEdit, type MysekaiHistory, type MysekaiPage } from "@/lib/mysekai-api";
+import { getMysekaiDetail, getMysekaiHistory, getMysekaiList, getMysekaiFontCoverage, importMysekai, publishMysekai, saveMysekai, type MysekaiDetail, type MysekaiEdit, type MysekaiHistory, type MysekaiPage } from "@/lib/mysekai-api";
+import { missingFontCharacters, type FontCoverage } from "@/lib/mysekai-fonts";
 import { mysekaiTemplate, parseMysekaiTemplate, type MysekaiImportRow } from "@/lib/mysekai-txt.mjs";
 import { mysekaiPreviewContent, openMysekaiPreview } from "@/lib/mysekai-preview";
 
@@ -21,10 +22,17 @@ export const MysekaiEditor = forwardRef<MysekaiEditorHandle, Props>(function Mys
   const [preview, setPreview] = useState<MysekaiImportRow[] | null>(null); const [selected, setSelected] = useState<Set<string>>(new Set());
   const [history, setHistory] = useState<MysekaiHistory[]>([]); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   const [publicationStatus, setPublicationStatus] = useState(""); const [publishConfirm, setPublishConfirm] = useState(false);
+  const [fontCoverage, setFontCoverage] = useState<FontCoverage | null>(null); const [fontError, setFontError] = useState("");
+  const refreshFontCoverage = async () => { try { setFontCoverage(await getMysekaiFontCoverage()); setFontError(""); } catch (error) { setFontCoverage(null); setFontError(error instanceof Error ? error.message : "字体目录暂不可用"); } };
+  useEffect(() => { let live = true; void getMysekaiFontCoverage().then(value => { if (live) { setFontCoverage(value); setFontError(""); } }).catch(error => { if (live) setFontError(error.message); }); return () => { live = false; }; }, [locale]);
   const fileRef = useRef<HTMLInputElement>(null); const sourceRef = useRef<HTMLInputElement>(null); const generation = useRef(0);
   const previewCleanup = useRef<(() => void) | null>(null);
   useEffect(() => () => previewCleanup.current?.(), []);
   const dirty = Object.keys(edits).length > 0 || preview !== null; const locked = busy || writeLocked || locale === "ja-JP";
+  const displayedDrafts = preview ? preview.filter(row => selected.has(row.id)).map(row => row.text)
+    : detail ? [detail.script, ...detail.related].flatMap(script => script.lines.map(line => edits[line.id]
+      ?? (detail.drafts[line.id]?.sourceHash === line.sourceHash ? detail.drafts[line.id]?.text ?? "" : ""))) : [];
+  const missingGlyphs = fontCoverage ? missingFontCharacters(displayedDrafts.join("\n"), fontCoverage) : [];
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   const reload = useCallback(async (cursor = "") => {
     const result = await getMysekaiList(region, locale, query, state, cursor);
@@ -63,7 +71,7 @@ export const MysekaiEditor = forwardRef<MysekaiEditorHandle, Props>(function Mys
     } catch (e) { setError(e instanceof Error ? e.message : "无法读取模板"); } finally { setBusy(false); }
   };
   const publication = async (action: "publish" | "unpublish" | "rollback", revision = "") => {
-    if (!page || locked || dirty) return; setBusy(true); setError(""); setPublishConfirm(false);
+    if (!page || locked || dirty || (action === "publish" && (!fontCoverage || missingGlyphs.length))) return; setBusy(true); setError(""); setPublishConfirm(false);
     try { const result = await publishMysekai(action, page.channel, page.sourceRevision, page.draftRevision, revision); setPublicationStatus(result.projectionReady ? "公开文件已更新" : "已保存发布请求，公开文件仍在生成；生成失败时继续提供上一版"); setPage({ ...page, channel: result.channel }); setHistory(await getMysekaiHistory(region, locale)); }
     catch (e) { setError(e instanceof Error ? e.message : "发布失败"); } finally { setBusy(false); }
   };
@@ -73,8 +81,10 @@ export const MysekaiEditor = forwardRef<MysekaiEditorHandle, Props>(function Mys
     catch (e) { setError(e instanceof Error ? e.message : "原文导入失败"); } finally { setBusy(false); }
   };
   return <section className="mysekai-editor" aria-labelledby="mysekai-title">
+    {fontError && <p className="mysekai-error" role="status">{fontError}。仍可保存草稿；请联系管理员恢复字体目录后再发布。<button className="btn btn-sm" onClick={() => void refreshFontCoverage()}>重新检查</button></p>}
+    {missingGlyphs.length > 0 && <p className="mysekai-error" role="status">这些字符尚无可用字形：{missingGlyphs.join("、")}。草稿可以保存；发布前请修改文字或联系管理员更新字体。无需上传字库。<button className="btn btn-sm" onClick={() => void refreshFontCoverage()}>重新检查</button></p>}
     <header className="mysekai-heading"><div><h2 id="mysekai-title">MYSEKAI 对话</h2><p>日服场景 · {locale === "zh-CN" ? "简体中文" : locale}文本。保存为草稿，管理员审核后发布。</p></div>
-      {role === "admin" && <div className="mysekai-actions"><button className="btn" disabled={locked || dirty} onClick={() => sourceRef.current?.click()}>同步原文目录</button><button className="btn btn-primary" disabled={locked || dirty || !page?.sourceRevision} onClick={() => setPublishConfirm(true)}>发布已校对译文</button></div>}
+      {role === "admin" && <div className="mysekai-actions"><button className="btn" disabled={locked || dirty} onClick={() => sourceRef.current?.click()}>同步原文目录</button><button className="btn btn-primary" disabled={locked || dirty || !page?.sourceRevision || !fontCoverage || missingGlyphs.length > 0} onClick={() => setPublishConfirm(true)}>发布已校对译文</button></div>}
     </header>
     {error && <p className="mysekai-error" role="alert">{error}</p>}
     {publicationStatus && <div role="status" className="mysekai-note">{publicationStatus} <button className="btn btn-sm" onClick={() => void getProjectionStatus().then((s) => setPublicationStatus(s.pending ? "公开文件仍在生成" : s.lastError ? `公开文件生成失败：${s.lastError}` : "公开文件已更新")).catch((e) => setError(e.message))}>检查发布状态</button></div>}

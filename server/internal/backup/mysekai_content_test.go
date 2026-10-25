@@ -10,6 +10,7 @@ import (
 
 func TestMysekaiTranslationContentRoundTrip(t *testing.T) {
 	h := setupLegacyBackup(t)
+	h.store.SetMysekaiFontProvider(testMysekaiFonts{})
 	ctx := context.Background()
 	hash := strings.Repeat("a", 64)
 	raw := []byte(`{"schema":"moly-text-source/1","region":"jp","revision":"` + hash + `","scripts":[{"key":"synthetic","lines":[{"id":"line","kind":"text","step":0,"text":"Original","sourceHash":"` + hash + `"}]}]}`)

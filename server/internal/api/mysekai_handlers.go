@@ -40,6 +40,14 @@ func (s *Server) handleMysekaiList(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, p)
 }
+func (s *Server) handleMysekaiFontCoverage(w http.ResponseWriter, r *http.Request) {
+	c, e := s.store.MysekaiFontCoverage(r.Context())
+	if e != nil {
+		writeErr(w, http.StatusServiceUnavailable, e.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
 func (s *Server) handleMysekaiDetail(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	d, e := s.store.MysekaiDetail(r.Context(), q.Get("region"), q.Get("locale"), q.Get("key"))
