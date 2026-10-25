@@ -882,6 +882,10 @@ func (s *Store) ImportTranslationContentContext(ctx context.Context, entries []E
 
 func (s *Store) ImportTranslationContentWithSideStoriesContext(ctx context.Context, entries []EntryLocalizationRecord,
 	events EventContentExport, lyrics LyricsContentExport, sideStories SideStoryContentExport) error {
+	return s.ImportTranslationContentWithMysekaiContext(ctx, entries, events, lyrics, sideStories, MysekaiContentExport{})
+}
+
+func (s *Store) ImportTranslationContentWithMysekaiContext(ctx context.Context, entries []EntryLocalizationRecord, events EventContentExport, lyrics LyricsContentExport, sideStories SideStoryContentExport, mysekai MysekaiContentExport) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -895,6 +899,9 @@ func (s *Store) ImportTranslationContentWithSideStoriesContext(ctx context.Conte
 		return err
 	}
 	if err := importTranslationContentTx(ctx, tx, entries, events, lyrics, sideStories); err != nil {
+		return err
+	}
+	if err := importMysekaiContentTx(ctx, tx, mysekai); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -2937,6 +2944,10 @@ func (s *Store) RestoreBackupContext(ctx context.Context, categories map[string]
 func (s *Store) RestoreBackupWithSideStoriesContext(ctx context.Context, categories map[string]model.Category,
 	events []LegacyEventRestore, entries []EntryLocalizationRecord, eventContent EventContentExport,
 	lyrics LyricsContentExport, sideStories SideStoryContentExport, additivePresent bool, actor string) error {
+	return s.RestoreBackupWithMysekaiContext(ctx, categories, events, entries, eventContent, lyrics, sideStories, MysekaiContentExport{}, additivePresent, actor)
+}
+
+func (s *Store) RestoreBackupWithMysekaiContext(ctx context.Context, categories map[string]model.Category, events []LegacyEventRestore, entries []EntryLocalizationRecord, eventContent EventContentExport, lyrics LyricsContentExport, sideStories SideStoryContentExport, mysekai MysekaiContentExport, additivePresent bool, actor string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -3031,6 +3042,9 @@ func (s *Store) RestoreBackupWithSideStoriesContext(ctx context.Context, categor
 		if err := deleteSideStoryContentTx(ctx, tx); err != nil {
 			return err
 		}
+	}
+	if err := importMysekaiContentTx(ctx, tx, mysekai); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO audit_log(ts, user, action, detail) VALUES (?, ?, 'backup.restore', ?)`,
 		time.Now().Unix(), actor, fmt.Sprintf("additive=%t categories=%d events=%d", additivePresent, len(categories), len(events))); err != nil {

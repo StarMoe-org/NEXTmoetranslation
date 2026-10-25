@@ -80,14 +80,14 @@ func TestMigrationV37RebuildsSongLyricsSourceArtifactsVerbatim(t *testing.T) {
 	if err := migrated.QueryRow(`SELECT MAX(version),COUNT(*) FROM schema_migrations`).Scan(&version, &migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if version != 39 || migrationCount != 39 {
+	if version != len(migrations) || migrationCount != len(migrations) {
 		t.Fatalf("schema_migrations max=%d count=%d", version, migrationCount)
 	}
 
 	// Open also applies v38 and v39, which only add the takeover and side-story tables.
 	afterSchema := v37SchemaObjects(t, migrated.DB)
 	for key, definition := range afterSchema {
-		if strings.HasPrefix(definition, "on lyrics_recovery_takeovers: ") || isV39SideStoryObject(definition) {
+		if strings.HasPrefix(definition, "on lyrics_recovery_takeovers: ") || (isV39SideStoryObject(definition) || isV40MysekaiObject(definition)) {
 			delete(afterSchema, key)
 		}
 	}
@@ -124,6 +124,11 @@ func TestMigrationV37RebuildsSongLyricsSourceArtifactsVerbatim(t *testing.T) {
 	delete(afterRows, "lyrics_recovery_takeovers")
 	for _, table := range v39SideStoryTables {
 		delete(afterRows, table)
+	}
+	for table := range afterRows {
+		if strings.HasPrefix(table, "mysekai_") {
+			delete(afterRows, table)
+		}
 	}
 	if len(afterRows) != len(beforeRows) {
 		t.Fatalf("table count before=%d after=%d", len(beforeRows), len(afterRows))

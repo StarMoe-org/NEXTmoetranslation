@@ -90,6 +90,7 @@ var migrations = concatMigrations(
 	migrationsV21ToV30,
 	migrationsV31ToV34,
 	migrationsV35ToV40,
+	migrationsMysekai,
 )
 
 // ValidateKnownMigrationPrefix verifies an existing schema_migrations ledger

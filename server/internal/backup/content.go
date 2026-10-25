@@ -20,9 +20,9 @@ import (
 )
 
 const (
-	// Version 2 adds side-stories.json; version 1 backups carry the other three
-	// files and restore with the side-story tables empty.
-	translationContentSchemaVersion   = 2
+	// Version 3 adds MYSEKAI source, drafts and publication history. Older
+	// backups restore missing modules empty; version 2 introduced side stories.
+	translationContentSchemaVersion   = 3
 	translationContentSchemaVersionV1 = 1
 	maxTranslationContentManifestSize = 64 << 10
 	// Keep typed restore allocations bounded independently of compressed and
@@ -35,7 +35,8 @@ const (
 
 var translationContentFiles = map[int][]string{
 	translationContentSchemaVersionV1: {"entries.json", "event-stories.json", "lyrics.json"},
-	translationContentSchemaVersion:   {"entries.json", "event-stories.json", "lyrics.json", "side-stories.json"},
+	2:                                 {"entries.json", "event-stories.json", "lyrics.json", "side-stories.json"},
+	translationContentSchemaVersion:   {"entries.json", "event-stories.json", "lyrics.json", "side-stories.json", "mysekai.json"},
 }
 
 var backupSnapshotCreatedHook func() error
@@ -57,6 +58,7 @@ type translationContent struct {
 	Events      store.EventContentExport
 	Lyrics      store.LyricsContentExport
 	SideStories store.SideStoryContentExport
+	Mysekai     store.MysekaiContentExport
 }
 
 func (m *Manager) materializeTranslationContent(parent string) (string, error) {
@@ -103,7 +105,11 @@ func materializeTranslationContentFromStoreContext(ctx context.Context, parent s
 	if err != nil {
 		return "", err
 	}
-	totalRecords := len(entries) + eventContentCount(events) + len(events.Scenarios) + lyricsContentCount(lyrics) +
+	mysekai, err := source.ExportMysekaiContentContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	totalRecords := len(mysekai.Records) + len(entries) + eventContentCount(events) + len(events.Scenarios) + lyricsContentCount(lyrics) +
 		sideStoryContentCount(sideStories)
 	if totalRecords > maxTranslationContentRecords {
 		return "", fmt.Errorf("translation content exceeds %d records", maxTranslationContentRecords)
@@ -117,6 +123,7 @@ func materializeTranslationContentFromStoreContext(ctx context.Context, parent s
 		{"event-stories.json", events, eventContentCount(events)},
 		{"lyrics.json", lyrics, lyricsContentCount(lyrics)},
 		{"side-stories.json", sideStories, sideStoryContentCount(sideStories)},
+		{"mysekai.json", mysekai, len(mysekai.Records)},
 	}
 	manifest := contentManifest{SchemaVersion: translationContentSchemaVersion, Files: []contentManifestFile{}}
 	for _, file := range files {
@@ -372,6 +379,10 @@ func readTranslationContentContext(ctx context.Context, dir string) (translation
 			if err := decodeJSONContext(ctx, body, &content.Lyrics); err != nil {
 				return translationContent{}, true, err
 			}
+		case "mysekai.json":
+			if err := decodeJSONContext(ctx, body, &content.Mysekai); err != nil {
+				return translationContent{}, true, err
+			}
 		case "side-stories.json":
 			if err := decodeJSONContext(ctx, body, &content.SideStories); err != nil {
 				return translationContent{}, true, err
@@ -484,6 +495,11 @@ func preflightTranslationContentJSONContext(ctx context.Context, path string, bo
 			counts["recoveryBatches"] + counts["recoveryItems"] + counts["recoverySourceEvidence"] +
 			counts["recoveryArtifacts"] + counts["recoveryArtifactEvidence"] + counts["recoveryContributions"] +
 			counts["availabilityDocuments"] + counts["recoveryTakeovers"], 0, total, nil
+	case "mysekai.json":
+		if rootArray {
+			return 0, 0, 0, fmt.Errorf("top level must be an object")
+		}
+		return counts["records"], 0, total, nil
 	case "side-stories.json":
 		if rootArray {
 			return 0, 0, 0, fmt.Errorf("top level must be an object")
@@ -669,6 +685,6 @@ func (m *Manager) importTranslationContent(content translationContent, present b
 	if !present {
 		return nil
 	}
-	return m.store.ImportTranslationContentWithSideStoriesContext(context.Background(),
-		content.Entries, content.Events, content.Lyrics, content.SideStories)
+	return m.store.ImportTranslationContentWithMysekaiContext(context.Background(),
+		content.Entries, content.Events, content.Lyrics, content.SideStories, content.Mysekai)
 }

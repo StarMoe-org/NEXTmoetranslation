@@ -712,6 +712,13 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 	if err := svc.addSideStoryAssets(ctx, next, now); err != nil {
 		return err
 	}
+	mysekaiFiles, err := svc.store.MysekaiPublicFiles(ctx)
+	if err != nil {
+		return fmt.Errorf("mysekai: %w", err)
+	}
+	for key, body := range mysekaiFiles {
+		next[key] = makeAsset(body, "application/json; charset=utf-8", now)
+	}
 	// The accepted recovery-v3 projection is public, immutable release content
 	// and remains the reviewed base for every rebuild. Database publications
 	// overlay it: newer or bundle-absent database songs replace/add their index
@@ -1124,6 +1131,12 @@ func isPublicLyricsAssetKey(key string) bool {
 // TTL bounds that skew; stale-while-revalidate is dropped for them so an edge
 // node cannot keep serving a superseded revision after it expires.
 func (svc *Service) cacheControlFor(key string) string {
+	if strings.HasPrefix(key, "mysekai/") {
+		if strings.HasSuffix(key, "/latest.json") {
+			return "public, max-age=15, must-revalidate"
+		}
+		return "public, max-age=31536000, immutable"
+	}
 	if isPublicLyricsAssetKey(key) {
 		return fmt.Sprintf("public, max-age=%d, must-revalidate", int(svc.lyricsMaxAge.Seconds()))
 	}

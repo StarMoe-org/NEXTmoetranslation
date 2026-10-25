@@ -16,7 +16,8 @@ import (
 	"moesekai/server/offline/internal/lyricsrecoverypublic"
 )
 
-const recoveryPublicCandidateMaximumCompatibleRuntimeSchema = 39
+// MYSEKAI tables do not change lyrics recovery or publication ownership.
+const recoveryPublicCandidateMaximumCompatibleRuntimeSchema = 40
 
 type options struct {
 	databasePath            string
@@ -39,7 +40,7 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 	var opts options
 	flags := flag.NewFlagSet("lyrics-recovery-public-candidate", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	flags.StringVar(&opts.databasePath, "database", "", "existing standalone recovery SQLite database with contiguous schema v27 through v39")
+	flags.StringVar(&opts.databasePath, "database", "", "existing standalone recovery SQLite database with contiguous schema v27 through v40")
 	flags.StringVar(&opts.batchSHA256, "batch-sha256", "", "exact lowercase recovery batch SHA-256")
 	flags.StringVar(&opts.outputDirectory, "output-directory", "", "new immutable local strict Public v3 candidate directory")
 	flags.StringVar(&opts.v2CompatOutputDirectory, "v2-compat-output-directory", "", "optional separate immutable lossless Public v2 compatibility directory")

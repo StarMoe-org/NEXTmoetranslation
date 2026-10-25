@@ -181,7 +181,7 @@ func TestS3BackupCarriesSideStoriesThroughTheManager(t *testing.T) {
 	}
 	rewriteLatestS3Archive(t, bucket, sideStoryTestLatestArchive, func(root string) {
 		manifest := readContentManifest(t, filepath.Join(root, "translation-content"))
-		if manifest.SchemaVersion != 2 || len(manifest.Files) != 4 {
+		if manifest.SchemaVersion != 3 || len(manifest.Files) != 5 {
 			t.Fatalf("archived manifest = %+v", manifest)
 		}
 		var sideStories *contentManifestFile
@@ -229,7 +229,7 @@ func TestS3RestoreOfSchemaVersion1BackupClearsSideStories(t *testing.T) {
 		manifest := readContentManifest(t, dir)
 		legacy := contentManifest{SchemaVersion: 1}
 		for _, file := range manifest.Files {
-			if file.Path != "side-stories.json" {
+			if file.Path != "side-stories.json" && file.Path != "mysekai.json" {
 				legacy.Files = append(legacy.Files, file)
 			}
 		}
@@ -264,7 +264,7 @@ func TestTranslationContentManifestFileSetMatchesItsSchemaVersion(t *testing.T) 
 	withFiles := func(version int, keep func(contentManifestFile) bool) contentManifest {
 		manifest := contentManifest{SchemaVersion: version}
 		for _, file := range current.Files {
-			if keep(file) {
+			if keep(file) && file.Path != "mysekai.json" {
 				manifest.Files = append(manifest.Files, file)
 			}
 		}
@@ -287,7 +287,7 @@ func TestTranslationContentManifestFileSetMatchesItsSchemaVersion(t *testing.T) 
 		{"schemaVersion 2 with the three old files", withFiles(2, withoutSideStories), "schemaVersion 2 manifest must contain exactly 4 files, found 3"},
 		{"schemaVersion 1 with four files", withFiles(1, all), "schemaVersion 1 manifest must contain exactly 3 files, found 4"},
 		{"schemaVersion 1 naming side stories", withFiles(1, withoutLyrics), `invalid translation content manifest path "side-stories.json"`},
-		{"unknown schemaVersion", withFiles(3, all), "unsupported translation content schemaVersion 3"},
+		{"unknown schemaVersion", withFiles(99, all), "unsupported translation content schemaVersion 99"},
 		{"side-story count", miscounted, "count mismatch: side-stories.json"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

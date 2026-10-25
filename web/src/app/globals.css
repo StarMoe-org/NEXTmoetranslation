@@ -1694,3 +1694,43 @@ kbd {
   .lyrics-review-lines li { grid-template-columns: 34px minmax(0, 1fr); }
   .lyrics-review-lines li p { font-size: 16px; }
 }
+
+
+/* MYSEKAI uses the console's shared surfaces and form controls. */
+.mysekai-editor { display: flex; flex-direction: column; min-height: 0; height: 100%; overflow: auto; }
+.mysekai-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding: 24px; border-bottom: 1px solid var(--border); }
+.mysekai-heading p, .mysekai-note { color: var(--text-secondary); }
+.mysekai-note, .mysekai-error { padding: 12px 24px; }
+.mysekai-error { color: var(--err); }
+.mysekai-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.mysekai-actions h3 { flex: 1; overflow-wrap: anywhere; font-size: 15px; }
+.mysekai-columns { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); flex: 1; min-height: 0; }
+.mysekai-catalog { padding: 16px; border-right: 1px solid var(--border); overflow: auto; }
+.mysekai-catalog label { display: grid; gap: 6px; margin-bottom: 14px; }
+.mysekai-catalog input, .mysekai-catalog select { width: 100%; }
+.mysekai-list .field-item { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; overflow-wrap: anywhere; min-height: 56px; }
+.mysekai-list small { color: var(--text-secondary); }
+.mysekai-workspace { padding: 24px; overflow: auto; }
+.mysekai-workspace > .mysekai-note { padding: 12px 0; }
+.mysekai-line { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px 0; border-bottom: 1px solid var(--border); }
+.mysekai-line p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.mysekai-line label { display: grid; gap: 6px; }
+.mysekai-line textarea { width: 100%; resize: vertical; min-height: 72px; line-height: 1.6; }
+.mysekai-line small, .mysekai-original > span { color: var(--text-secondary); }
+.mysekai-original p { margin: 8px 0; }
+.mysekai-history { border-top: 1px solid var(--border); padding: 16px 24px; }
+.mysekai-history summary { cursor: pointer; min-height: 36px; }
+.mysekai-history .mysekai-actions { padding: 8px 0; }
+@media (max-width: 900px) {
+ .mysekai-columns { grid-template-columns: 1fr; }
+ .mysekai-catalog { border-right: none; border-bottom: 1px solid var(--border); max-height: 280px; }
+ .mysekai-workspace { overflow: visible; padding: 16px; }
+ .mysekai-line { grid-template-columns: 1fr; gap: 12px; }
+ .mysekai-heading { padding: 16px; }
+}
+
+.mysekai-catalog input, .mysekai-catalog select, .mysekai-line textarea {
+ background: var(--surface); color: var(--text); border: 1px solid var(--control-border);
+ border-radius: var(--radius-sm); padding: 9px 10px;
+}
+@media (max-width: 768px) { .mysekai-heading { padding-top: 58px; } }

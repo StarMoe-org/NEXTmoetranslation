@@ -37,9 +37,10 @@ func TestLyricsSourceMigrationsAppendAfterPinnedV12(t *testing.T) {
 		37: "lyrics_source_artifacts_projectsekai_fandom_origin",
 		38: "lyrics_recovery_takeovers",
 		39: "side_stories",
+		40: "mysekai_text_workflow",
 	}
-	if latest := migrations[len(migrations)-1]; latest.version != 39 || latest.name != wantNames[39] {
-		t.Fatalf("latest migration=%d/%q want=39/%q", latest.version, latest.name, wantNames[39])
+	if latest := migrations[len(migrations)-1]; latest.version != 40 || latest.name != wantNames[40] {
+		t.Fatalf("latest migration=%d/%q want=40/%q", latest.version, latest.name, wantNames[40])
 	}
 	for version, name := range wantNames {
 		migration := migrations[version-1]

@@ -922,7 +922,7 @@ export function subscribeProducerProofInvalidated(listener: () => void): () => v
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api";
 
-async function apiFetch<T>(path: string, options?: RequestInit, requireProducerProof = false): Promise<T> {
+export async function apiFetch<T>(path: string, options?: RequestInit, requireProducerProof = false): Promise<T> {
   await ensureSessionMigrated();
   const initiated = await withSessionIdentityLock("shared", () => {
     const envelope = getSessionEnvelope();

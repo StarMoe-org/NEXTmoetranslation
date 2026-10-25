@@ -64,7 +64,7 @@ func TestMigrationV39UpgradesAV38DatabaseByOnlyAddingSideStoryTables(t *testing.
 	defer migrated.Close()
 	var version, count int
 	if err := migrated.QueryRow(`SELECT MAX(version),COUNT(*) FROM schema_migrations`).Scan(&version, &count); err != nil ||
-		version != 39 || count != 39 {
+		version != len(migrations) || count != len(migrations) {
 		t.Fatalf("schema version=%d count=%d err=%v", version, count, err)
 	}
 	if _, err := os.Stat(path + ".pre-migration-v39.bak"); err != nil {
@@ -74,6 +74,9 @@ func TestMigrationV39UpgradesAV38DatabaseByOnlyAddingSideStoryTables(t *testing.
 	var added []string
 	for name, definition := range afterSchema {
 		before, existed := beforeSchema[name]
+		if !existed && isV40MysekaiObject(definition) {
+			continue
+		}
 		if !existed {
 			if !isV39SideStoryObject(definition) {
 				t.Fatalf("v39 created %s outside the side-story tables: %s", name, definition)
@@ -112,6 +115,11 @@ func TestMigrationV39UpgradesAV38DatabaseByOnlyAddingSideStoryTables(t *testing.
 		}
 		delete(afterRows, table)
 	}
+	for table := range afterRows {
+		if strings.HasPrefix(table, "mysekai_") {
+			delete(afterRows, table)
+		}
+	}
 	if len(afterRows) != len(beforeRows) {
 		t.Fatalf("table count before=%d after=%d", len(beforeRows), len(afterRows))
 	}
@@ -148,7 +156,7 @@ func TestV39SideStoryConstraintsRejectInvalidRows(t *testing.T) {
 	}
 	defer database.Close()
 	var version int
-	if err := database.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 39 {
+	if err := database.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != len(migrations) {
 		t.Fatalf("fresh schema version=%d err=%v", version, err)
 	}
 	insertV39SideStoryGraph(t, database.DB)
@@ -275,3 +283,5 @@ func TestV39SideStoryRowsCascadeFromStoryToLocalization(t *testing.T) {
 		t.Fatalf("after story delete: %s", got)
 	}
 }
+
+func isV40MysekaiObject(definition string) bool { return strings.HasPrefix(definition, "on mysekai_") }

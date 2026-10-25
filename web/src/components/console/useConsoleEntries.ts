@@ -174,7 +174,7 @@ export function useConsoleEntries({
     setEventTxtDraft(null);
     setSideStoryDetail(null);
     setRemoteConflict(null);
-    if (isLyrics || isLyricsSourceReview) {
+    if (isLyrics || isLyricsSourceReview || category === "mysekaiText") {
       setLoading(false);
       return true;
     }

@@ -79,14 +79,14 @@ func TestMigrationV38OnlyCreatesTheTakeoverTable(t *testing.T) {
 	}
 	defer migrated.Close()
 	var version int
-	if err := migrated.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 39 {
+	if err := migrated.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != len(migrations) {
 		t.Fatalf("schema version=%d err=%v", version, err)
 	}
 	afterSchema := v37SchemaObjects(t, migrated.DB)
 	var added []string
 	for name, definition := range afterSchema {
 		before, existed := beforeSchema[name]
-		if !existed && isV39SideStoryObject(definition) {
+		if !existed && (isV39SideStoryObject(definition) || isV40MysekaiObject(definition)) {
 			continue
 		}
 		if !existed {

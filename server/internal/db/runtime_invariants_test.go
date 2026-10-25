@@ -137,7 +137,7 @@ func TestValidateKnownMigrationPrefixAcceptsHistoricalMigrationChecksums(t *test
 					t.Fatal(err)
 				}
 
-				actualVersion, err := database.ValidateKnownMigrationPrefix(t.Context(), 27, 39)
+				actualVersion, err := database.ValidateKnownMigrationPrefix(t.Context(), 27, len(migrations))
 				if err != nil {
 					t.Fatalf("ValidateKnownMigrationPrefix with historical checksum v%d %s: %v", version, checksum[:12], err)
 				}
