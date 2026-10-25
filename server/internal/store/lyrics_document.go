@@ -47,13 +47,17 @@ type LyricsDocumentSource struct {
 // PerformerIDs falls back to the catalog vocal performers. TranslationCredits
 // replaces the document credits for this rendition, translated or not; an
 // empty object publishes the rendition without credits. EditionCredits are
-// the credits of this rendition in non-default editions.
+// the credits of this rendition in non-default editions. GameSource, valid
+// when game is same, cut or independent, attributes the Game side and its
+// relation to Full to another revision than the document source, e.g. the
+// Game Size page of a song whose full lyrics come from another wiki.
 type LyricsDocumentRendition struct {
 	Key                string                           `json:"key"`
 	Kind               string                           `json:"kind,omitempty"`
 	Label              string                           `json:"label,omitempty"`
 	PerformerIDs       []int                            `json:"performerIds,omitempty"`
 	Game               string                           `json:"game,omitempty"`
+	GameSource         *LyricsDocumentSource            `json:"gameSource,omitempty"`
 	Lines              []LyricsDocumentLine             `json:"lines"`
 	GameLines          []LyricsDocumentLine             `json:"gameLines,omitempty"`
 	TranslationCredits *LyricsDocumentCredits           `json:"translationCredits,omitempty"`
@@ -450,6 +454,21 @@ func compileLyricsDocument(request LyricsDocumentRequest, source lyricsDocumentS
 		case knownGame && !ownGame && len(input.GameLines) != 0:
 			renditionIssue("game", "gameLines", "gameLines are only valid when game is independent or only")
 		}
+		// The same revision as the document source adds no second identity.
+		var gameSource *lyricsDocumentSourceRevision
+		if input.GameSource != nil {
+			parsed, err := parseLyricsDocumentSourceURL(input.GameSource.URL, input.GameSource.Title)
+			if err != nil {
+				return lyricsDocumentDraft{}, &LyricsDocumentError{Code: LyricsDocumentErrorSourceRevision,
+					Details: []string{fmt.Sprintf("rendition %q gameSource: %v", key, err)}}
+			}
+			if game == "none" || game == "only" {
+				renditionIssue("game", "gameSource",
+					"gameSource is only valid when game is same, cut or independent; a Game-only rendition takes source.url")
+			} else if parsed != source {
+				gameSource = &parsed
+			}
+		}
 		var renditionCredits *LyricsDocumentCredits
 		if input.TranslationCredits != nil {
 			renditionCredits = &LyricsDocumentCredits{
@@ -478,6 +497,11 @@ func compileLyricsDocument(request LyricsDocumentRequest, source lyricsDocumentS
 			defaults = lyricsDocumentCatalogPerformers(kind, vocals)
 		}
 		identityKey := "fixed-" + key
+		// The Game side, its readings included, cites gameSource when it has one.
+		gameIdentityKey := identityKey
+		if gameSource != nil {
+			gameIdentityKey = "game-" + key
+		}
 		reason := model.LyricsSourceVersionReasonUntaggedFullOnly
 		switch game {
 		case "same":
@@ -503,7 +527,7 @@ func compileLyricsDocument(request LyricsDocumentRequest, source lyricsDocumentS
 		var gameTranslations []string
 		if len(input.GameLines) > 0 && (ownGame || !knownGame) {
 			var gameIssues []LyricsDocumentIssue
-			rendition.Game, gameTranslations, gameIssues = buildLyricsDocumentSide(key, model.LyricsSourceRenditionSideGame, version, identityKey, input.GameLines, defaults, false)
+			rendition.Game, gameTranslations, gameIssues = buildLyricsDocumentSide(key, model.LyricsSourceRenditionSideGame, version, gameIdentityKey, input.GameLines, defaults, false)
 			issues = append(issues, gameIssues...)
 		}
 		if !valid || game != "only" && full == nil || ownGame && rendition.Game == nil {
@@ -525,23 +549,23 @@ func compileLyricsDocument(request LyricsDocumentRequest, source lyricsDocumentS
 			}
 		}
 		reference := model.LyricsSourceComponentRef{RenditionKey: identityKey}
-		ref := func(present bool) *model.LyricsSourceComponentRef {
+		gameReference := model.LyricsSourceComponentRef{RenditionKey: gameIdentityKey}
+		ref := func(present bool, reference model.LyricsSourceComponentRef) *model.LyricsSourceComponentRef {
 			if !present {
 				return nil
 			}
-			copy := reference
-			return &copy
+			return &reference
 		}
-		rendition.Provenance = model.LyricsSourceRenditionProvenance{RelationEvidence: reference, VersionEvidence: reference}
+		rendition.Provenance = model.LyricsSourceRenditionProvenance{RelationEvidence: gameReference, VersionEvidence: reference}
 		if full != nil {
-			rendition.Provenance.FullText = ref(true)
-			rendition.Provenance.FullPerformerSegmentation = ref(model.LyricsSourceFullHasPerformerSegmentation(*full))
-			rendition.Provenance.FullRuby = ref(lyricsSourceFullHasRuby(*full))
+			rendition.Provenance.FullText = ref(true, reference)
+			rendition.Provenance.FullPerformerSegmentation = ref(model.LyricsSourceFullHasPerformerSegmentation(*full), reference)
+			rendition.Provenance.FullRuby = ref(lyricsSourceFullHasRuby(*full), reference)
 		}
 		if rendition.Game != nil {
-			rendition.Provenance.GameText = ref(true)
-			rendition.Provenance.GamePerformerSegmentation = ref(model.LyricsSourceFullHasPerformerSegmentation(*rendition.Game))
-			rendition.Provenance.GameRuby = ref(lyricsSourceFullHasRuby(*rendition.Game))
+			rendition.Provenance.GameText = ref(true, gameReference)
+			rendition.Provenance.GamePerformerSegmentation = ref(model.LyricsSourceFullHasPerformerSegmentation(*rendition.Game), gameReference)
+			rendition.Provenance.GameRuby = ref(lyricsSourceFullHasRuby(*rendition.Game), gameReference)
 		}
 		rendition.SourcePerformerIDs = lyricsDocumentRosterIDs(full, rendition.Game)
 		rendition.FullPerformerEvidence = lyricsDocumentPerformerEvidence(full, rendition.SourcePerformerIDs)
@@ -550,28 +574,18 @@ func compileLyricsDocument(request LyricsDocumentRequest, source lyricsDocumentS
 			addIssue(key, "", -1, "", err.Error())
 			continue
 		}
-		identity := model.LyricsSourceFixedIdentity{
-			Provider: source.provider, Origin: source.origin,
-			// The revision URL carries no page ID; the revision ID is unique within
-			// the wiki and stands in for it.
-			PageID: source.revisionID, RevisionID: source.revisionID,
-			SHA1: lyricsDocumentSHA1(source.canonicalURL), Title: source.title, CanonicalURL: source.canonicalURL,
-			FetchedAt: fetchedAt, Categories: []string{}, Section: label, RenditionKey: identityKey,
-			CompositionRenditionKey: key, VersionReason: reason,
-			IndexEvidenceRefs: []model.LyricsSourceIndexEvidenceRef{{
-				EvidenceID: fmt.Sprintf("revision:%s:%d", source.provider, source.revisionID),
-				SHA256:     lyricsDocumentSHA256(source.canonicalURL),
-			}},
+		identities := []model.LyricsSourceFixedIdentity{lyricsDocumentFixedIdentity(source, identityKey, key, label, reason, fetchedAt)}
+		if gameSource != nil {
+			identities = append(identities, lyricsDocumentFixedIdentity(*gameSource, gameIdentityKey, key, label, reason, fetchedAt))
 		}
-		if source.provider == model.LyricsSourceProviderSekaipedia {
-			identity.RevisionTimestamp = fetchedAt
-		}
-		if err := model.ValidateLyricsSourceFixedIdentity(identity); err != nil {
-			return lyricsDocumentDraft{}, &LyricsDocumentError{Code: LyricsDocumentErrorSourceRevision, Details: []string{err.Error()}}
+		for _, identity := range identities {
+			if err := model.ValidateLyricsSourceFixedIdentity(identity); err != nil {
+				return lyricsDocumentDraft{}, &LyricsDocumentError{Code: LyricsDocumentErrorSourceRevision, Details: []string{err.Error()}}
+			}
+			document.FixedIdentities = append(document.FixedIdentities, identity)
+			draft.identities[identity.RenditionKey] = identity
 		}
 		document.Renditions = append(document.Renditions, rendition)
-		document.FixedIdentities = append(document.FixedIdentities, identity)
-		draft.identities[identityKey] = identity
 		translation := lyricscontract.RenditionTranslation{RenditionKey: key}
 		renditionTranslated := false
 		if lyricsDocumentAnyText(fullTranslations) {
@@ -604,6 +618,10 @@ func compileLyricsDocument(request LyricsDocumentRequest, source lyricsDocumentS
 		}
 		draft.translations = append(draft.translations, translation)
 		draft.recordEditions(key, fullEditions, gameEditions, editionCredits)
+	}
+	if len(document.FixedIdentities) > maxLyricsSourceFixedIdentitiesForDocument {
+		addIssue("", "", -1, "gameSource", fmt.Sprintf("the renditions and their gameSource name %d source revisions; a document holds at most %d",
+			len(document.FixedIdentities), maxLyricsSourceFixedIdentitiesForDocument))
 	}
 	if len(uncredited) > 0 && translationCredit == "" && proofreadingCredit == "" {
 		addIssue("", "", -1, "translationCredit", fmt.Sprintf(
@@ -645,9 +663,35 @@ func compileLyricsDocument(request LyricsDocumentRequest, source lyricsDocumentS
 	return draft, nil
 }
 
+// lyricsDocumentFixedIdentity is the identity of the source revision for the
+// rendition key, named identityKey in provenance references.
+func lyricsDocumentFixedIdentity(source lyricsDocumentSourceRevision, identityKey, key, label string,
+	reason model.LyricsSourceVersionReasonCode, fetchedAt string,
+) model.LyricsSourceFixedIdentity {
+	identity := model.LyricsSourceFixedIdentity{
+		Provider: source.provider, Origin: source.origin,
+		// The revision URL carries no page ID; the revision ID is unique within
+		// the wiki and stands in for it.
+		PageID: source.revisionID, RevisionID: source.revisionID,
+		SHA1: lyricsDocumentSHA1(source.canonicalURL), Title: source.title, CanonicalURL: source.canonicalURL,
+		FetchedAt: fetchedAt, Categories: []string{}, Section: label, RenditionKey: identityKey,
+		CompositionRenditionKey: key, VersionReason: reason,
+		IndexEvidenceRefs: []model.LyricsSourceIndexEvidenceRef{{
+			EvidenceID: fmt.Sprintf("revision:%s:%d", source.provider, source.revisionID),
+			SHA256:     lyricsDocumentSHA256(source.canonicalURL),
+		}},
+	}
+	if source.provider == model.LyricsSourceProviderSekaipedia {
+		identity.RevisionTimestamp = fetchedAt
+	}
+	return identity
+}
+
 const (
 	maxLyricsSourceRenditionsForDocument = 16
-	maxLyricsDocumentIssues              = 200
+	// maxLyricsSourceFixedIdentitiesForDocument is the source model's limit.
+	maxLyricsSourceFixedIdentitiesForDocument = 16
+	maxLyricsDocumentIssues                   = 200
 	// MaxLyricsDocumentJapaneseLineBytes is the source model's line text limit;
 	// zh lines live in the localization rows and allow maxLyricsLineTextBytes.
 	MaxLyricsDocumentJapaneseLineBytes = 8 << 10
