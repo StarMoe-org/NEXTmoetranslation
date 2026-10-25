@@ -31,11 +31,12 @@ import (
 )
 
 const (
-	maxConcurrency                        = 16
-	maxAttempts                           = 5
-	defaultRequestTimeout                 = 8 * time.Minute
-	maxRequestTimeout                     = 10 * time.Minute
-	maximumCompatibleCatalogRuntimeSchema = 39
+	maxConcurrency        = 16
+	maxAttempts           = 5
+	defaultRequestTimeout = 8 * time.Minute
+	maxRequestTimeout     = 10 * time.Minute
+	// MYSEKAI tables leave the pinned lyrics catalog contract unchanged.
+	maximumCompatibleCatalogRuntimeSchema = 40
 )
 
 var sqliteSidecarSuffixes = [...]string{"-wal", "-shm", "-journal"}

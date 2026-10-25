@@ -30,12 +30,13 @@ type MysekaiOverlay struct {
 	Entries        []MysekaiOverlayEntry `json:"entries"`
 }
 type MysekaiPublication struct {
-	Schema   string                   `json:"schema"`
-	Region   string                   `json:"region"`
-	Locale   string                   `json:"locale"`
-	Revision string                   `json:"revision"`
-	Routing  string                   `json:"routing"`
-	Buckets  map[string]MysekaiObject `json:"buckets"`
+	Schema        string                   `json:"schema"`
+	Region        string                   `json:"region"`
+	Locale        string                   `json:"locale"`
+	Revision      string                   `json:"revision"`
+	Routing       string                   `json:"routing"`
+	Buckets       map[string]MysekaiObject `json:"buckets"`
+	SearchBuckets map[string]MysekaiObject `json:"searchBuckets,omitempty"`
 }
 
 func validateMysekaiPublication(region, locale, revision string, files map[string]json.RawMessage) error {
@@ -114,6 +115,37 @@ func validateMysekaiPublication(region, locale, revision string, files map[strin
 			}
 		}
 	}
+	for prefix, ref := range root.SearchBuckets {
+		if len(prefix) != 1 || strings.Trim(prefix, "0123456789abcdef") != "" {
+			return fmt.Errorf("invalid MYSEKAI search prefix")
+		}
+		body, err := get(ref)
+		if err != nil {
+			return err
+		}
+		var search struct {
+			Schema  string                 `json:"schema"`
+			Scripts map[string][][4]string `json:"scripts"`
+		}
+		if err = json.Unmarshal(body, &search); err != nil {
+			return err
+		}
+		if search.Schema != "moly-text-translation-search/1" {
+			return fmt.Errorf("invalid MYSEKAI search index")
+		}
+		for key, entries := range search.Scripts {
+			if mysekaiDigest([]byte(key))[:1] != prefix {
+				return fmt.Errorf("MYSEKAI search in wrong bucket")
+			}
+			seen := map[string]bool{}
+			for _, entry := range entries {
+				if entry[0] == "" || len(entry[0]) > 160 || seen[entry[0]] || !mysekaiHash.MatchString(entry[1]) || !mysekaiText(entry[2]) || entry[3] != "human" {
+					return fmt.Errorf("invalid MYSEKAI search entry")
+				}
+				seen[entry[0]] = true
+			}
+		}
+	}
 	if len(used) != len(files) {
 		return fmt.Errorf("unreferenced MYSEKAI publication object")
 	}
@@ -164,6 +196,7 @@ func mysekaiBuildPublication(ctx context.Context, tx *sql.Tx, region, locale, ex
 		return MysekaiObject{path, hash, len(b)}
 	}
 	buckets := map[string]map[string]MysekaiObject{}
+	searchBuckets := map[string]map[string][][4]string{}
 	for _, script := range catalog.Scripts {
 		entries := []MysekaiOverlayEntry{}
 		parts := []MysekaiScript{script}
@@ -194,6 +227,19 @@ func mysekaiBuildPublication(ctx context.Context, tx *sql.Tx, region, locale, ex
 			buckets[prefix] = map[string]MysekaiObject{}
 		}
 		buckets[prefix][script.Key] = put(overlay)
+		ownEntries := [][4]string{}
+		for _, line := range script.Lines {
+			d := drafts[line.ID]
+			if d.SourceHash == line.SourceHash && strings.TrimSpace(d.Text) != "" {
+				ownEntries = append(ownEntries, [4]string{line.ID, line.SourceHash, d.Text, "human"})
+			}
+		}
+		if len(ownEntries) > 0 {
+			if searchBuckets[prefix[:1]] == nil {
+				searchBuckets[prefix[:1]] = map[string][][4]string{}
+			}
+			searchBuckets[prefix[:1]][script.Key] = ownEntries
+		}
 	}
 	root := MysekaiPublication{Schema: "moly-text-publication/1", Region: region, Locale: locale, Routing: "sha256-utf8-prefix-2", Buckets: map[string]MysekaiObject{}}
 	for prefix, scripts := range buckets {
@@ -201,6 +247,15 @@ func mysekaiBuildPublication(ctx context.Context, tx *sql.Tx, region, locale, ex
 			Schema  string                   `json:"schema"`
 			Scripts map[string]MysekaiObject `json:"scripts"`
 		}{"moly-text-translation-routes/1", scripts})
+	}
+	if len(searchBuckets) > 0 {
+		root.SearchBuckets = map[string]MysekaiObject{}
+	}
+	for prefix, scripts := range searchBuckets {
+		root.SearchBuckets[prefix] = put(struct {
+			Schema  string                 `json:"schema"`
+			Scripts map[string][][4]string `json:"scripts"`
+		}{"moly-text-translation-search/1", scripts})
 	}
 	b, _ := json.Marshal(root)
 	root.Revision = mysekaiDigest(b)
@@ -386,6 +441,11 @@ func mysekaiResolvePublication(ctx context.Context, q mysekaiReader, rootBytes [
 			if _, err = get(ref); err != nil {
 				return nil, err
 			}
+		}
+	}
+	for _, ref := range root.SearchBuckets {
+		if _, err := get(ref); err != nil {
+			return nil, err
 		}
 	}
 	return files, nil

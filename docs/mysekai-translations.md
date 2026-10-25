@@ -101,3 +101,11 @@ Draft preview never writes its public pointer or starts audio automatically.
 
 Optional future font references may use the same immutable `{path,sha256,bytes}`
 contract. Font administration is separate from this text editor.
+# Search publication
+
+Publication roots include `searchBuckets`, routed by the first SHA-256 hex
+digit of the script key. Each `moly-text-translation-search/1` object maps
+script keys to `[id, sourceHash, text, source]` rows. They contain published
+translations only and let the host search dialogue without downloading every
+playback shard. A single-script edit adds its leaf, route and affected search
+bucket; historical objects are shared and resource snapshots are unchanged.

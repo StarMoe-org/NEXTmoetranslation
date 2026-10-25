@@ -36,8 +36,9 @@ const (
 	// only adds the side-story tables. None changes those inputs or their
 	// catalog identity, so reviewed imports may run on any contiguous v27-v39
 	// database.
-	lyricsRecoveryImportRuntimeSchema          = 27
-	lyricsImportMaximumCompatibleRuntimeSchema = 39
+	lyricsRecoveryImportRuntimeSchema = 27
+	// MYSEKAI adds independent tables and does not alter lyrics import storage.
+	lyricsImportMaximumCompatibleRuntimeSchema = 40
 	// lyricsRecoveryTakeoverRuntimeSchema added lyrics_recovery_takeovers.
 	lyricsRecoveryTakeoverRuntimeSchema = 38
 	// lyricsEmbeddedEditorSeedRuntimeSchema added embedded_lyrics_editor_seed_batches.

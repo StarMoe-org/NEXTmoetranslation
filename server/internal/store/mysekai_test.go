@@ -83,7 +83,7 @@ func TestMysekaiSourceEditsPublicationAndRestore(t *testing.T) {
 	if err = database.QueryRow(`SELECT COUNT(*),SUM(LENGTH(CAST(body AS BLOB))) FROM mysekai_objects`).Scan(&beforeObjects, &beforeBytes); err != nil {
 		t.Fatal(err)
 	}
-	// Publishing one edited line appends one leaf and its bucket, not another
+	// Publishing one edited line appends its leaf, route and search bucket, not another
 	// copy of all immutable objects from previous revisions.
 	save.SourceRevision = catalog.Revision
 	save.Edits[0].ExpectedRevision = 1
@@ -102,8 +102,8 @@ func TestMysekaiSourceEditsPublicationAndRestore(t *testing.T) {
 	if err = database.QueryRow(`SELECT COUNT(*),SUM(LENGTH(CAST(body AS BLOB))) FROM mysekai_objects`).Scan(&afterObjects, &afterBytes); err != nil {
 		t.Fatal(err)
 	}
-	if afterObjects-beforeObjects != 2 {
-		t.Fatalf("single-script edit appended %d objects, want leaf and bucket", afterObjects-beforeObjects)
+	if afterObjects-beforeObjects != 3 {
+		t.Fatalf("single-script edit appended %d objects, want leaf, route and search bucket", afterObjects-beforeObjects)
 	}
 	t.Logf("single-line publication appended %d bytes in %d objects; previous immutable bytes=%d", afterBytes-beforeBytes, afterObjects-beforeObjects, beforeBytes)
 	// Changed source preserves draft text but cannot publish it without review.

@@ -97,11 +97,13 @@ func mysekaiScope(region, locale string) error {
 	return nil
 }
 func mysekaiText(text string) bool {
-	if !utf8.ValidString(text) || len(text) > 32768 {
+	if !utf8.ValidString(text) || len(text) > 16*1024 {
 		return false
 	}
 	for _, r := range text {
-		if (unicode.IsControl(r) && r != '\n') || r == 0x202e || r == 0x202d || r == 0x00ad {
+		if (unicode.IsControl(r) && r != '\n') || r == 0x00ad ||
+			(r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) ||
+			(r >= 0xfdd0 && r <= 0xfdef) || (r&0xffff) >= 0xfffe {
 			return false
 		}
 	}
