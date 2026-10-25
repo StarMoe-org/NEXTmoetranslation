@@ -166,6 +166,7 @@ export function ConsoleSidebar({
         )}
 
         {sideStories}
+        <div className="field-group"><div className="field-group-title">MYSEKAI</div><button type="button" className={`field-item ${category === "mysekaiText" ? "active" : ""}`} aria-current={category === "mysekaiText" ? "page" : undefined} onClick={() => selectField("mysekaiText", "catalog")}><span>对话翻译与发布</span></button></div>
 
         <div className="field-group">
           <div className="field-group-title">音乐内容</div>

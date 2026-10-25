@@ -143,3 +143,7 @@ JP 与 CN 的目录沿用现有的 `upstream.jp_masterdata_url`、`upstream.cn_m
 **公开文件。** `zh-CN` 发布在 `/files/translation/cardStory/card_<cardId>.json` 与 `/files/translation/areaTalk/group_<n>.json`，`en-US` 发布在 `/files/v2/en-US/translation/` 下的同名路径；`n` 是 JP actionSet ID 整除 100，没有其他语言的镜像。PUT、refresh 和写入了行的 AI（中途失败时也发布已保存的批次）在响应前重建所涉故事的文件，正在进行的全量重建不会把这次发布或撤下换回去；回填每轮结束后逐个重建本轮写过的故事，只有目录变化时才走去抖的全量重建，窗口为 `FILES_REBUILD_DEBOUNCE_MS`（默认 300000 ms），持续有写入时最多等两个窗口。
 
 **备份。** 内容备份的 `translation-content/manifest.json` 升到 `schemaVersion` 2，新增 `translation-content/side-stories.json`，与其他内容在同一个恢复事务里恢复。`schemaVersion` 1 的旧备份仍可恢复，但会清空卡牌剧情与区域对话的四张表；早于 v39 的程序拒绝恢复 `schemaVersion` 2 的备份。Git 目标每次只推一个 `backup.tar.gz`（设置 `MOESEKAI_BACKUP_ENCRYPTION_KEY` 时为 `backup.enc`），GitHub 拒收超过 100 MiB 的文件，所以它必须低于这个上限，体积估算见 [`PRODUCTION_CONTRACT.md`](PRODUCTION_CONTRACT.md) 的 Backup And Restore。回滚与恢复步骤见 [`ROLLBACK_RUNBOOK.md`](ROLLBACK_RUNBOOK.md)。
+
+## MYSEKAI text translations
+
+The console includes a dedicated MYSEKAI source, draft, TXT import and publication workflow. See [the workflow and integration contract](docs/mysekai-translations.md). Game resource snapshots and immutable translation publications have independent versions.

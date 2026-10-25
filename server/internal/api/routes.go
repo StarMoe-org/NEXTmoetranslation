@@ -20,6 +20,12 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/refresh", s.auth.RequireAuth(s.handleRefresh))
 
 	// Translations
+	mux.HandleFunc("GET /api/mysekai/scripts", s.auth.RequireAuth(s.handleMysekaiList))
+	mux.HandleFunc("GET /api/mysekai/script", s.auth.RequireAuth(s.handleMysekaiDetail))
+	mux.HandleFunc("GET /api/mysekai/publications", s.auth.RequireAuth(s.handleMysekaiPublicationHistory))
+	mux.HandleFunc("POST /api/editor/v1/mysekai/source", s.auth.RequireAdmin(s.strictContentMutation(s.handleMysekaiSource)))
+	mux.HandleFunc("PUT /api/editor/v1/mysekai/drafts", s.auth.RequireAuth(s.strictContentMutation(s.handleMysekaiSave)))
+	mux.HandleFunc("POST /api/editor/v1/mysekai/publication/{action}", s.auth.RequireAdmin(s.strictContentMutation(s.handleMysekaiPublication)))
 	mux.HandleFunc("/api/editor-gate/status", s.auth.RequireAuth(s.handleEditorGateStatus))
 	mux.HandleFunc("/api/categories", s.auth.RequireAuth(getOnly(s.handleCategories)))
 	mux.HandleFunc("/api/entries", s.auth.RequireAuth(getOnly(s.handleEntries)))

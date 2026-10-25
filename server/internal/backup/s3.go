@@ -509,6 +509,8 @@ func archiveFileByteLimit(name string) int64 {
 		return maxEventStoriesContentFileBytes
 	case "translation-content/lyrics.json", "translations/translation-content/lyrics.json":
 		return maxLyricsContentFileBytes
+	case "translation-content/mysekai.json", "translations/translation-content/mysekai.json":
+		return maxSideStoriesContentFileBytes
 	case "translation-content/side-stories.json", "translations/translation-content/side-stories.json":
 		return maxSideStoriesContentFileBytes
 	default:

@@ -22,6 +22,7 @@ import { useConsoleRealtime } from "@/components/console/useConsoleRealtime";
 import { useEntryEditor } from "@/components/console/useEntryEditor";
 import { useSideStoryCatalog } from "@/components/console/useSideStoryCatalog";
 import { useSideStoryOperations } from "@/components/console/useSideStoryOperations";
+import { MysekaiEditor, MysekaiEditorHandle } from "@/components/MysekaiEditor";
 import { LyricsEditor, LyricsEditorHandle } from "@/components/LyricsEditor";
 import { LyricsSourceReview, LyricsSourceReviewHandle } from "@/components/LyricsSourceReview";
 import { Locale, TranslationEntry, clearLoadedProducerState, clearSession, getClientID, getRole, getUsername } from "@/lib/api";
@@ -47,6 +48,8 @@ export function Console({ onLogout }: { onLogout: () => void }) {
   const [showAdmin, setShowAdmin] = useState(false);
   const [locale, setLocale] = useState<Locale>("zh-CN");
   const [lyricsDirty, setLyricsDirty] = useState(false);
+  const [mysekaiDirty, setMysekaiDirty] = useState(false);
+  const mysekaiEditorRef = useRef<MysekaiEditorHandle>(null);
   const [pendingActionLabel, setPendingActionLabel] = useState("");
   const [pendingActionBusy, setPendingActionBusy] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -137,9 +140,10 @@ export function Console({ onLogout }: { onLogout: () => void }) {
   });
   freezeRecoveredConflictRef.current = freezeRecoveredConflict;
 
+  const isMysekai = category === "mysekaiText";
   const frozenConflictDraftDirty = Boolean(contentConflict?.draft || preservedConflictDraftRef.current);
-  const hasUnsavedChanges = (isLyrics ? lyricsDirty : entryDirty || eventTxtDraftDirty) || frozenConflictDraftDirty;
-  const currentHasUnsavedChanges = () => (isLyrics
+  const hasUnsavedChanges = (isMysekai ? mysekaiDirty : isLyrics ? lyricsDirty : entryDirty || eventTxtDraftDirty) || frozenConflictDraftDirty;
+  const currentHasUnsavedChanges = () => (isMysekai ? mysekaiEditorRef.current?.isDirty() ?? mysekaiDirty : isLyrics
     ? lyricsEditorRef.current?.isDirty() ?? lyricsDirty
     : entryDirty || eventTxtDraftDirty) || Boolean(contentConflict?.draft || preservedConflictDraftRef.current);
 
@@ -268,7 +272,7 @@ export function Console({ onLogout }: { onLogout: () => void }) {
           show("TXT 草稿仍有未保存条目；请先选择一条草稿内容保存，再重试当前操作", "ok");
           return;
         }
-        const saved = isLyrics ? await lyricsEditorRef.current?.save() : await save(undefined, false);
+        const saved = isMysekai ? await mysekaiEditorRef.current?.save() : isLyrics ? await lyricsEditorRef.current?.save() : await save(undefined, false);
         if (!saved || !pendingIsCurrent()) return;
         if (isEventStory && importedCountBeforeSave - (selectedImportedBeforeSave ? 1 : 0) > 0) {
           invalidatePendingAction();
@@ -276,7 +280,9 @@ export function Console({ onLogout }: { onLogout: () => void }) {
           return;
         }
       } else {
-        if (isLyrics) {
+        if (isMysekai) {
+          if (!mysekaiEditorRef.current?.discard()) return;
+        } else if (isLyrics) {
           if (!lyricsEditorRef.current?.discard()) return;
         } else {
           if (eventTxtDraft && !clearPersistedEventTxtDraft(username, eventTxtDraft.eventId, eventTxtDraft.locale)) {
@@ -423,7 +429,9 @@ export function Console({ onLogout }: { onLogout: () => void }) {
           </div>
         )}
 
-        {isLyrics ? (
+        {isMysekai ? (
+          <MysekaiEditor ref={mysekaiEditorRef} role={role} locale={locale} writeLocked={writesLocked} onDirtyChange={setMysekaiDirty} />
+        ) : isLyrics ? (
           <LyricsEditor ref={lyricsEditorRef} role={role} writeLocked={writesLocked} onDirtyChange={setLyricsDirty} />
         ) : isLyricsSourceReview && role === "admin" ? (
           <LyricsSourceReview ref={lyricsSourceReviewRef} writeLocked={writesLocked} />
