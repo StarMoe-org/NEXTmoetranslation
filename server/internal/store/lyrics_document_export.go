@@ -412,6 +412,9 @@ type lyricsDocumentExporter struct {
 	// editions are the translation editions of the converted detail, nil for
 	// the implicit main edition.
 	editions *lyricsDocumentExportEditions
+	// gameSources are the renditions whose Game side cites another revision
+	// than the document source, by rendition key.
+	gameSources map[string]LyricsDocumentSource
 }
 
 func (e *lyricsDocumentExporter) warn(code, rendition, side string, line int, message string) {
@@ -631,6 +634,9 @@ func (e *lyricsDocumentExporter) request(detail PublicLyricsV3DetailDocument) Ly
 	for index, rendition := range detail.Renditions {
 		var input LyricsDocumentRendition
 		input, translated[index] = e.rendition(rendition)
+		if gameSource, found := e.gameSources[rendition.Key]; found {
+			input.GameSource = &gameSource
+		}
 		request.Renditions = append(request.Renditions, input)
 	}
 	// The document credits are those of the first translated rendition, else
@@ -674,7 +680,9 @@ func (e *lyricsDocumentExporter) request(detail PublicLyricsV3DetailDocument) Ly
 }
 
 // source picks the Full text attribution of the first rendition (Game text
-// for a Game-only rendition) and warns about every other attributed revision.
+// for a Game-only rendition). The Game side of a rendition with Full and Game
+// that cites one other revision, with its relation, becomes the rendition's
+// gameSource; every other attributed revision gets a warning.
 func (e *lyricsDocumentExporter) source(detail PublicLyricsV3DetailDocument) PublicLyricsV3ComponentAttribution {
 	var chosen *PublicLyricsV3ComponentAttribution
 	for _, suffix := range []string{"/full_text", "/game_text", ""} {
@@ -700,19 +708,56 @@ func (e *lyricsDocumentExporter) source(detail PublicLyricsV3DetailDocument) Pub
 		e.warn(LyricsDocumentExportWarningSourceReencoded, "", "", -1, fmt.Sprintf(
 			"PUT attributes the %s source %s as %s %s", result.Provider, result.RevisionURL, parsed.provider, parsed.canonicalURL))
 	}
+	sameRevision := func(left, right PublicLyricsV3ComponentAttribution) bool {
+		return left.Provider == right.Provider && left.RevisionID == right.RevisionID &&
+			left.RevisionURL == right.RevisionURL && left.Title == right.Title
+	}
 	for _, rendition := range detail.Renditions {
+		prefix := "renditions/" + rendition.Key + "/"
+		gameComponent := func(attribution PublicLyricsV3ComponentAttribution) bool {
+			switch strings.TrimPrefix(attribution.Component, prefix) {
+			case "game_text", "game_performer_segmentation", "game_ruby", "relation":
+				return true
+			}
+			return false
+		}
+		var game *PublicLyricsV3ComponentAttribution
+		carried := rendition.Full != nil && rendition.Game != nil
+		for index, attribution := range rendition.Provenance {
+			if !gameComponent(attribution) {
+				continue
+			}
+			if game == nil {
+				game = &rendition.Provenance[index]
+			}
+			carried = carried && sameRevision(*game, attribution)
+		}
+		carried = carried && game != nil && !sameRevision(*game, result)
+		if carried {
+			if parsed, err := parseLyricsDocumentSourceURL(game.RevisionURL, game.Title); err != nil {
+				carried = false
+			} else if parsed.provider != game.Provider || parsed.canonicalURL != game.RevisionURL {
+				e.warn(LyricsDocumentExportWarningSourceReencoded, rendition.Key, "game", -1, fmt.Sprintf(
+					"PUT attributes the %s Game source %s as %s %s", game.Provider, game.RevisionURL, parsed.provider, parsed.canonicalURL))
+			}
+		}
+		if carried {
+			if e.gameSources == nil {
+				e.gameSources = map[string]LyricsDocumentSource{}
+			}
+			e.gameSources[rendition.Key] = LyricsDocumentSource{URL: game.RevisionURL, Title: game.Title}
+		}
 		differing := map[string][]string{}
 		var revisions []string
 		for _, attribution := range rendition.Provenance {
-			if attribution.Provider == result.Provider && attribution.RevisionID == result.RevisionID &&
-				attribution.RevisionURL == result.RevisionURL && attribution.Title == result.Title {
+			if sameRevision(attribution, result) || carried && gameComponent(attribution) {
 				continue
 			}
 			revision := fmt.Sprintf("%s %s", attribution.Provider, attribution.RevisionURL)
 			if differing[revision] == nil {
 				revisions = append(revisions, revision)
 			}
-			differing[revision] = append(differing[revision], strings.TrimPrefix(attribution.Component, "renditions/"+rendition.Key+"/"))
+			differing[revision] = append(differing[revision], strings.TrimPrefix(attribution.Component, prefix))
 		}
 		for _, revision := range revisions {
 			e.warn(LyricsDocumentExportWarningSourceDiffers, rendition.Key, "", -1, fmt.Sprintf(

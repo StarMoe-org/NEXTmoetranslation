@@ -99,6 +99,7 @@ curl -sS "$BASE/api/editor/v1/lyrics/document?musicId=<id>" -H "Authorization: B
 - 某个 rendition 公开的署名与 `PUT` 默认会给它的署名不同时，这个 rendition 带自己的 `translationCredits`。
 - 歌曲有多个译本时，`document` 带 `translationEditions`（默认译本在前）。各行的 `zh` 和署名属于默认译本；其他译本的译文在行的 `zhEditions` 里，署名在 rendition 的 `editionCredits` 里，写法见配方 12。只有隐式译本（key `main`，名称 `默认译本`）的歌不带这三个字段。
 - `source.url` 取第一个带 Full 文本署名的 rendition 的修订链接；没有 Full 文本署名时取 Game 文本的。
+- 同时有 Full 和 Game 的 rendition，如果 Game 面的署名（`game_text`、`game_performer_segmentation`、`game_ruby`）和 `relation` 都指向同一个与 `source.url` 不同的修订，这个修订导出为该 rendition 的 `gameSource`（4.3）。
 - `expectedRevision` 已填成 `PUT` 比对的值（4.2），不要改。
 
 `warnings` 总是数组，每项为 `{code, rendition?, side?, line?, message}`：`side` 为 `full` 或 `game`，`line` 是该面内从 0 开始的行号。`[]` 表示原样提交 `document` 后主站显示的内容不变；行 ID、`revision`、`updatedAt` 由 `PUT` 重新生成。
@@ -112,7 +113,7 @@ curl -sS "$BASE/api/editor/v1/lyrics/document?musicId=<id>" -H "Authorization: B
 | `source_missing` | 公开详情没有任何来源署名，`source.url` 为空 | 自己填 `source.url`，否则返回 `422 source_revision_required` |
 | `source_unsupported` | 署名的来源链接 `PUT` 不接受：站点不在 4.3 的列表里，或没有唯一的 `oldid` | 换成受支持的修订链接，否则返回 `422 source_revision_required` |
 | `source_url_reencoded` | `PUT` 会把来源链接规范化成另一种编码（`url.PathEscape`）。公开署名里链接的字面会变，指向的修订不变 | 无需处理 |
-| `source_differs` | 该 rendition 的部分内容署名的是另一个修订；`PUT` 把整首歌归到 `source.url` 这一个修订 | 提交后这部分内容的公开署名改为 `source.url`，原来的修订不再出现。必须保留那个署名时，不要用本路由提交 |
+| `source_differs` | 该 rendition 的部分内容署名的是另一个修订，而且没法写成 `gameSource`（例如 Full 面署名另一个修订，或 Game 面各项署名不同的修订）；`PUT` 把这部分归到 `source.url` | 提交后这部分内容的公开署名改为 `source.url`，原来的修订不再出现。必须保留那个署名时，不要用本路由提交 |
 | `rendition_inferred` | v1/v2 详情没有 rendition，按演唱者推断成 `sekai` 或 `vocaloid`，标签取缺省值 | 检查 `key`、`kind`、`label` |
 | `game_projection_not_ordered` | Game 投影没有按顺序选取 Full 行（或引用了不存在的行），导出为 `independent` 的 `gameLines`；发布后 Game 面不再是 Full 的精确投影 | 改 `zh` 时 `lines` 与 `gameLines` 都要改 |
 | `game_projection_differs` | Game 行与它投影的 Full 行在 ja、zh、en、段落、分段（含注音和演唱者）或尾随演唱者上不同，导出为 `independent`。发布后公开详情的 `relation` 不再是精确投影，各行内容不变 | 同上 |
@@ -179,7 +180,12 @@ curl -sS "$BASE/api/editor/v1/lyrics/document?musicId=<id>" -H "Authorization: B
   - `key`：匹配 `^[a-z0-9][a-z0-9._-]*$`，不重复。
   - `kind?`：`original|sekai|vocaloid|alternate`，缺省等于 `key`。
   - `label?`：缺省按 kind 取 `Original Version` / `SEKAI Version` / `VIRTUAL SINGER Version`；`alternate` 必须自带。
-  - 其余为 `performerIds?`、`game?`（缺省 `none`）、`lines[]`、`gameLines?`、`translationCredits?`、`editionCredits?`。
+  - 其余为 `performerIds?`、`game?`（缺省 `none`）、`gameSource?`、`lines[]`、`gameLines?`、`translationCredits?`、`editionCredits?`。
+  - `gameSource?`：`{url, title?}`，规则与 `source` 相同。Full 和 Game 出自不同页面时使用，例如完整歌词在 vocaloid.fandom、Game Size 在 Sekaipedia：`source.url` 填完整歌词的修订，`gameSource` 填 Game Size 的修订。
+    - 只在 `game` 为 `same`、`cut`、`independent` 时有效，否则得到 `field: "gameSource"` 的 issue；只有 Game 的 rendition 直接用 `source.url`。链接不合格返回 `422 source_revision_required`，详情以 `rendition "<key>" gameSource:` 开头。
+    - 公开详情里，这个 rendition 的 `relation`（Game 取哪些行、是否与 Full 相同）和 Game 面的文本、分段、注音署名 `gameSource`；Full 面和 `version` 仍署名 `source.url`。主站的来源列表按修订去重，两个修订各占一项。
+    - 与 `source` 是同一个修订时等于没写，导出也不会带它（`TestPublishLyricsDocumentGameSourceAttributesTheGameSideAndRoundTrips`、`TestPublishLyricsDocumentGameSourceNamingTheDocumentSourceAddsNothing`、`TestPublishLyricsDocumentGameSourceNeedsAFullAndAGameSide`）。
+    - 每个修订占一个来源身份，整份文档最多 16 个，超出时得到 `field: "gameSource"` 的 issue。
 - 每行的字段：
   - `ja`（必填）：单行，不超过 8192 字节。
   - `zh?`：默认译本的译文，单行，不超过 16384 字节。全曲至少要有一行 `zh`。
@@ -230,9 +236,10 @@ GET 返回 `404` 的歌，按下一节的基准文档从头写请求，`expected
 {against, changed, truncated?,
  source?: {before: {url, title} | null, after: {url, title}},
  translationEditions?: {before: [{key, label}], after: [{key, label}]},
- renditionsAdded?, renditionsRemoved?: [{key, game, lines, gameLines}],
+ renditionsAdded?, renditionsRemoved?: [{key, game, gameSource?: {url, title}, lines, gameLines}],
  renditions?: [{key,
                 kind?, label?, game?: {before, after},
+                gameSource?: {before: {url, title} | null, after: {url, title} | null},
                 translationCredits?: {before: {translation?, proofreading?}, after: {…}},
                 editionCredits?: {"<译本 key>": {before: {translation?, proofreading?}, after: {…}}},
                 sides?: [{side: "full"|"game", linesBefore, linesAfter, addedCount, removedCount, changedCount,
@@ -280,7 +287,7 @@ GET 返回 `404` 的歌，按下一节的基准文档从头写请求，`expected
 
 1. 列出这次想改的项，例如“sekai 第 1 行只改 `zh`”。
 2. 要求 `changed: true`，且 `renditions[]` 只含改动过的 rendition；每个 side 的 `addedCount` / `removedCount` / `changedCount` 与预期相同；每条 `fields` 都在预期之内；前后文本逐字核对。
-3. 没改来源就不应出现 `source`，没改署名就不应出现 `translationCredits`，没动其他译本就不应出现 `translationEditions`、`editionCredits` 和 `zhEditions`。
+3. 没改来源就不应出现 `source` 和 `gameSource`，没改署名就不应出现 `translationCredits`，没动其他译本就不应出现 `translationEditions`、`editionCredits` 和 `zhEditions`。
 4. 多出来的项通常说明整行替换时漏抄了字段：
    - 删掉了 `"performerIds": []`，会多出 `performers`；
    - 漏了 `inGame`，会多出 `inGame`；

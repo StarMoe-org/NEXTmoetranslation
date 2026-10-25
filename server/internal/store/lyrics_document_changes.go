@@ -53,11 +53,19 @@ type LyricsDocumentSourceChange struct {
 	After  LyricsDocumentSource  `json:"after"`
 }
 
+// LyricsDocumentGameSourceChange names a rendition's Game source on both
+// sides; null is a Game side attributed to the document source.
+type LyricsDocumentGameSourceChange struct {
+	Before *LyricsDocumentSource `json:"before"`
+	After  *LyricsDocumentSource `json:"after"`
+}
+
 type LyricsDocumentRenditionSummary struct {
-	Key       string `json:"key"`
-	Game      string `json:"game"`
-	Lines     int    `json:"lines"`
-	GameLines int    `json:"gameLines"`
+	Key        string                `json:"key"`
+	Game       string                `json:"game"`
+	GameSource *LyricsDocumentSource `json:"gameSource,omitempty"`
+	Lines      int                   `json:"lines"`
+	GameLines  int                   `json:"gameLines"`
 }
 
 type LyricsDocumentTextChange struct {
@@ -79,6 +87,7 @@ type LyricsDocumentRenditionChange struct {
 	Kind               *LyricsDocumentTextChange              `json:"kind,omitempty"`
 	Label              *LyricsDocumentTextChange              `json:"label,omitempty"`
 	Game               *LyricsDocumentTextChange              `json:"game,omitempty"`
+	GameSource         *LyricsDocumentGameSourceChange        `json:"gameSource,omitempty"`
 	TranslationCredits *LyricsDocumentCreditsChange           `json:"translationCredits,omitempty"`
 	EditionCredits     map[string]LyricsDocumentCreditsChange `json:"editionCredits,omitempty"`
 	Sides              []LyricsDocumentSideChange             `json:"sides,omitempty"`
@@ -192,7 +201,7 @@ func lyricsDocumentChangesBetween(against string, before *LyricsDocumentRequest,
 		afterKeys[rendition.Key] = true
 		index, found := beforeByKey[rendition.Key]
 		if !found {
-			changes.RenditionsAdded = append(changes.RenditionsAdded, lyricsDocumentRenditionSummaryOf(rendition))
+			changes.RenditionsAdded = append(changes.RenditionsAdded, lyricsDocumentRenditionSummaryOf(afterRequest, rendition))
 			continue
 		}
 		if change, changed := lyricsDocumentRenditionChanges(beforeRequest, beforeRequest.Renditions[index], afterRequest, rendition, budget); changed {
@@ -201,7 +210,7 @@ func lyricsDocumentChangesBetween(against string, before *LyricsDocumentRequest,
 	}
 	for _, rendition := range beforeRequest.Renditions {
 		if !afterKeys[rendition.Key] {
-			changes.RenditionsRemoved = append(changes.RenditionsRemoved, lyricsDocumentRenditionSummaryOf(rendition))
+			changes.RenditionsRemoved = append(changes.RenditionsRemoved, lyricsDocumentRenditionSummaryOf(beforeRequest, rendition))
 		}
 	}
 	sort.Slice(changes.RenditionsAdded, func(i, j int) bool { return changes.RenditionsAdded[i].Key < changes.RenditionsAdded[j].Key })
@@ -270,9 +279,10 @@ func (b *lyricsDocumentChangeBudget) take() bool {
 	return true
 }
 
-func lyricsDocumentRenditionSummaryOf(rendition LyricsDocumentRendition) LyricsDocumentRenditionSummary {
+func lyricsDocumentRenditionSummaryOf(document LyricsDocumentRequest, rendition LyricsDocumentRendition) LyricsDocumentRenditionSummary {
 	return LyricsDocumentRenditionSummary{
-		Key: rendition.Key, Game: rendition.Game, Lines: len(rendition.Lines), GameLines: len(rendition.GameLines),
+		Key: rendition.Key, Game: rendition.Game, GameSource: lyricsDocumentEffectiveGameSource(document, rendition),
+		Lines: len(rendition.Lines), GameLines: len(rendition.GameLines),
 	}
 }
 
@@ -284,6 +294,19 @@ func lyricsDocumentCanonicalSource(source LyricsDocumentSource) LyricsDocumentSo
 		source.URL = parsed.canonicalURL
 	}
 	return source
+}
+
+// lyricsDocumentEffectiveGameSource is the rendition's canonical gameSource,
+// nil when it has none or names the document source.
+func lyricsDocumentEffectiveGameSource(document LyricsDocumentRequest, rendition LyricsDocumentRendition) *LyricsDocumentSource {
+	if rendition.GameSource == nil {
+		return nil
+	}
+	source := lyricsDocumentCanonicalSource(*rendition.GameSource)
+	if source == lyricsDocumentCanonicalSource(document.Source) {
+		return nil
+	}
+	return &source
 }
 
 // lyricsDocumentEffectiveCredits are the credits PUT publishes the rendition
@@ -330,6 +353,10 @@ func lyricsDocumentRenditionChanges(beforeDocument LyricsDocumentRequest, before
 		Label: lyricsDocumentTextChangeOf(before.Label, after.Label),
 		Game:  lyricsDocumentTextChangeOf(before.Game, after.Game),
 	}
+	if beforeSource, afterSource := lyricsDocumentEffectiveGameSource(beforeDocument, before),
+		lyricsDocumentEffectiveGameSource(afterDocument, after); !reflect.DeepEqual(beforeSource, afterSource) {
+		change.GameSource = &LyricsDocumentGameSourceChange{Before: beforeSource, After: afterSource}
+	}
 	if beforeCredits, afterCredits := lyricsDocumentEffectiveCredits(beforeDocument, before),
 		lyricsDocumentEffectiveCredits(afterDocument, after); beforeCredits != afterCredits {
 		change.TranslationCredits = &LyricsDocumentCreditsChange{Before: beforeCredits, After: afterCredits}
@@ -355,7 +382,7 @@ func lyricsDocumentRenditionChanges(beforeDocument LyricsDocumentRequest, before
 			change.Sides = append(change.Sides, sideChange)
 		}
 	}
-	changed := change.Kind != nil || change.Label != nil || change.Game != nil || change.TranslationCredits != nil ||
+	changed := change.Kind != nil || change.Label != nil || change.Game != nil || change.GameSource != nil || change.TranslationCredits != nil ||
 		len(change.EditionCredits) > 0 || len(change.Sides) > 0
 	return change, changed
 }

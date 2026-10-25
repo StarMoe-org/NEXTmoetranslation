@@ -1,5 +1,12 @@
 # 更新日志
 
+## 歌词文档：Full 和 Game 可以引用不同来源（2026-10-25）
+
+- 整首歌词文档 `PUT /api/editor/v1/lyrics/document` 以前只能写一个 `source.url`，整首歌都署名这一个修订。完整歌词和 Game Size 出自不同 wiki 的歌（例如 Palette：完整歌词只在 vocaloid.fandom，Game Size 在 Sekaipedia 和 projectsekai.fandom），只能二选一，站上不是缺完整版就是缺游戏版。
+- rendition 新增可选字段 `gameSource: {url, title?}`，规则与 `source` 相同，只在 `game` 为 `same`、`cut`、`independent` 时有效。公开详情里这个 rendition 的 `relation` 和 Game 面的文本、分段、注音署名 `gameSource`，Full 面和 `version` 仍署名 `source.url`；两个修订各存一条来源记录。与 `source` 相同的 `gameSource` 等于没写（`TestPublishLyricsDocumentGameSourceAttributesTheGameSideAndRoundTrips`、`TestPublishLyricsDocumentGameSourceNamingTheDocumentSourceAddsNothing`）。用在 `none`、`only` 上得到 `field: "gameSource"` 的 issue，链接不合格返回 `422 source_revision_required`（`TestPublishLyricsDocumentGameSourceNeedsAFullAndAGameSide`）。
+- `GET` 导出时，Game 面和 `relation` 都署名同一个其他修订的 rendition 会带上 `gameSource`，原样提交不产生改动，也不再报 `source_differs`。dryRun 的 `changes` 在 rendition 下用 `gameSource: {before, after}` 报告来源的增删改，新增或删除的 rendition 摘要也带 `gameSource`（`TestPublishLyricsDocumentChangesNameAnAddedGameSource`）。
+- 公开详情格式不变，主站歌词页按修订去重列出来源，两个修订各占一项，前端不用改。部署不需要迁移。
+
 ## 热修复：日文剧本最后改读剧情库（2026-10-16）
 
 - 资源站在区域对话 934 的 JP 路径下放的是韩文剧本，2716、2718、2722 放的是繁中剧本。上一条热修复之后这些文件会被拒收，但区域对话只有资源站这一个源（`assets.unipjsk.com/startapp` 没有区域对话），所以一直重抓不到日文。
