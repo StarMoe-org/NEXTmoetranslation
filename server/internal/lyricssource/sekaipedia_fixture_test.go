@@ -225,6 +225,34 @@ func sekaipediaFixturePageContent(t *testing.T, title string) string {
 	return page.content
 }
 
+func semanticSekaipediaRevisionResponse(
+	t *testing.T,
+	authority FixedIndex,
+	content string,
+	pageInfo map[string]any,
+) []byte {
+	t.Helper()
+	page := map[string]any{
+		"pageid": authority.PageID, "ns": 0, "title": authority.Title, "categories": []any{},
+		"revisions": []any{map[string]any{
+			"revid": authority.RevisionID, "timestamp": authority.RevisionTimestamp, "sha1": authority.SHA1,
+			"slots": map[string]any{"main": map[string]any{
+				"contentmodel": "wikitext", "contentformat": "text/x-wiki", "content": content,
+			}},
+		}},
+	}
+	for key, value := range pageInfo {
+		page[key] = value
+	}
+	body, err := json.Marshal(map[string]any{
+		"batchcomplete": true, "query": map[string]any{"pages": []any{page}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
 func TestSekaipediaFixtureDigestsAreFixed(t *testing.T) {
 	for path, want := range map[string]string{
 		"testdata/sekaipedia-list-335193.json":      "c21e31c36f8e7d7534af1617d5b737a1662decd40c34c9e7d4aab71b103ef8dd",

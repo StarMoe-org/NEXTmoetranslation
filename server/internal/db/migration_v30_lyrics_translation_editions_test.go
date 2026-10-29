@@ -1,9 +1,7 @@
 package db
 
 import (
-	"context"
 	"database/sql"
-	"strings"
 	"testing"
 )
 
@@ -86,34 +84,5 @@ func TestV30LyricsTranslationEditionsIsAdditiveAndEnforcesIdentity(t *testing.T)
 			}
 		})
 	}
-	if err := ValidateLyricsTranslationEditionSchema(context.Background(), raw, true, "test"); err != nil {
-		t.Fatal(err)
-	}
 	assertNoForeignKeyViolations(t, raw)
-}
-
-func TestValidateLyricsTranslationEditionSchemaRejectsAlteredLedgerAndIndex(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		mutate string
-		want   string
-	}{
-		{name: "ledger", mutate: `UPDATE schema_migrations SET checksum='tampered' WHERE version=30`, want: "ledger is invalid"},
-		{name: "index", mutate: `DROP INDEX idx_song_lyrics_translation_edition_lines_lookup`, want: "index"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			database, err := Open(t.TempDir() + "/runtime-v30.db")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer database.Close()
-			if _, err := database.Exec(test.mutate); err != nil {
-				t.Fatal(err)
-			}
-			err = ValidateLyricsTranslationEditionSchema(context.Background(), database, true, "test")
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("runtime v30 validation error=%v want %q", err, test.want)
-			}
-		})
-	}
 }

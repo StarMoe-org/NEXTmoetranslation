@@ -413,7 +413,7 @@ func compileLyricsDocument(request LyricsDocumentRequest, source lyricsDocumentS
 			addIssue(key, side, -1, field, message)
 			valid = false
 		}
-		if !publicV3RenditionKeyPattern.MatchString(key) || len("fixed-"+key) > 128 {
+		if !isPublicV3RenditionKey(key) || len("fixed-"+key) > 128 {
 			renditionIssue("", "key", fmt.Sprintf("key %q must match ^[a-z0-9][a-z0-9._-]*$ and be at most 122 bytes", key))
 		} else if seenKeys[key] {
 			renditionIssue("", "key", "rendition key is repeated")

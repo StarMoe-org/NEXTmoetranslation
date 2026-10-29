@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/reearth/ygo/crdt"
-	_ "modernc.org/sqlite"
 	"moesekai/server/internal/db"
+	_ "moesekai/server/internal/sqlitedriver"
 )
 
 const persistenceTestSchema = `

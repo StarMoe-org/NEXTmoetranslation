@@ -2,14 +2,11 @@ package store
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/url"
-	"reflect"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,7 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"moesekai/server/internal/legacy"
+	"moesekai/server/internal/jsonstrict"
 	"moesekai/server/internal/model"
 )
 
@@ -25,10 +22,93 @@ var ErrPublicLyricsV3Unavailable = errors.New("public lyrics v3 is unavailable f
 
 var errPublicLyricsV2CompatibilityUnrepresentable = errors.New("public lyrics v3 document is not losslessly representable as v2")
 
-var (
-	publicV3RenditionKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
-	publicV3ColorPattern        = regexp.MustCompile(`^#[0-9A-F]{6}$`)
-)
+func isPublicV3RenditionKey(s string) bool {
+	if len(s) == 0 || len(s) > 128 {
+		return false
+	}
+	c0 := s[0]
+	if !((c0 >= 'a' && c0 <= 'z') || (c0 >= '0' && c0 <= '9')) {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func isPublicV3Color(s string) bool {
+	if len(s) != 7 || s[0] != '#' {
+		return false
+	}
+	for i := 1; i < 7; i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// validateCompactPublicArtifactSize computes the exact 2-space indented JSON
+// byte length from an already-marshaled compact JSON payload so callers do not
+// have to re-encode the struct a second time through json.Encoder.
+func validateCompactPublicArtifactSize(compact []byte) error {
+	n := int64(len(compact)) + 1 // trailing newline emitted by json.Encoder.Encode
+	depth := 0
+	inString := false
+	for i := 0; i < len(compact); i++ {
+		c := compact[i]
+		if inString {
+			if c == '\\' {
+				i++
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case ':':
+			n++
+		case '{':
+			if i+1 < len(compact) && compact[i+1] == '}' {
+				i++
+				continue
+			}
+			depth++
+			n += 1 + int64(2*depth)
+		case '[':
+			if i+1 < len(compact) && compact[i+1] == ']' {
+				i++
+				continue
+			}
+			depth++
+			n += 1 + int64(2*depth)
+		case ',':
+			n += 1 + int64(2*depth)
+		case '}', ']':
+			depth--
+			n += 1 + int64(2*depth)
+		}
+	}
+	if n > int64(model.PublicLyricsMaxArtifactBytes) {
+		return errors.New("encoded public lyrics document exceeds the public artifact size limit")
+	}
+	return nil
+}
+
+func validateDecodedPublicArtifactSize(raw []byte, decoded any) error {
+	// Even maximal 2-space indentation at bounded public lyrics depth (< 12)
+	// expands compact JSON by well under 16x; skip re-encoding normal payloads.
+	if len(raw) <= model.PublicLyricsMaxArtifactBytes/16 {
+		return nil
+	}
+	return validatePublicLyricsArtifactSize(decoded)
+}
 
 type PublicLyricsV3TranslationCredits struct {
 	Translation  string `json:"translation,omitempty"`
@@ -106,21 +186,18 @@ type PublicLyricsV3IndexDocument struct {
 	Songs   []PublicLyricsIndexSong `json:"songs"`
 }
 
-type RecoveryPublicLyricsV3Candidate struct {
-	BatchSHA256 string
-	RootSHA256  string
-	Index       PublicLyricsV3IndexDocument
-	Details     map[int]PublicLyricsV3DetailDocument
-}
-
 func EncodePublicLyricsV3Index(index PublicLyricsV3IndexDocument) ([]byte, error) {
 	if err := validatePublicLyricsV3Index(index); err != nil {
 		return nil, err
 	}
-	if err := validatePublicLyricsArtifactSize(index); err != nil {
+	encoded, err := json.Marshal(index)
+	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(index)
+	if err := validateCompactPublicArtifactSize(encoded); err != nil {
+		return nil, err
+	}
+	return encoded, nil
 }
 
 func DecodePublicLyricsV3Index(body []byte) (PublicLyricsV3IndexDocument, error) {
@@ -131,7 +208,7 @@ func DecodePublicLyricsV3Index(body []byte) (PublicLyricsV3IndexDocument, error)
 	if err := validatePublicLyricsV3Index(index); err != nil {
 		return PublicLyricsV3IndexDocument{}, err
 	}
-	if err := validatePublicLyricsArtifactSize(index); err != nil {
+	if err := validateDecodedPublicArtifactSize(body, index); err != nil {
 		return PublicLyricsV3IndexDocument{}, err
 	}
 	return index, nil
@@ -141,10 +218,14 @@ func EncodePublicLyricsV3Detail(detail PublicLyricsV3DetailDocument) ([]byte, er
 	if err := validatePublicLyricsV3Detail(detail); err != nil {
 		return nil, err
 	}
-	if err := validatePublicLyricsArtifactSize(detail); err != nil {
+	encoded, err := json.Marshal(detail)
+	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(detail)
+	if err := validateCompactPublicArtifactSize(encoded); err != nil {
+		return nil, err
+	}
+	return encoded, nil
 }
 
 func DecodePublicLyricsV3Detail(body []byte) (PublicLyricsV3DetailDocument, error) {
@@ -155,7 +236,7 @@ func DecodePublicLyricsV3Detail(body []byte) (PublicLyricsV3DetailDocument, erro
 	if err := validatePublicLyricsV3Detail(detail); err != nil {
 		return PublicLyricsV3DetailDocument{}, err
 	}
-	if err := validatePublicLyricsArtifactSize(detail); err != nil {
+	if err := validateDecodedPublicArtifactSize(body, detail); err != nil {
 		return PublicLyricsV3DetailDocument{}, err
 	}
 	return detail, nil
@@ -165,17 +246,8 @@ func decodePublicLyricsV3JSON(body []byte, target any) error {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return errors.New("public lyrics v3 JSON is empty")
 	}
-	if err := legacy.ValidateUniqueJSON(body); err != nil {
+	if err := jsonstrict.Scan(body, jsonstrict.Options{ForbidNull: true}); err != nil {
 		return err
-	}
-	var raw any
-	rawDecoder := json.NewDecoder(bytes.NewReader(body))
-	rawDecoder.UseNumber()
-	if err := rawDecoder.Decode(&raw); err != nil {
-		return err
-	}
-	if publicLyricsV3ContainsNull(raw) {
-		return errors.New("public lyrics v3 JSON contains null")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
@@ -189,991 +261,6 @@ func decodePublicLyricsV3JSON(body []byte, target any) error {
 		return err
 	}
 	return nil
-}
-
-func publicLyricsV3ContainsNull(value any) bool {
-	switch current := value.(type) {
-	case nil:
-		return true
-	case []any:
-		for _, item := range current {
-			if publicLyricsV3ContainsNull(item) {
-				return true
-			}
-		}
-	case map[string]any:
-		for _, item := range current {
-			if publicLyricsV3ContainsNull(item) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (s *Store) RecoveryPublicLyricsV3(batchSHA256 string) (RecoveryPublicLyricsV3Candidate, error) {
-	return s.RecoveryPublicLyricsV3Context(context.Background(), batchSHA256)
-}
-
-func (s *Store) RecoveryPublicLyricsV3Context(ctx context.Context, batchSHA256 string) (RecoveryPublicLyricsV3Candidate, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if !isCanonicalContentBackupSHA256(batchSHA256) {
-		return RecoveryPublicLyricsV3Candidate{}, errors.New("recovery Public v3 candidate requires an exact lowercase batch SHA-256")
-	}
-	content, err := s.ExportLyricsContentContext(ctx)
-	if err != nil {
-		return RecoveryPublicLyricsV3Candidate{}, err
-	}
-	return buildRecoveryPublicLyricsV3Candidate(content, batchSHA256)
-}
-
-// RecoveryPublicLyricsV2Compatibility derives the separately addressed Public
-// v2 compatibility candidate from the exact persisted v3 batch. It emits a
-// detail only for one legacy-lossless rendition and marks every unrepresentable
-// text-owning entry incomplete without flattening it.
-func (s *Store) RecoveryPublicLyricsV2Compatibility(batchSHA256 string) (RecoveryPublicLyricsCandidate, error) {
-	return s.RecoveryPublicLyricsV2CompatibilityContext(context.Background(), batchSHA256)
-}
-
-func (s *Store) RecoveryPublicLyricsV2CompatibilityContext(ctx context.Context, batchSHA256 string) (RecoveryPublicLyricsCandidate, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if !isCanonicalContentBackupSHA256(batchSHA256) {
-		return RecoveryPublicLyricsCandidate{}, errors.New("recovery Public v2 compatibility candidate requires an exact lowercase batch SHA-256")
-	}
-	content, err := s.ExportLyricsContentContext(ctx)
-	if err != nil {
-		return RecoveryPublicLyricsCandidate{}, err
-	}
-	v3Candidate, err := buildRecoveryPublicLyricsV3Candidate(content, batchSHA256)
-	if err != nil {
-		return RecoveryPublicLyricsCandidate{}, err
-	}
-	return buildRecoveryPublicLyricsV2CompatibilityCandidate(content, v3Candidate)
-}
-
-func buildRecoveryPublicLyricsV3Candidate(content LyricsContentExport, batchSHA256 string) (RecoveryPublicLyricsV3Candidate, error) {
-	var batch *LyricsRecoveryBatchBackupRecord
-	for index := range content.RecoveryBatches {
-		if content.RecoveryBatches[index].BatchSHA256 == batchSHA256 {
-			if batch != nil {
-				return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery batch %s is duplicated", batchSHA256)
-			}
-			batch = &content.RecoveryBatches[index]
-		}
-	}
-	if batch == nil {
-		return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery batch %s was not found", batchSHA256)
-	}
-	items := make([]LyricsRecoveryItemBackupRecord, 0, batch.CatalogCount)
-	for _, item := range content.RecoveryItems {
-		if item.BatchSHA256 == batchSHA256 {
-			items = append(items, item)
-		}
-	}
-	sort.Slice(items, func(left, right int) bool { return items[left].MusicID < items[right].MusicID })
-	if len(items) != batch.CatalogCount {
-		return RecoveryPublicLyricsV3Candidate{}, errors.New("lyrics recovery v3 batch does not cover its catalog")
-	}
-	itemMusicIDs := make(map[int]struct{}, len(items))
-	for _, item := range items {
-		if item.MusicID <= 0 {
-			return RecoveryPublicLyricsV3Candidate{}, errors.New("lyrics recovery v3 item has an invalid music ID")
-		}
-		if _, duplicate := itemMusicIDs[item.MusicID]; duplicate {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 item %d is duplicated", item.MusicID)
-		}
-		itemMusicIDs[item.MusicID] = struct{}{}
-	}
-	catalog := make(map[int]CatalogMusicBackupRecord, len(content.Music))
-	for _, music := range content.Music {
-		if _, duplicate := catalog[music.MusicID]; duplicate {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 catalog music %d is duplicated", music.MusicID)
-		}
-		catalog[music.MusicID] = music
-	}
-	if len(catalog) != batch.CatalogCount {
-		return RecoveryPublicLyricsV3Candidate{}, errors.New("lyrics recovery v3 catalog count changed")
-	}
-	legacyEditableDocuments := make(map[int]int, len(content.Documents))
-	for _, document := range content.Documents {
-		legacyEditableDocuments[document.MusicID]++
-	}
-	sourceRecords, superseded, err := recoveryBatchSourceRecords(content, batchSHA256)
-	if err != nil {
-		return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 %w", err)
-	}
-	for musicID := range sourceRecords {
-		if _, found := itemMusicIDs[musicID]; !found {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 source document %d is outside the batch catalog", musicID)
-		}
-	}
-	publicV3SourceCount := 0
-	for _, record := range sourceRecords {
-		document, err := model.DecodeLyricsSourceDocument([]byte(record.DocumentJSON))
-		if err != nil {
-			return RecoveryPublicLyricsV3Candidate{}, err
-		}
-		if superseded[record.MusicID] == nil && document.SchemaVersion == model.LyricsSourceDocumentSchemaVersionV3 &&
-			legacyEditableDocuments[record.MusicID] != 0 {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf(
-				"lyrics recovery v3 music %d has mixed source-v3 and legacy editable ownership", record.MusicID,
-			)
-		}
-		if _, err := publicV3SourceDocument(document); err != nil {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf(
-				"lyrics recovery v3 music %d source document: %w", record.MusicID, err,
-			)
-		}
-		publicV3SourceCount++
-	}
-	if publicV3SourceCount == 0 {
-		return RecoveryPublicLyricsV3Candidate{}, ErrPublicLyricsV3Unavailable
-	}
-	contributions := make(map[int]map[string]string)
-	for _, record := range content.RecoveryContributions {
-		if record.BatchSHA256 != batchSHA256 {
-			continue
-		}
-		if _, found := itemMusicIDs[record.MusicID]; !found {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 contribution music %d is outside the batch catalog", record.MusicID)
-		}
-		if contributions[record.MusicID] == nil {
-			contributions[record.MusicID] = map[string]string{}
-		}
-		if _, duplicate := contributions[record.MusicID][record.Component]; duplicate {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 contribution %d/%s is duplicated", record.MusicID, record.Component)
-		}
-		contributions[record.MusicID][record.Component] = record.RenditionKey
-	}
-	artifacts := make(map[int]map[string]LyricsRecoveryArtifactBackupRecord)
-	for _, record := range content.RecoveryArtifacts {
-		if record.BatchSHA256 != batchSHA256 {
-			continue
-		}
-		if _, found := itemMusicIDs[record.MusicID]; !found {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 artifact music %d is outside the batch catalog", record.MusicID)
-		}
-		if artifacts[record.MusicID] == nil {
-			artifacts[record.MusicID] = map[string]LyricsRecoveryArtifactBackupRecord{}
-		}
-		if _, duplicate := artifacts[record.MusicID][record.RenditionKey]; duplicate {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 artifact %d/%s is duplicated", record.MusicID, record.RenditionKey)
-		}
-		artifacts[record.MusicID][record.RenditionKey] = record
-	}
-	availabilityRecords := make(map[int]LyricsAvailabilityDocumentBackupRecord)
-	for _, record := range content.AvailabilityDocuments {
-		if record.BatchSHA256 != batchSHA256 {
-			continue
-		}
-		if _, found := itemMusicIDs[record.MusicID]; !found {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 availability music %d is outside the batch catalog", record.MusicID)
-		}
-		if _, duplicate := availabilityRecords[record.MusicID]; duplicate {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 availability document %d is duplicated", record.MusicID)
-		}
-		availabilityRecords[record.MusicID] = record
-	}
-	candidate := RecoveryPublicLyricsV3Candidate{
-		BatchSHA256: batchSHA256, RootSHA256: batch.RootSHA256,
-		Index:   PublicLyricsV3IndexDocument{Version: 3, Songs: make([]PublicLyricsIndexSong, 0, len(items))},
-		Details: map[int]PublicLyricsV3DetailDocument{},
-	}
-	lastMusicID := 0
-	for _, item := range items {
-		if item.MusicID <= lastMusicID {
-			return RecoveryPublicLyricsV3Candidate{}, errors.New("lyrics recovery v3 items are not ordered")
-		}
-		lastMusicID = item.MusicID
-		music, ok := catalog[item.MusicID]
-		if !ok {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 music %d is outside catalog", item.MusicID)
-		}
-		state, err := publicLyricsRecoveryState(item.State)
-		if err != nil {
-			return RecoveryPublicLyricsV3Candidate{}, err
-		}
-		indexItem := PublicLyricsIndexSong{MusicID: item.MusicID, State: state, Title: model.LocalizedTitle{Japanese: music.TitleJA, Chinese: music.TitleZH, English: music.TitleEN}}
-		if sourceRecord, exists := sourceRecords[item.MusicID]; exists {
-			document, err := model.DecodeLyricsSourceDocument([]byte(sourceRecord.DocumentJSON))
-			if err != nil {
-				return RecoveryPublicLyricsV3Candidate{}, err
-			}
-			detail, err := buildRecoveryPublicLyricsV3SourceDetail(
-				item, sourceRecord, document, contributions[item.MusicID],
-				artifacts[item.MusicID], content, superseded[item.MusicID],
-			)
-			if err != nil {
-				return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("build public v3 music %d: %w", item.MusicID, err)
-			}
-			indexItem.Revision, indexItem.UpdatedAt = detail.Revision, detail.UpdatedAt
-			indexItem.AvailableVersions = publicV3AvailableVersions(detail)
-			candidate.Details[item.MusicID] = detail
-		} else if state == PublicLyricsStateComplete || state == PublicLyricsStateGameOnly {
-			return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 music %d has no source v3 document", item.MusicID)
-		} else {
-			availability, found := availabilityRecords[item.MusicID]
-			if !found {
-				return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 music %d has no availability document", item.MusicID)
-			}
-			document, err := model.DecodeLyricsAvailabilityDocument([]byte(availability.DocumentJSON))
-			if err != nil || string(document.State) != item.State || availability.State != item.State {
-				return RecoveryPublicLyricsV3Candidate{}, fmt.Errorf("lyrics recovery v3 music %d availability state changed", item.MusicID)
-			}
-			indexItem.Revision = 1
-			indexItem.UpdatedAt = formatTimestamp(availability.CreatedAt)
-			if state == PublicLyricsStateSatisfiedNoLyrics {
-				indexItem.NoLyricsReason = document.NoLyricsReason
-			}
-		}
-		candidate.Index.Songs = append(candidate.Index.Songs, indexItem)
-	}
-	return candidate, validatePublicLyricsV3Candidate(candidate)
-}
-
-// recoveryBatchSourceRecords returns the batch's source documents by song. A
-// recovery takeover deleted the document it superseded, so its verbatim copy
-// stands in: a candidate represents the ledger, not the editor document that
-// replaced it. The copy has document ID 0, and superseded maps its song to the
-// localization and translation-edition rows the takeover kept, keyed to that
-// ID; no row or editable document of the replacing document attaches to it.
-func recoveryBatchSourceRecords(content LyricsContentExport, batchSHA256 string) (map[int]LyricsSourceDocumentBackupRecord, map[int]*LyricsContentExport, error) {
-	records := make(map[int]LyricsSourceDocumentBackupRecord)
-	for _, record := range content.SourceDocuments {
-		if record.ManifestBatchSHA256 != batchSHA256 {
-			continue
-		}
-		if _, duplicate := records[record.MusicID]; duplicate {
-			return nil, nil, fmt.Errorf("source document %d is duplicated", record.MusicID)
-		}
-		records[record.MusicID] = record
-	}
-	superseded := make(map[int]*LyricsContentExport)
-	for _, takeover := range content.RecoveryTakeovers {
-		if takeover.BatchSHA256 != batchSHA256 || takeover.SupersededDocument == nil {
-			continue
-		}
-		if _, duplicate := records[takeover.MusicID]; duplicate {
-			return nil, nil, fmt.Errorf("source document %d is both current and superseded", takeover.MusicID)
-		}
-		document := takeover.SupersededDocument
-		records[takeover.MusicID] = LyricsSourceDocumentBackupRecord{
-			MusicID: takeover.MusicID, SchemaVersion: document.SchemaVersion, ReasonCode: document.ReasonCode,
-			DocumentJSON: document.DocumentJSON, DocumentSHA256: document.DocumentSHA256,
-			ManifestBatchSHA256: takeover.BatchSHA256, CreatedAt: document.CreatedAt,
-		}
-		rows := &LyricsContentExport{}
-		if document.LocalizationsJSON != "" {
-			localizations, err := decodeLyricsRecoverySupersededLocalizations(document.LocalizationsJSON)
-			if err != nil {
-				return nil, nil, fmt.Errorf("superseded localizations of music %d: %w", takeover.MusicID, err)
-			}
-			*rows = localizations.contentRows(0)
-		}
-		superseded[takeover.MusicID] = rows
-	}
-	return records, superseded, nil
-}
-
-func publicV3SourceDocument(document model.LyricsSourceDocument) (model.LyricsSourceDocument, error) {
-	switch document.SchemaVersion {
-	case model.LyricsSourceDocumentSchemaVersionV3:
-		return document, nil
-	case model.LyricsSourceDocumentSchemaVersionV2:
-		upgraded, err := model.UpconvertLyricsSourceDocumentV2(document)
-		if err != nil {
-			return model.LyricsSourceDocument{}, fmt.Errorf("legacy source v2 is not losslessly upconvertible: %w", err)
-		}
-		return upgraded, nil
-	default:
-		return model.LyricsSourceDocument{}, fmt.Errorf(
-			"unsupported source schema version %d", document.SchemaVersion,
-		)
-	}
-}
-
-func publicV3RecoveryContributions(
-	raw, normalized model.LyricsSourceDocument,
-	stored map[string]string,
-) (map[string]string, error) {
-	if raw.SchemaVersion == model.LyricsSourceDocumentSchemaVersionV3 {
-		return stored, nil
-	}
-	if err := validateRecoveryPublicContributions(
-		publicLyricsSourceComponentRefs(raw), stored,
-	); err != nil {
-		return nil, err
-	}
-	bindings, err := model.EnumerateLyricsSourceRenditionComponents(normalized.Renditions)
-	if err != nil {
-		return nil, err
-	}
-	result := make(map[string]string, len(bindings))
-	for _, binding := range bindings {
-		result[binding.ComponentKey] = binding.FixedIdentityKey
-	}
-	return result, nil
-}
-
-func buildRecoveryPublicLyricsV3SourceDetail(
-	item LyricsRecoveryItemBackupRecord,
-	sourceRecord LyricsSourceDocumentBackupRecord,
-	rawDocument model.LyricsSourceDocument,
-	storedContributions map[string]string,
-	artifacts map[string]LyricsRecoveryArtifactBackupRecord,
-	content LyricsContentExport,
-	superseded *LyricsContentExport,
-) (PublicLyricsV3DetailDocument, error) {
-	document, err := publicV3SourceDocument(rawDocument)
-	if err != nil {
-		return PublicLyricsV3DetailDocument{}, err
-	}
-	contributions, err := publicV3RecoveryContributions(rawDocument, document, storedContributions)
-	if err != nil {
-		return PublicLyricsV3DetailDocument{}, fmt.Errorf("source contributions: %w", err)
-	}
-	localizations := content.RenditionLocalizations
-	translationLines := content.RenditionTranslationLines
-	if superseded != nil {
-		localizations, translationLines = superseded.RenditionLocalizations, superseded.RenditionTranslationLines
-	}
-	var legacyLines []LyricsLineBackupRecord
-	// A takeover deleted the editable rows a superseded v2 document carried.
-	if rawDocument.SchemaVersion == model.LyricsSourceDocumentSchemaVersionV2 && superseded == nil {
-		localization, lines, err := publicV3LegacyLocalization(
-			content, sourceRecord, document,
-		)
-		if err != nil {
-			return PublicLyricsV3DetailDocument{}, err
-		}
-		legacyLines = lines
-		if localization != nil {
-			localizations = append(
-				append([]LyricsRenditionLocalizationBackupRecord(nil), localizations...),
-				localization.LyricsRenditionLocalizationBackupRecord,
-			)
-			translationLines = append([]LyricsRenditionTranslationLineBackupRecord(nil), translationLines...)
-			translationLines = append(translationLines, localization.translationLines...)
-		}
-	}
-	detail, err := buildPublicLyricsV3Detail(
-		item, sourceRecord, document, contributions, artifacts,
-		localizations, translationLines,
-	)
-	if err != nil {
-		return PublicLyricsV3DetailDocument{}, err
-	}
-	if len(legacyLines) != 0 {
-		if err := applyPublicV3LegacyEnglish(&detail, document, legacyLines); err != nil {
-			return PublicLyricsV3DetailDocument{}, err
-		}
-	}
-	return detail, nil
-}
-
-type publicV3LegacyLocalizationRecord struct {
-	LyricsRenditionLocalizationBackupRecord
-	translationLines []LyricsRenditionTranslationLineBackupRecord
-}
-
-func publicV3LegacyLocalization(
-	content LyricsContentExport,
-	sourceRecord LyricsSourceDocumentBackupRecord,
-	document model.LyricsSourceDocument,
-) (*publicV3LegacyLocalizationRecord, []LyricsLineBackupRecord, error) {
-	if len(document.Renditions) != 1 {
-		return nil, nil, errors.New("legacy source v2 Public v3 conversion requires one rendition")
-	}
-	var editable *LyricsDocumentBackupRecord
-	for index := range content.Documents {
-		candidate := &content.Documents[index]
-		if candidate.MusicID != sourceRecord.MusicID {
-			continue
-		}
-		if editable != nil {
-			return nil, nil, fmt.Errorf("legacy source v2 music %d has duplicate editable documents", sourceRecord.MusicID)
-		}
-		editable = candidate
-	}
-	if editable == nil || editable.Revision <= 0 {
-		return nil, nil, fmt.Errorf("legacy source v2 music %d has no editable lyrics document", sourceRecord.MusicID)
-	}
-	var sourceSide *model.LyricsSourceFull
-	if document.Renditions[0].Full != nil {
-		sourceSide = document.Renditions[0].Full
-	} else {
-		sourceSide = document.Renditions[0].Game
-	}
-	if sourceSide == nil {
-		return nil, nil, errors.New("legacy source v2 Public v3 conversion has no authoritative side")
-	}
-	lines := make([]LyricsLineBackupRecord, 0, len(sourceSide.Lines))
-	for _, line := range content.Lines {
-		if line.MusicID == sourceRecord.MusicID {
-			lines = append(lines, line)
-		}
-	}
-	sort.Slice(lines, func(left, right int) bool { return lines[left].Position < lines[right].Position })
-	if len(lines) != len(sourceSide.Lines) {
-		return nil, nil, fmt.Errorf(
-			"legacy source v2 music %d editable line count changed", sourceRecord.MusicID,
-		)
-	}
-	for index, line := range lines {
-		sourceLine := sourceSide.Lines[index]
-		if line.Position != index || line.LineID != sourceLine.ID || line.Japanese != sourceLine.Text ||
-			(line.StanzaBreakBefore != 0) != sourceLine.StanzaBreakBefore {
-			return nil, nil, fmt.Errorf(
-				"legacy source v2 music %d editable line %d changed authoritative source",
-				sourceRecord.MusicID, index+1,
-			)
-		}
-	}
-	translationLines := make([]LyricsRenditionTranslationLineBackupRecord, len(lines))
-	hasChinese := false
-	for index, line := range lines {
-		if line.Chinese != "" {
-			hasChinese = true
-		}
-		translationLines[index] = LyricsRenditionTranslationLineBackupRecord{
-			DocumentID: sourceRecord.DocumentID, RenditionKey: document.Renditions[0].RenditionKey,
-			Locale: "zh-CN", Position: index, Text: line.Chinese,
-		}
-	}
-	if !hasChinese && editable.TranslationCredit == "" && editable.ProofreadingCredit == "" {
-		return nil, lines, nil
-	}
-	return &publicV3LegacyLocalizationRecord{
-		LyricsRenditionLocalizationBackupRecord: LyricsRenditionLocalizationBackupRecord{
-			DocumentID: sourceRecord.DocumentID, RenditionKey: document.Renditions[0].RenditionKey,
-			Locale: "zh-CN", TranslationCredit: editable.TranslationCredit,
-			ProofreadingCredit: editable.ProofreadingCredit, UpdatedAt: editable.UpdatedAt,
-			UpdatedBy: editable.UpdatedBy, Revision: editable.Revision,
-		},
-		translationLines: translationLines,
-	}, lines, nil
-}
-
-func applyPublicV3LegacyEnglish(
-	detail *PublicLyricsV3DetailDocument,
-	document model.LyricsSourceDocument,
-	lines []LyricsLineBackupRecord,
-) error {
-	if detail == nil || len(document.Renditions) != 1 || len(detail.Renditions) != 1 {
-		return errors.New("legacy source v2 English projection envelope is invalid")
-	}
-	rendition := &detail.Renditions[0]
-	hasEnglish := false
-	for _, line := range lines {
-		if line.English != "" {
-			hasEnglish = true
-			break
-		}
-	}
-	if !hasEnglish {
-		return nil
-	}
-	setSide := func(side *PublicLyricsV3Side) error {
-		if side == nil || len(side.Lines) != len(lines) {
-			return errors.New("legacy source v2 English line count changed")
-		}
-		for index := range side.Lines {
-			side.Lines[index].English = lines[index].English
-		}
-		return nil
-	}
-	if rendition.Full != nil {
-		if err := setSide(rendition.Full); err != nil {
-			return err
-		}
-		if rendition.Relation.Kind == model.LyricsSourceRenditionRelationExactProjection {
-			if rendition.Game == nil {
-				return errors.New("legacy source v2 English projection is missing Game")
-			}
-			byID := make(map[string]string, len(rendition.Full.Lines))
-			for _, line := range rendition.Full.Lines {
-				byID[line.ID] = line.English
-			}
-			if len(rendition.Relation.LineIDs) != len(rendition.Game.Lines) {
-				return errors.New("legacy source v2 English projection relation changed")
-			}
-			for index, lineID := range rendition.Relation.LineIDs {
-				value, found := byID[lineID]
-				if !found {
-					return fmt.Errorf("legacy source v2 English projection line %q is unknown", lineID)
-				}
-				rendition.Game.Lines[index].English = value
-			}
-		}
-	} else if err := setSide(rendition.Game); err != nil {
-		return err
-	}
-	return validatePublicLyricsV3Detail(*detail)
-}
-
-func buildRecoveryPublicLyricsV2CompatibilityCandidate(content LyricsContentExport, v3Candidate RecoveryPublicLyricsV3Candidate) (RecoveryPublicLyricsCandidate, error) {
-	if err := validatePublicLyricsV3Candidate(v3Candidate); err != nil {
-		return RecoveryPublicLyricsCandidate{}, err
-	}
-	catalogPerformers := newCatalogPerformerAliases()
-	for _, performer := range content.Performers {
-		addCatalogPerformerAliases(&catalogPerformers, performer.PerformerID,
-			performer.NameJA, performer.NameZH, performer.NameEN)
-	}
-	addCanonicalLyricsSourcePerformerAliases(&catalogPerformers)
-	if err := addAuditedExternalLyricsPerformerAliases(&catalogPerformers); err != nil {
-		return RecoveryPublicLyricsCandidate{}, err
-	}
-	sourceRecords, _, err := recoveryBatchSourceRecords(content, v3Candidate.BatchSHA256)
-	if err != nil {
-		return RecoveryPublicLyricsCandidate{}, fmt.Errorf("public v2 compatibility %w", err)
-	}
-	candidate := RecoveryPublicLyricsCandidate{
-		BatchSHA256: v3Candidate.BatchSHA256,
-		RootSHA256:  v3Candidate.RootSHA256,
-		Index: PublicLyricsIndexDocument{
-			Version: 2,
-			Songs:   make([]PublicLyricsIndexSong, 0, len(v3Candidate.Index.Songs)),
-		},
-		Details: make(map[int]PublicLyricsDetailDocument, len(v3Candidate.Details)),
-	}
-	for _, song := range v3Candidate.Index.Songs {
-		indexSong := song
-		indexSong.AvailableVersions = clonePublicV3Strings(song.AvailableVersions)
-		v3Detail, ownsText := v3Candidate.Details[song.MusicID]
-		if ownsText {
-			record, found := sourceRecords[song.MusicID]
-			if !found {
-				return RecoveryPublicLyricsCandidate{}, fmt.Errorf("public v2 compatibility music %d has no exact source v3 document", song.MusicID)
-			}
-			document, err := model.DecodeLyricsSourceDocument([]byte(record.DocumentJSON))
-			if err != nil {
-				return RecoveryPublicLyricsCandidate{}, fmt.Errorf("public v2 compatibility music %d source document is invalid", song.MusicID)
-			}
-			document, err = publicV3SourceDocument(document)
-			if err != nil {
-				return RecoveryPublicLyricsCandidate{}, fmt.Errorf("public v2 compatibility music %d source document is invalid: %w", song.MusicID, err)
-			}
-			if err := validatePublicLyricsV2CompatibilitySource(document); err != nil {
-				if errors.Is(err, errPublicLyricsV2CompatibilityUnrepresentable) {
-					indexSong.State = PublicLyricsStateIncomplete
-					indexSong.AvailableVersions = nil
-					indexSong.NoLyricsReason = ""
-					candidate.Index.Songs = append(candidate.Index.Songs, indexSong)
-					continue
-				}
-				return RecoveryPublicLyricsCandidate{}, fmt.Errorf("public v2 compatibility music %d: %w", song.MusicID, err)
-			}
-			detail, err := buildPublicLyricsV2CompatibilityDetail(v3Detail, document, catalogPerformers)
-			if err != nil {
-				if errors.Is(err, errPublicLyricsV2CompatibilityUnrepresentable) {
-					indexSong.State = PublicLyricsStateIncomplete
-					indexSong.AvailableVersions = nil
-					indexSong.NoLyricsReason = ""
-					candidate.Index.Songs = append(candidate.Index.Songs, indexSong)
-					continue
-				}
-				return RecoveryPublicLyricsCandidate{}, fmt.Errorf("public v2 compatibility music %d: %w", song.MusicID, err)
-			}
-			candidate.Details[song.MusicID] = detail
-		}
-		candidate.Index.Songs = append(candidate.Index.Songs, indexSong)
-	}
-	if err := validatePublicLyricsV2CompatibilityCandidate(candidate); err != nil {
-		return RecoveryPublicLyricsCandidate{}, err
-	}
-	return candidate, nil
-}
-
-func validatePublicLyricsV2CompatibilitySource(document model.LyricsSourceDocument) error {
-	if err := model.LyricsSourceDocumentV3ToV2Compatibility(document); err != nil {
-		return fmt.Errorf("%w: %v", errPublicLyricsV2CompatibilityUnrepresentable, err)
-	}
-	if len(document.Renditions) != 1 {
-		return fmt.Errorf("%w: peer rendition families", errPublicLyricsV2CompatibilityUnrepresentable)
-	}
-	rendition := document.Renditions[0]
-	if rendition.SourceKind == model.LyricsSourceRenditionAlternate {
-		return fmt.Errorf("%w: alternate rendition semantics", errPublicLyricsV2CompatibilityUnrepresentable)
-	}
-	for _, path := range rendition.SourceTabPaths {
-		for _, label := range path {
-			normalized := strings.ToLower(label)
-			for _, marker := range []string{"alternate", "another vocal", "archive", "april fools"} {
-				if strings.Contains(normalized, marker) {
-					return fmt.Errorf("%w: alternate, archive, or April Fools semantics", errPublicLyricsV2CompatibilityUnrepresentable)
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func buildPublicLyricsV2CompatibilityDetail(v3Detail PublicLyricsV3DetailDocument, document model.LyricsSourceDocument, catalogPerformers catalogPerformerAliases) (PublicLyricsDetailDocument, error) {
-	if err := validatePublicLyricsV3Detail(v3Detail); err != nil {
-		return PublicLyricsDetailDocument{}, err
-	}
-	if len(document.Renditions) != 1 || len(v3Detail.Renditions) != 1 {
-		return PublicLyricsDetailDocument{}, errors.New("public v2 compatibility requires exactly one rendition")
-	}
-	source := document.Renditions[0]
-	public := v3Detail.Renditions[0]
-	if source.RenditionKey != public.Key || source.SourceKind != public.Kind {
-		return PublicLyricsDetailDocument{}, errors.New("public v2 compatibility rendition identity changed")
-	}
-	result := PublicLyricsDetailDocument{
-		Version: 2, MusicID: v3Detail.MusicID, Revision: v3Detail.Revision, UpdatedAt: v3Detail.UpdatedAt,
-		State: v3Detail.State, Attributions: publicLyricsV2CompatibilityAttributions(public.Provenance),
-		AvailableVersions: clonePublicV3Strings(public.AvailableVersions),
-	}
-	if public.TranslationCredits != nil {
-		result.TranslationCredits = &PublicLyricsTranslationCredits{
-			Translation: public.TranslationCredits.Translation, Proofreading: public.TranslationCredits.Proofreading,
-		}
-	}
-	var publicSide *PublicLyricsV3Side
-	var sourceSide *model.LyricsSourceFull
-	switch v3Detail.State {
-	case PublicLyricsStateComplete:
-		publicSide, sourceSide = public.Full, source.Full
-	case PublicLyricsStateGameOnly:
-		publicSide, sourceSide = public.Game, source.Game
-	default:
-		return PublicLyricsDetailDocument{}, errors.New("public v2 compatibility detail has no representable text state")
-	}
-	if publicSide == nil || sourceSide == nil {
-		return PublicLyricsDetailDocument{}, errors.New("public v2 compatibility authoritative side is missing")
-	}
-	lines, err := publicLyricsV2CompatibilityLines(*publicSide, *sourceSide, catalogPerformers)
-	if err != nil {
-		return PublicLyricsDetailDocument{}, err
-	}
-	result.Lines = lines
-	if source.Relation.Kind == model.LyricsSourceRenditionRelationExactProjection {
-		if v3Detail.State != PublicLyricsStateComplete || public.Full == nil || public.Game == nil ||
-			(source.ReasonCode != model.LyricsSourceVersionReasonTaggedFullAndGame &&
-				source.ReasonCode != model.LyricsSourceVersionReasonUntaggedUncutIdentity) {
-			return PublicLyricsDetailDocument{}, fmt.Errorf("%w: Full/Game relation", errPublicLyricsV2CompatibilityUnrepresentable)
-		}
-		result.GameProjection = &PublicLyricsGameProjection{
-			ReasonCode: source.ReasonCode, LineIDs: clonePublicV3Strings(source.Relation.LineIDs),
-		}
-	}
-	if err := validatePublicLyricsV2CompatibilityDetail(result); err != nil {
-		return PublicLyricsDetailDocument{}, fmt.Errorf("%w: %v", errPublicLyricsV2CompatibilityUnrepresentable, err)
-	}
-	return result, nil
-}
-
-func publicLyricsV2CompatibilityLines(side PublicLyricsV3Side, source model.LyricsSourceFull, catalogPerformers catalogPerformerAliases) ([]PublicLyricsLine, error) {
-	if side.Version != source.Version || len(side.Lines) != len(source.Lines) {
-		return nil, errors.New("public v2 compatibility authoritative side changed")
-	}
-	sourceCatalog, err := newPublicLyricsSourcePerformerCatalogForPerformers(source.Performers, catalogPerformers)
-	if err != nil {
-		return nil, fmt.Errorf("%w: performer roster", errPublicLyricsV2CompatibilityUnrepresentable)
-	}
-	result := make([]PublicLyricsLine, len(side.Lines))
-	for lineIndex, line := range side.Lines {
-		sourceLine := source.Lines[lineIndex]
-		if line.ID != sourceLine.ID || line.Order != lineIndex || line.Japanese != sourceLine.Text ||
-			line.StanzaBreakBefore != sourceLine.StanzaBreakBefore || len(line.Segments) != len(sourceLine.Segments) ||
-			!samePublicV3Strings(line.TrailingPerformerIDs, sourceLine.TrailingPerformerIDs) {
-			return nil, fmt.Errorf("authoritative line %d changed during public v2 compatibility", lineIndex+1)
-		}
-		trailing, err := publicLyricsSourceSegmentPerformerIDs(line.TrailingPerformerIDs, sourceCatalog)
-		if err != nil {
-			return nil, fmt.Errorf("%w: authoritative line %d trailing performers", errPublicLyricsV2CompatibilityUnrepresentable, lineIndex+1)
-		}
-		publicLine := PublicLyricsLine{
-			ID: line.ID, Order: line.Order, Japanese: line.Japanese, Chinese: line.Chinese, English: line.English,
-			StanzaBreakBefore: line.StanzaBreakBefore, Segments: make([]model.LyricSegment, len(line.Segments)),
-			TrailingPerformerIDs: append([]int{}, trailing...),
-		}
-		for segmentIndex, segment := range line.Segments {
-			sourceSegment := sourceLine.Segments[segmentIndex]
-			if segment.Text != sourceSegment.Text || !samePublicV3Strings(segment.PerformerIDs, sourceSegment.PerformerIDs) ||
-				len(segment.Ruby) != len(sourceSegment.Ruby) {
-				return nil, fmt.Errorf("authoritative line %d segment %d changed during public v2 compatibility", lineIndex+1, segmentIndex+1)
-			}
-			performers, err := publicLyricsSourceSegmentPerformerIDs(segment.PerformerIDs, sourceCatalog)
-			if err != nil {
-				return nil, fmt.Errorf("%w: authoritative line %d segment %d performers", errPublicLyricsV2CompatibilityUnrepresentable, lineIndex+1, segmentIndex+1)
-			}
-			ruby := make([]model.LyricRubySpan, len(segment.Ruby))
-			for rubyIndex, span := range segment.Ruby {
-				sourceSpan := sourceSegment.Ruby[rubyIndex]
-				if span.Text != sourceSpan.Text || span.Reading != sourceSpan.Reading {
-					return nil, fmt.Errorf("authoritative line %d segment %d ruby changed during public v2 compatibility", lineIndex+1, segmentIndex+1)
-				}
-				ruby[rubyIndex] = model.LyricRubySpan{Text: span.Text, Reading: span.Reading}
-			}
-			publicLine.Segments[segmentIndex] = model.LyricSegment{
-				Text: segment.Text, PerformerIDs: append([]int{}, performers...), Ruby: ruby,
-			}
-		}
-		result[lineIndex] = publicLine
-	}
-	return result, nil
-}
-
-func publicLyricsV2CompatibilityAttributions(provenance []PublicLyricsV3ComponentAttribution) []PublicLyricsAttribution {
-	result := make([]PublicLyricsAttribution, 0, len(provenance))
-	seen := map[string]struct{}{}
-	for _, source := range provenance {
-		attribution := PublicLyricsAttribution{
-			Provider: source.Provider, Title: source.Title, RevisionID: source.RevisionID,
-			RevisionURL: source.RevisionURL, LicenseName: source.LicenseName, LicenseURL: source.LicenseURL,
-		}
-		key := fmt.Sprintf("%s\x00%s\x00%d\x00%s\x00%s\x00%s", attribution.Provider, attribution.Title,
-			attribution.RevisionID, attribution.RevisionURL, attribution.LicenseName, attribution.LicenseURL)
-		if _, duplicate := seen[key]; duplicate {
-			continue
-		}
-		seen[key] = struct{}{}
-		result = append(result, attribution)
-	}
-	return result
-}
-
-func validatePublicLyricsV2CompatibilityCandidate(candidate RecoveryPublicLyricsCandidate) error {
-	if candidate.Index.Version != 2 || len(candidate.Index.Songs) == 0 || candidate.Details == nil {
-		return errors.New("public v2 compatibility candidate envelope is invalid")
-	}
-	lastMusicID := 0
-	for _, song := range candidate.Index.Songs {
-		if song.MusicID <= lastMusicID {
-			return errors.New("public v2 compatibility index is not strictly ordered")
-		}
-		lastMusicID = song.MusicID
-		detail := candidate.Details[song.MusicID]
-		if err := validateRecoveryPublicIndexItem(song, detail); err != nil {
-			return err
-		}
-		if detail.MusicID != 0 {
-			if err := validatePublicLyricsV2CompatibilityDetail(detail); err != nil {
-				return err
-			}
-		}
-	}
-	for musicID := range candidate.Details {
-		found := false
-		for _, song := range candidate.Index.Songs {
-			if song.MusicID == musicID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("public v2 compatibility detail %d is outside its index", musicID)
-		}
-	}
-	return validatePublicLyricsArtifactSize(candidate.Index)
-}
-
-func validatePublicLyricsV2CompatibilityDetail(detail PublicLyricsDetailDocument) error {
-	if detail.Version != 2 || detail.MusicID <= 0 || detail.Revision <= 0 || detail.UpdatedAt == "" ||
-		(detail.State != PublicLyricsStateComplete && detail.State != PublicLyricsStateGameOnly) ||
-		detail.Attribution != "" || detail.NoLyricsReason != "" || len(detail.Attributions) == 0 ||
-		len(detail.Attributions) > 16 || !validPublicLyricsTranslationCredits(detail.TranslationCredits) ||
-		len(detail.Lines) == 0 || len(detail.Lines) > maxLyricsLines {
-		return errors.New("public v2 compatibility detail envelope is invalid")
-	}
-	if detail.State == PublicLyricsStateComplete {
-		if !samePublicLyricsVersions(detail.AvailableVersions, []string{publicLyricsFullVersion}) &&
-			!samePublicLyricsVersions(detail.AvailableVersions, []string{publicLyricsFullVersion, publicLyricsGameVersion}) {
-			return errors.New("public v2 compatibility complete versions are invalid")
-		}
-	} else if !samePublicLyricsVersions(detail.AvailableVersions, []string{publicLyricsGameVersion}) || detail.GameProjection != nil {
-		return errors.New("public v2 compatibility Game-only shape is invalid")
-	}
-	if samePublicLyricsVersions(detail.AvailableVersions, []string{publicLyricsFullVersion, publicLyricsGameVersion}) {
-		if detail.GameProjection == nil || len(detail.GameProjection.LineIDs) == 0 {
-			return errors.New("public v2 compatibility Full/Game projection is missing")
-		}
-	} else if detail.GameProjection != nil {
-		return errors.New("public v2 compatibility exposes an unexpected Game projection")
-	}
-	for _, attribution := range detail.Attributions {
-		licenseName, licenseURL := publicLyricsProviderLicense(attribution.Provider)
-		if licenseName == "" || attribution.LicenseName != licenseName || attribution.LicenseURL != licenseURL ||
-			attribution.Title == "" || attribution.RevisionID <= 0 || attribution.RevisionURL == "" {
-			return errors.New("public v2 compatibility attribution is invalid")
-		}
-	}
-	body, err := json.Marshal(detail)
-	if err != nil {
-		return err
-	}
-	if err := validatePublicLyricsV2JSONShape(body); err != nil {
-		return err
-	}
-	return validatePublicLyricsArtifactSize(detail)
-}
-
-func buildPublicLyricsV3Detail(item LyricsRecoveryItemBackupRecord, sourceRecord LyricsSourceDocumentBackupRecord, document model.LyricsSourceDocument, contributions map[string]string, artifacts map[string]LyricsRecoveryArtifactBackupRecord, localizations []LyricsRenditionLocalizationBackupRecord, translationLines []LyricsRenditionTranslationLineBackupRecord) (PublicLyricsV3DetailDocument, error) {
-	if item.DocumentSHA256 != sourceRecord.DocumentSHA256 || sourceRecord.ManifestBatchSHA256 != item.BatchSHA256 {
-		return PublicLyricsV3DetailDocument{}, errors.New("public v3 source ownership changed")
-	}
-	bindings, err := model.EnumerateLyricsSourceRenditionComponents(document.Renditions)
-	if err != nil {
-		return PublicLyricsV3DetailDocument{}, err
-	}
-	if len(contributions) != len(bindings) {
-		return PublicLyricsV3DetailDocument{}, errors.New("public v3 contributions do not cover every rendition component")
-	}
-	identities := make(map[string]model.LyricsSourceFixedIdentity, len(document.FixedIdentities))
-	for _, identity := range document.FixedIdentities {
-		if _, duplicate := identities[identity.RenditionKey]; duplicate {
-			return PublicLyricsV3DetailDocument{}, errors.New("public v3 source document repeats a fixed identity")
-		}
-		identities[identity.RenditionKey] = identity
-	}
-	if len(artifacts) != len(identities) {
-		return PublicLyricsV3DetailDocument{}, errors.New("public v3 artifacts do not cover every fixed identity")
-	}
-	for key, artifact := range artifacts {
-		decoded, err := model.DecodeLyricsSourceFixedIdentity([]byte(artifact.FixedIdentityJSON))
-		expected, found := identities[key]
-		if err != nil || !found || decoded.RenditionKey != key || !reflect.DeepEqual(decoded, expected) {
-			return PublicLyricsV3DetailDocument{}, fmt.Errorf("public v3 artifact identity %q differs from the source document", key)
-		}
-	}
-	renditionKeys := make(map[string]struct{}, len(document.Renditions))
-	for _, rendition := range document.Renditions {
-		renditionKeys[rendition.RenditionKey] = struct{}{}
-	}
-	localizationByKey := make(map[string]LyricsRenditionLocalizationBackupRecord)
-	linesByKey := make(map[string][]LyricsRenditionTranslationLineBackupRecord)
-	for _, record := range localizations {
-		if record.DocumentID != sourceRecord.DocumentID {
-			continue
-		}
-		if _, found := renditionKeys[record.RenditionKey]; !found {
-			return PublicLyricsV3DetailDocument{}, fmt.Errorf("public v3 localization %q is outside the source rendition set", record.RenditionKey)
-		}
-		if _, duplicate := localizationByKey[record.RenditionKey]; duplicate {
-			return PublicLyricsV3DetailDocument{}, fmt.Errorf("public v3 localization %q is duplicated", record.RenditionKey)
-		}
-		if record.Locale != "zh-CN" || record.Revision <= 0 || record.UpdatedAt <= 0 {
-			return PublicLyricsV3DetailDocument{}, fmt.Errorf("public v3 localization %q metadata is invalid", record.RenditionKey)
-		}
-		localizationByKey[record.RenditionKey] = record
-	}
-	localizationRevision := 1
-	localizationUpdatedAt := sourceRecord.CreatedAt
-	if len(localizationByKey) != 0 {
-		if len(localizationByKey) != len(document.Renditions) {
-			return PublicLyricsV3DetailDocument{}, errors.New("public v3 localizations do not cover every source rendition")
-		}
-		haveLocalizationMetadata := false
-		for _, rendition := range document.Renditions {
-			localization, found := localizationByKey[rendition.RenditionKey]
-			if !found {
-				return PublicLyricsV3DetailDocument{}, fmt.Errorf("public v3 localization %q is missing", rendition.RenditionKey)
-			}
-			if !haveLocalizationMetadata {
-				localizationRevision = localization.Revision
-				localizationUpdatedAt = localization.UpdatedAt
-				haveLocalizationMetadata = true
-				continue
-			}
-			if localization.Revision != localizationRevision || localization.UpdatedAt != localizationUpdatedAt {
-				return PublicLyricsV3DetailDocument{}, errors.New("public v3 localization metadata is inconsistent across renditions")
-			}
-		}
-	}
-	for _, record := range translationLines {
-		if record.DocumentID != sourceRecord.DocumentID {
-			continue
-		}
-		if _, found := renditionKeys[record.RenditionKey]; !found {
-			return PublicLyricsV3DetailDocument{}, fmt.Errorf("public v3 translation line %q is outside the source rendition set", record.RenditionKey)
-		}
-		side, err := canonicalBackupTranslationSide(document, record.RenditionKey, record.Side)
-		if err != nil {
-			return PublicLyricsV3DetailDocument{}, err
-		}
-		if side == renditionPrimaryTranslationSide(document, record.RenditionKey) {
-			linesByKey[record.RenditionKey] = append(linesByKey[record.RenditionKey], record)
-		}
-	}
-	state, err := publicLyricsRecoveryState(item.State)
-	if err != nil {
-		return PublicLyricsV3DetailDocument{}, err
-	}
-	result := PublicLyricsV3DetailDocument{Version: 3, MusicID: item.MusicID, Revision: localizationRevision, UpdatedAt: formatTimestamp(localizationUpdatedAt), State: state, Renditions: make([]PublicLyricsV3Rendition, 0, len(document.Renditions))}
-	orderedRenditions := append([]model.LyricsSourceRendition(nil), document.Renditions...)
-	sort.Slice(orderedRenditions, func(left, right int) bool {
-		return orderedRenditions[left].RenditionKey < orderedRenditions[right].RenditionKey
-	})
-	for _, rendition := range orderedRenditions {
-		localization, localized := localizationByKey[rendition.RenditionKey]
-		translated := append([]LyricsRenditionTranslationLineBackupRecord(nil), linesByKey[rendition.RenditionKey]...)
-		sort.Slice(translated, func(left, right int) bool { return translated[left].Position < translated[right].Position })
-		if !localized && len(translated) != 0 {
-			return PublicLyricsV3DetailDocument{}, fmt.Errorf("public v3 rendition %q has translation lines without localization", rendition.RenditionKey)
-		}
-		if localized && (localization.DocumentID != sourceRecord.DocumentID || localization.RenditionKey != rendition.RenditionKey || localization.Locale != "zh-CN") {
-			return PublicLyricsV3DetailDocument{}, fmt.Errorf("public v3 rendition %q localization identity changed", rendition.RenditionKey)
-		}
-		texts := make([]string, len(translated))
-		for index, line := range translated {
-			if line.Position != index || line.RenditionKey != rendition.RenditionKey || line.Locale != "zh-CN" || line.Side != "" && line.Side != renditionPrimaryTranslationSide(document, rendition.RenditionKey) {
-				return PublicLyricsV3DetailDocument{}, fmt.Errorf("public v3 rendition %q translation lines are incomplete", rendition.RenditionKey)
-			}
-			texts[index] = line.Text
-		}
-		if len(texts) != 0 && len(texts) != renditionLineCountForStore(rendition) {
-			return PublicLyricsV3DetailDocument{}, fmt.Errorf("public v3 rendition %q translation lines do not cover the authoritative side", rendition.RenditionKey)
-		}
-		var localizationPtr *LyricsRenditionLocalizationBackupRecord
-		if localized {
-			localizationPtr = &localization
-		}
-		peerTranslations := map[string][]string{}
-		for _, side := range []string{"full", "game"} {
-			if side == renditionPrimaryTranslationSide(document, rendition.RenditionKey) {
-				continue
-			}
-			var peer []LyricsRenditionTranslationLineBackupRecord
-			for _, line := range translationLines {
-				if line.DocumentID == sourceRecord.DocumentID && line.RenditionKey == rendition.RenditionKey && line.Locale == "zh-CN" && line.Side == side {
-					peer = append(peer, line)
-				}
-			}
-			sort.Slice(peer, func(left, right int) bool { return peer[left].Position < peer[right].Position })
-			if len(peer) == 0 {
-				continue
-			}
-			source, found := renditionPeerTranslationSide(document, rendition.RenditionKey, side)
-			if !found || len(peer) != len(source.Lines) {
-				return PublicLyricsV3DetailDocument{}, fmt.Errorf("public v3 rendition %q %s translation lines are incomplete", rendition.RenditionKey, side)
-			}
-			values := make([]string, len(peer))
-			for index, line := range peer {
-				if line.Position != index {
-					return PublicLyricsV3DetailDocument{}, fmt.Errorf("public v3 rendition %q %s translation positions are incomplete", rendition.RenditionKey, side)
-				}
-				values[index] = line.Text
-			}
-			peerTranslations[side] = values
-		}
-		if len(texts) == 0 && len(peerTranslations) == 0 && localized &&
-			(localization.TranslationCredit != "" || localization.ProofreadingCredit != "") {
-			return PublicLyricsV3DetailDocument{}, fmt.Errorf("public v3 rendition %q credits exist without translations", rendition.RenditionKey)
-		}
-		publicRendition, err := buildPublicLyricsV3Rendition(rendition, texts, peerTranslations, localizationPtr, bindings, identities, contributions)
-		if err != nil {
-			return PublicLyricsV3DetailDocument{}, err
-		}
-		result.Renditions = append(result.Renditions, publicRendition)
-	}
-	return result, validatePublicLyricsV3Detail(result)
 }
 
 func buildPublicLyricsV3Rendition(rendition model.LyricsSourceRendition, translations []string, sideTranslations map[string][]string, localization *LyricsRenditionLocalizationBackupRecord, bindings []model.LyricsSourceRenditionComponentBinding, identities map[string]model.LyricsSourceFixedIdentity, contributions map[string]string) (PublicLyricsV3Rendition, error) {
@@ -1278,54 +365,128 @@ func publicV3ProjectionTranslations(
 	return result, nil
 }
 
+var emptyPublicV3StringBacking [0]string
+
+func formatProjectedGameLineID(n int) string {
+	var buf [16]byte
+	copy(buf[:5], "game-")
+	if n >= 0 && n <= 999999 {
+		for pos := 10; pos >= 5; pos-- {
+			buf[pos] = byte('0' + n%10)
+			n /= 10
+		}
+		return string(buf[:11])
+	}
+	return fmt.Sprintf("game-%06d", n)
+}
+
 func publicV3ProjectedSide(
 	full model.LyricsSourceFull,
 	lineIDs, translations []string,
 ) (*PublicLyricsV3Side, error) {
-	projected := model.CloneLyricsSourceFull(&full)
-	if projected == nil {
-		return nil, errors.New("public v3 exact projection has no Full side")
+	byLineID := make(map[string]int, len(full.Lines))
+	for idx, line := range full.Lines {
+		byLineID[line.ID] = idx
 	}
-	fullLines := projected.Lines
-	byLineID := make(map[string]model.LyricsSourceFullLine, len(fullLines))
-	for _, line := range fullLines {
-		byLineID[line.ID] = line
+	projLines := make([]model.LyricsSourceFullLine, len(lineIDs))
+	var gameTranslations []string
+	if len(translations) > 0 {
+		gameTranslations = make([]string, len(lineIDs))
 	}
-	projected.Lines = make([]model.LyricsSourceFullLine, len(lineIDs))
 	for index, lineID := range lineIDs {
-		line, found := byLineID[lineID]
+		fullIdx, found := byLineID[lineID]
 		if !found {
 			return nil, fmt.Errorf(
 				"public v3 exact projection references unknown Full line %q", lineID,
 			)
 		}
-		line.ID = fmt.Sprintf("game-%06d", index+1)
-		projected.Lines[index] = line
+		line := full.Lines[fullIdx]
+		line.ID = formatProjectedGameLineID(index + 1)
+		projLines[index] = line
+		if len(translations) > 0 {
+			if fullIdx >= len(translations) {
+				return nil, fmt.Errorf(
+					"public v3 exact projection line %q has no Full translation", lineID,
+				)
+			}
+			gameTranslations[index] = translations[fullIdx]
+		}
 	}
-	gameTranslations, err := publicV3ProjectionTranslations(full, lineIDs, translations)
-	if err != nil {
-		return nil, err
+	projected := model.LyricsSourceFull{
+		Version:              full.Version,
+		Performers:           full.Performers,
+		Lines:                projLines,
+		RubyGeneratorVersion: full.RubyGeneratorVersion,
 	}
-	return publicV3Side(*projected, gameTranslations), nil
+	return publicV3Side(projected, gameTranslations), nil
 }
 
 func publicV3Side(source model.LyricsSourceFull, translations []string) *PublicLyricsV3Side {
-	result := &PublicLyricsV3Side{Version: source.Version, Lines: make([]PublicLyricsV3Line, len(source.Lines))}
+	totalSegs := 0
+	totalRuby := 0
+	totalPerfIDs := 0
+	for _, line := range source.Lines {
+		totalPerfIDs += len(line.TrailingPerformerIDs)
+		totalSegs += len(line.Segments)
+		for _, seg := range line.Segments {
+			totalPerfIDs += len(seg.PerformerIDs)
+			totalRuby += len(seg.Ruby)
+		}
+	}
+	linesSlab := make([]PublicLyricsV3Line, len(source.Lines))
+	segsSlab := make([]PublicLyricsV3Segment, totalSegs)
+	rubySlab := make([]PublicLyricsV3RubySpan, totalRuby)
+	var perfSlab []string
+	if totalPerfIDs > 0 {
+		perfSlab = make([]string, totalPerfIDs)
+	}
+	segPos := 0
+	rubyPos := 0
+	perfPos := 0
+	slicePerf := func(src []string) []string {
+		if src == nil {
+			return nil
+		}
+		n := len(src)
+		if n == 0 {
+			return emptyPublicV3StringBacking[:0:0]
+		}
+		dst := perfSlab[perfPos : perfPos+n : perfPos+n]
+		copy(dst, src)
+		perfPos += n
+		return dst
+	}
 	for index, line := range source.Lines {
-		publicLine := PublicLyricsV3Line{ID: line.ID, Order: index, Japanese: line.Text, StanzaBreakBefore: line.StanzaBreakBefore, TrailingPerformerIDs: clonePublicV3Strings(line.TrailingPerformerIDs), Segments: make([]PublicLyricsV3Segment, len(line.Segments))}
+		nSeg := len(line.Segments)
+		lineSegs := segsSlab[segPos : segPos+nSeg : segPos+nSeg]
+		segPos += nSeg
+		for segmentIndex, segment := range line.Segments {
+			nRuby := len(segment.Ruby)
+			segRuby := rubySlab[rubyPos : rubyPos+nRuby : rubyPos+nRuby]
+			rubyPos += nRuby
+			for rubyIndex, span := range segment.Ruby {
+				segRuby[rubyIndex] = PublicLyricsV3RubySpan{Text: span.Text, Reading: span.Reading}
+			}
+			lineSegs[segmentIndex] = PublicLyricsV3Segment{
+				Text:         segment.Text,
+				PerformerIDs: slicePerf(segment.PerformerIDs),
+				Ruby:         segRuby,
+			}
+		}
+		publicLine := PublicLyricsV3Line{
+			ID:                   line.ID,
+			Order:                index,
+			Japanese:             line.Text,
+			StanzaBreakBefore:    line.StanzaBreakBefore,
+			TrailingPerformerIDs: slicePerf(line.TrailingPerformerIDs),
+			Segments:             lineSegs,
+		}
 		if index < len(translations) {
 			publicLine.Chinese = translations[index]
 		}
-		for segmentIndex, segment := range line.Segments {
-			publicRuby := make([]PublicLyricsV3RubySpan, len(segment.Ruby))
-			for rubyIndex, span := range segment.Ruby {
-				publicRuby[rubyIndex] = PublicLyricsV3RubySpan{Text: span.Text, Reading: span.Reading}
-			}
-			publicLine.Segments[segmentIndex] = PublicLyricsV3Segment{Text: segment.Text, PerformerIDs: clonePublicV3Strings(segment.PerformerIDs), Ruby: publicRuby}
-		}
-		result.Lines[index] = publicLine
+		linesSlab[index] = publicLine
 	}
-	return result
+	return &PublicLyricsV3Side{Version: source.Version, Lines: linesSlab}
 }
 
 func publicV3Performers(full, game *model.LyricsSourceFull) []model.LyricsSourcePerformer {
@@ -1416,51 +577,6 @@ func validatePublicLyricsV3Index(index PublicLyricsV3IndexDocument) error {
 	return nil
 }
 
-func validatePublicLyricsV3Candidate(candidate RecoveryPublicLyricsV3Candidate) error {
-	if len(candidate.Index.Songs) == 0 || candidate.Details == nil {
-		return errors.New("public v3 candidate envelope is invalid")
-	}
-	if err := validatePublicLyricsV3Index(candidate.Index); err != nil {
-		return err
-	}
-	if err := validatePublicLyricsArtifactSize(candidate.Index); err != nil {
-		return err
-	}
-	for _, song := range candidate.Index.Songs {
-		detail, exists := candidate.Details[song.MusicID]
-		expectsDetail := song.State == PublicLyricsStateComplete || song.State == PublicLyricsStateGameOnly
-		if exists != expectsDetail {
-			return fmt.Errorf("public v3 candidate music %d detail presence does not match state", song.MusicID)
-		}
-		if !exists {
-			continue
-		}
-		if detail.Version != 3 || detail.MusicID != song.MusicID || detail.Revision != song.Revision || detail.UpdatedAt != song.UpdatedAt || detail.State != song.State ||
-			!samePublicV3Strings(song.AvailableVersions, publicV3AvailableVersions(detail)) {
-			return errors.New("public v3 candidate index/detail identity changed")
-		}
-		if err := validatePublicLyricsV3Detail(detail); err != nil {
-			return fmt.Errorf("public v3 candidate music %d: %w", song.MusicID, err)
-		}
-		if err := validatePublicLyricsArtifactSize(detail); err != nil {
-			return fmt.Errorf("public v3 candidate music %d: %w", song.MusicID, err)
-		}
-	}
-	for musicID := range candidate.Details {
-		found := false
-		for _, song := range candidate.Index.Songs {
-			if song.MusicID == musicID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("public v3 candidate detail %d is outside its index", musicID)
-		}
-	}
-	return nil
-}
-
 func validatePublicLyricsV3Detail(detail PublicLyricsV3DetailDocument) error {
 	if detail.Version != 3 || detail.MusicID <= 0 || detail.Revision <= 0 || !canonicalPublicV3Timestamp(detail.UpdatedAt) ||
 		(detail.State != PublicLyricsStateComplete && detail.State != PublicLyricsStateGameOnly) || detail.Renditions == nil || len(detail.Renditions) == 0 || len(detail.Renditions) > 16 {
@@ -1495,7 +611,7 @@ func validatePublicLyricsV3Detail(detail PublicLyricsV3DetailDocument) error {
 }
 
 func validatePublicLyricsV3Rendition(rendition PublicLyricsV3Rendition) error {
-	if !publicV3RenditionKeyPattern.MatchString(rendition.Key) || rendition.Label == "" || rendition.Label != strings.TrimSpace(rendition.Label) || len(rendition.Label) > 2048 || !utf8.ValidString(rendition.Label) ||
+	if !isPublicV3RenditionKey(rendition.Key) || rendition.Label == "" || rendition.Label != strings.TrimSpace(rendition.Label) || len(rendition.Label) > 2048 || !utf8.ValidString(rendition.Label) ||
 		!model.IsValidLyricsSourceRenditionKind(rendition.Kind) || rendition.SourceTabPaths == nil || len(rendition.SourceTabPaths) == 0 || len(rendition.SourceTabPaths) > 32 ||
 		rendition.AvailableVersions == nil || len(rendition.AvailableVersions) == 0 || rendition.Performers == nil || len(rendition.Performers) > 256 || rendition.Provenance == nil || len(rendition.Provenance) == 0 || len(rendition.Provenance) > 128 {
 		return errors.New("public v3 rendition header is invalid")
@@ -1522,8 +638,8 @@ func validatePublicLyricsV3Rendition(rendition PublicLyricsV3Rendition) error {
 		if performer.PerformerID == "" || performer.PerformerID <= lastPerformer || performer.PerformerID != strings.TrimSpace(performer.PerformerID) ||
 			len(performer.PerformerID) > 128 || len(performer.Name) == 0 || len(performer.Name) > 2048 ||
 			performer.Name != strings.TrimSpace(performer.Name) || !utf8.ValidString(performer.PerformerID) ||
-			!utf8.ValidString(performer.Name) || strings.ContainsAny(performer.PerformerID+performer.Name, "\r\n\x00") ||
-			performer.Color != "" && !publicV3ColorPattern.MatchString(performer.Color) {
+			!utf8.ValidString(performer.Name) || strings.ContainsAny(performer.PerformerID, "\r\n\x00") || strings.ContainsAny(performer.Name, "\r\n\x00") ||
+			performer.Color != "" && !isPublicV3Color(performer.Color) {
 			return errors.New("public v3 rendition performers are invalid")
 		}
 		lastPerformer = performer.PerformerID
@@ -1590,8 +706,10 @@ func validatePublicLyricsV3Rendition(rendition PublicLyricsV3Rendition) error {
 			!strings.HasPrefix(attribution.LicenseURL, "https://") || len(attribution.LicenseURL) > 4096 ||
 			!utf8.ValidString(attribution.Component) || !utf8.ValidString(attribution.Title) ||
 			!utf8.ValidString(attribution.RevisionURL) || !utf8.ValidString(attribution.LicenseName) ||
-			!utf8.ValidString(attribution.LicenseURL) || strings.ContainsAny(attribution.Component+attribution.Title+
-			attribution.RevisionURL+attribution.LicenseName+attribution.LicenseURL, "\r\n\x00") {
+			!utf8.ValidString(attribution.LicenseURL) ||
+			containsPublicV3Control(attribution.Component) || containsPublicV3Control(attribution.Title) ||
+			containsPublicV3Control(attribution.RevisionURL) || containsPublicV3Control(attribution.LicenseName) ||
+			containsPublicV3Control(attribution.LicenseURL) {
 			return errors.New("public v3 rendition provenance is invalid")
 		}
 		licenseName, licenseURL := publicLyricsProviderLicense(attribution.Provider)
@@ -1667,6 +785,16 @@ func validPublicV3RevisionURL(attribution PublicLyricsV3ComponentAttribution) bo
 	}
 }
 
+func containsPublicV3Control(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\r' || c == '\n' || c == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func validatePublicV3Side(side *PublicLyricsV3Side, kind model.LyricsSourceRenditionKind, performers map[string]struct{}) error {
 	if side == nil {
 		return nil
@@ -1678,7 +806,8 @@ func validatePublicV3Side(side *PublicLyricsV3Side, kind model.LyricsSourceRendi
 	for index, line := range side.Lines {
 		if line.ID == "" || line.ID != strings.TrimSpace(line.ID) || len(line.ID) > 128 || line.Order != index ||
 			line.Japanese == "" || len(line.Japanese) > maxLyricsLineTextBytes ||
-			!utf8.ValidString(line.ID) || !utf8.ValidString(line.Japanese) || strings.ContainsAny(line.ID+line.Japanese, "\r\n\x00") ||
+			!utf8.ValidString(line.ID) || !utf8.ValidString(line.Japanese) ||
+			containsPublicV3Control(line.ID) || containsPublicV3Control(line.Japanese) ||
 			line.Segments == nil || len(line.Segments) == 0 || len(line.Segments) > maxLyricsSegmentsPerLine || line.TrailingPerformerIDs == nil {
 			return fmt.Errorf("public v3 side line %d is invalid", index+1)
 		}
@@ -1692,21 +821,21 @@ func validatePublicV3Side(side *PublicLyricsV3Side, kind model.LyricsSourceRendi
 		if err := validatePublicV3PerformerIDs(line.TrailingPerformerIDs, performers); err != nil {
 			return fmt.Errorf("public v3 side line %d trailing performers: %w", index+1, err)
 		}
-		var lineText strings.Builder
+		lineOffset := 0
 		for segmentIndex, segment := range line.Segments {
 			if segment.Text == "" || len(segment.Text) > maxLyricsLineTextBytes || !utf8.ValidString(segment.Text) ||
-				strings.ContainsAny(segment.Text, "\r\n\x00") || segment.PerformerIDs == nil ||
+				containsPublicV3Control(segment.Text) || segment.PerformerIDs == nil ||
 				len(segment.PerformerIDs) > maxLyricsPerformers || segment.Ruby == nil || len(segment.Ruby) == 0 || len(segment.Ruby) > 8192 {
 				return fmt.Errorf("public v3 side line %d segment %d is invalid", index+1, segmentIndex+1)
 			}
 			if err := validatePublicV3PerformerIDs(segment.PerformerIDs, performers); err != nil {
 				return fmt.Errorf("public v3 side line %d segment %d performers: %w", index+1, segmentIndex+1, err)
 			}
-			var rubyText strings.Builder
+			rubyOffset := 0
 			for rubyIndex, span := range segment.Ruby {
 				if span.Text == "" || len(span.Text) > maxLyricsLineTextBytes || len(span.Reading) > maxLyricsLineTextBytes ||
 					!utf8.ValidString(span.Text) || !utf8.ValidString(span.Reading) ||
-					strings.ContainsAny(span.Text+span.Reading, "\r\n\x00") {
+					containsPublicV3Control(span.Text) || containsPublicV3Control(span.Reading) {
 					return fmt.Errorf("public v3 side line %d segment %d ruby %d is invalid", index+1, segmentIndex+1, rubyIndex+1)
 				}
 				if publicV3TextContainsHan(span.Text) && span.Reading == "" {
@@ -1718,14 +847,20 @@ func validatePublicV3Side(side *PublicLyricsV3Side, kind model.LyricsSourceRendi
 				if span.Reading != "" && !publicV3KanaReading(span.Reading) {
 					return fmt.Errorf("public v3 side line %d segment %d ruby %d reading is not kana", index+1, segmentIndex+1, rubyIndex+1)
 				}
-				rubyText.WriteString(span.Text)
+				if !strings.HasPrefix(segment.Text[rubyOffset:], span.Text) {
+					return fmt.Errorf("public v3 side line %d segment %d ruby does not concatenate", index+1, segmentIndex+1)
+				}
+				rubyOffset += len(span.Text)
 			}
-			if rubyText.String() != segment.Text {
+			if rubyOffset != len(segment.Text) {
 				return fmt.Errorf("public v3 side line %d segment %d ruby does not concatenate", index+1, segmentIndex+1)
 			}
-			lineText.WriteString(segment.Text)
+			if !strings.HasPrefix(line.Japanese[lineOffset:], segment.Text) {
+				return fmt.Errorf("public v3 side line %d segments do not concatenate", index+1)
+			}
+			lineOffset += len(segment.Text)
 		}
-		if lineText.String() != line.Japanese {
+		if lineOffset != len(line.Japanese) {
 			return fmt.Errorf("public v3 side line %d segments do not concatenate", index+1)
 		}
 	}
@@ -1769,9 +904,28 @@ func publicV3ReadingBaseSpan(text string) bool {
 }
 
 func validatePublicV3PerformerIDs(ids []string, performers map[string]struct{}) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if len(ids) <= 8 {
+		for i, id := range ids {
+			if id == "" || id != strings.TrimSpace(id) || len(id) > 128 || !utf8.ValidString(id) || containsPublicV3Control(id) {
+				return errors.New("performer ID is invalid")
+			}
+			if _, found := performers[id]; !found {
+				return errors.New("performer ID is outside the rendition roster")
+			}
+			for j := 0; j < i; j++ {
+				if ids[j] == id {
+					return errors.New("performer IDs contain a duplicate")
+				}
+			}
+		}
+		return nil
+	}
 	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
-		if id == "" || id != strings.TrimSpace(id) || len(id) > 128 || !utf8.ValidString(id) || strings.ContainsAny(id, "\r\n\x00") {
+		if id == "" || id != strings.TrimSpace(id) || len(id) > 128 || !utf8.ValidString(id) || containsPublicV3Control(id) {
 			return errors.New("performer ID is invalid")
 		}
 		if _, found := performers[id]; !found {

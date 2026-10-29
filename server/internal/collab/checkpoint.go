@@ -63,8 +63,19 @@ func (s *Service) Checkpoint(ctx context.Context, musicID int, user string) (any
 	}
 	doc := s.server.GetDoc(room)
 	if doc == nil {
-		// No peer currently owns the room. Decode the persisted snapshot so a
-		// checkpoint immediately after reconnect remains deterministic.
+		// No peer currently owns the room. Re-read baseline after GetDoc
+		// observes nil so ygo's flush-before-evict guarantee ensures any
+		// update sent before disconnect is visible in SQLite.
+		freshBaseline, err := s.persistence.baseline(ctx, musicID)
+		if err != nil {
+			return nil, false, err
+		}
+		if freshBaseline.epoch != baseline.epoch ||
+			freshBaseline.authoritySHA256 != baseline.authoritySHA256 ||
+			freshBaseline.baseRevision != baseline.baseRevision {
+			return nil, false, ErrRetiredRoom
+		}
+		baseline = freshBaseline
 		doc = crdt.New()
 		if err := crdt.ApplyUpdateV1(doc, baseline.update, nil); err != nil {
 			return nil, false, err

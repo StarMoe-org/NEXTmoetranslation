@@ -4,15 +4,14 @@
 package legacy
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"moesekai/server/internal/jsonstrict"
 	"moesekai/server/internal/model"
 )
 
@@ -98,66 +97,7 @@ func UnmarshalUnique(data []byte, target any) error {
 // ValidateUniqueJSON rejects duplicate object keys at every nesting level and
 // rejects additional top-level values without otherwise materializing the JSON.
 func ValidateUniqueJSON(data []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	if err := consumeUniqueJSONValue(decoder); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); err != io.EOF {
-		if err == nil {
-			return fmt.Errorf("multiple JSON values")
-		}
-		return err
-	}
-	return nil
-}
-
-func consumeUniqueJSONValue(decoder *json.Decoder) error {
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delimiter, ok := token.(json.Delim)
-	if !ok {
-		return nil
-	}
-	switch delimiter {
-	case '{':
-		seen := map[string]bool{}
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return fmt.Errorf("object key is not a string")
-			}
-			if seen[key] {
-				return fmt.Errorf("duplicate object key %q", key)
-			}
-			seen[key] = true
-			if err := consumeUniqueJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		end, err := decoder.Token()
-		if err != nil || end != json.Delim('}') {
-			return fmt.Errorf("invalid object")
-		}
-	case '[':
-		for decoder.More() {
-			if err := consumeUniqueJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		end, err := decoder.Token()
-		if err != nil || end != json.Delim(']') {
-			return fmt.Errorf("invalid array")
-		}
-	default:
-		return fmt.Errorf("unexpected delimiter")
-	}
-	return nil
+	return jsonstrict.Scan(data, jsonstrict.Options{})
 }
 
 var (
