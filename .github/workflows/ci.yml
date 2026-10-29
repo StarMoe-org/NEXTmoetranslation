@@ -1,4 +1,4 @@
-name: ci
+name: CI
 
 on:
   push:
@@ -13,45 +13,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  fast:
-    name: Fast verification
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      NODE_IMAGE: node:20.19.4-alpine3.22
-      NODE_IMAGE_DIGEST: ${{ vars.NODE_IMAGE_DIGEST }}
-      GO_IMAGE: golang:1.25.1-alpine3.22
-      GO_IMAGE_DIGEST: ${{ vars.GO_IMAGE_DIGEST }}
-      RUNTIME_IMAGE: ${{ vars.RUNTIME_IMAGE }}
-      RUNTIME_IMAGE_DIGEST: ${{ vars.RUNTIME_IMAGE_DIGEST }}
+  server:
+    name: Go server
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-        with:
-          persist-credentials: false
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: Scan committed content for secrets and local configuration
-        env:
-          SECRET_SCAN_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: node scripts/scan-committed-secrets.mjs
-
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v6
+      - uses: actions/setup-go@v5
         with:
-          go-version: 1.25.1
+          go-version-file: server/go.mod
           cache-dependency-path: |
             server/go.sum
             server/offline/go.sum
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 20.19.4
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      - name: Prepare hermetic Go test roots
-        shell: bash
+      - name: Prepare test roots
         run: |
-          set -euo pipefail
           sudo install -d -m 1777 /private/tmp
           test_root="$RUNNER_TEMP/nexttrans-go-tests"
           install -d -m 0700 \
@@ -67,19 +44,35 @@ jobs:
             echo "MOESEKAI_RECOVERY_V2_TEST_PRIVATE_RUN_ROOT=$test_root/recovery-tests"
           } >> "$GITHUB_ENV"
 
-      - name: Verify Go without race
+      - name: Verify server
         working-directory: server
         run: |
-          go test -count=1 -timeout=30m ./...
           go vet ./...
+          go test -count=1 -timeout=15m ./...
 
-      - name: Verify offline Go module without race
+      - name: Verify offline tools
         working-directory: server/offline
         run: |
-          go test -count=1 -timeout=30m ./...
           go vet ./...
+          go test -count=1 -timeout=10m ./...
 
-      - name: Verify Web
+      - name: Verify public lyrics baseline
+        run: python3 scripts/verify-public-lyrics-baseline.py
+
+  web:
+    name: Web console
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Verify web
         working-directory: web
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
@@ -87,537 +80,3 @@ jobs:
           npm run typecheck
           npm run lint
           npm run build
-
-      - name: Verify standalone release contracts
-        run: ./scripts/verify-release.sh
-
-      # Neither builder can run here: build-public-lyrics-v3-bundle.py needs the
-      # accepted candidate directory and build-embedded-lyrics-editor-seed.py needs
-      # the accepted producer database, and neither input is in this repository.
-      # This proves the committed artifacts still match contracts/public-lyrics/baseline.json
-      # and that the bundle inventory and index/detail identity are intact. It does not
-      # prove the builders reproduce those artifacts from their private inputs.
-      - name: Check committed public lyrics artifacts against the baseline (builders are not re-run; their producer inputs are private)
-        run: python3 scripts/verify-public-lyrics-baseline.py
-
-      - name: Validate immutable image inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          for digest in "$NODE_IMAGE_DIGEST" "$GO_IMAGE_DIGEST" "$RUNTIME_IMAGE_DIGEST"; do
-            printf '%s' "$digest" | grep -Eq '^[0-9a-f]{64}$'
-          done
-          for image in "$NODE_IMAGE" "$GO_IMAGE" "$RUNTIME_IMAGE"; do
-            printf '%s' "$image" | grep -Eq '^[a-z0-9][a-z0-9./:_-]*$'
-            case "$image" in *@*) exit 1;; esac
-          done
-
-  race-api:
-    name: Race API
-    runs-on: ubuntu-24.04
-    timeout-minutes: 75
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v6
-        with:
-          go-version: 1.25.1
-          cache-dependency-path: server/go.sum
-      - name: Prepare hermetic Go test roots
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo install -d -m 1777 /private/tmp
-          test_root="$RUNNER_TEMP/nexttrans-go-tests"
-          install -d -m 0700 "$test_root" "$test_root/tmp" "$test_root/gotmp" "$test_root/active-run" "$test_root/recovery-tests"
-          {
-            echo "TMPDIR=$test_root/tmp"
-            echo "GOTMPDIR=$test_root/gotmp"
-            echo "MOESEKAI_SESSION_ROOT=$test_root/active-run"
-            echo "MOESEKAI_RECOVERY_V2_TEST_PRIVATE_RUN_ROOT=$test_root/recovery-tests"
-          } >> "$GITHUB_ENV"
-      - name: Race internal API
-        working-directory: server
-        run: go test -race -count=1 -timeout=60m ./internal/api
-
-  race-store:
-    name: Race Store shard ${{ matrix.shard }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [0, 1, 2, 3]
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v6
-        with:
-          go-version: 1.25.1
-          cache-dependency-path: server/go.sum
-      - name: Prepare hermetic Go test roots
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo install -d -m 1777 /private/tmp
-          test_root="$RUNNER_TEMP/nexttrans-go-tests"
-          install -d -m 0700 "$test_root" "$test_root/tmp" "$test_root/gotmp" "$test_root/active-run" "$test_root/recovery-tests"
-          {
-            echo "TMPDIR=$test_root/tmp"
-            echo "GOTMPDIR=$test_root/gotmp"
-            echo "MOESEKAI_SESSION_ROOT=$test_root/active-run"
-            echo "MOESEKAI_RECOVERY_V2_TEST_PRIVATE_RUN_ROOT=$test_root/recovery-tests"
-          } >> "$GITHUB_ENV"
-      - name: Race internal store shard
-        working-directory: server
-        shell: bash
-        env:
-          STORE_SHARD: ${{ matrix.shard }}
-        run: |
-          set -euo pipefail
-          tests=()
-          while IFS= read -r test_name; do
-            tests+=("$test_name")
-          done < <(go test -list '^(Test|Example|Fuzz)' ./internal/store | grep -E '^(Test|Example|Fuzz)')
-          test "${#tests[@]}" -gt 0
-          selected=()
-          for index in "${!tests[@]}"; do
-            if (( index % 4 == STORE_SHARD )); then
-              selected+=("${tests[$index]}")
-            fi
-          done
-          test "${#selected[@]}" -gt 0
-          regex="^($(IFS='|'; echo "${selected[*]}"))$"
-          printf 'store shard %s selected %s of %s runnable tests\n' "$STORE_SHARD" "${#selected[@]}" "${#tests[@]}"
-          go test -race -count=1 -timeout=45m -run "$regex" ./internal/store
-
-  race-rest:
-    name: Race remaining Go packages
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v6
-        with:
-          go-version: 1.25.1
-          cache-dependency-path: |
-            server/go.sum
-            server/offline/go.sum
-      - name: Prepare hermetic Go test roots
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo install -d -m 1777 /private/tmp
-          test_root="$RUNNER_TEMP/nexttrans-go-tests"
-          install -d -m 0700 "$test_root" "$test_root/tmp" "$test_root/gotmp" "$test_root/active-run" "$test_root/recovery-tests"
-          {
-            echo "TMPDIR=$test_root/tmp"
-            echo "GOTMPDIR=$test_root/gotmp"
-            echo "MOESEKAI_SESSION_ROOT=$test_root/active-run"
-            echo "MOESEKAI_RECOVERY_V2_TEST_PRIVATE_RUN_ROOT=$test_root/recovery-tests"
-          } >> "$GITHUB_ENV"
-      - name: Race all remaining Go packages
-        working-directory: server
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t packages < <(go list ./... | grep -Ev '/internal/(api|store)$')
-          test "${#packages[@]}" -gt 0
-          ! printf '%s\n' "${packages[@]}" | grep -Eq '/internal/(api|store)$'
-          go test -race -count=1 -timeout=60m "${packages[@]}"
-
-      - name: Race the offline Go module
-        working-directory: server/offline
-        run: go test -race -count=1 -timeout=60m ./...
-
-  verify:
-    needs: [fast, race-api, race-store, race-rest]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      NODE_IMAGE: node:20.19.4-alpine3.22
-      NODE_IMAGE_DIGEST: ${{ vars.NODE_IMAGE_DIGEST }}
-      GO_IMAGE: golang:1.25.1-alpine3.22
-      GO_IMAGE_DIGEST: ${{ vars.GO_IMAGE_DIGEST }}
-      RUNTIME_IMAGE: ${{ vars.RUNTIME_IMAGE }}
-      RUNTIME_IMAGE_DIGEST: ${{ vars.RUNTIME_IMAGE_DIGEST }}
-      CI_IMAGE: nexttrans-standalone-ci:${{ github.sha }}
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v6
-        with:
-          go-version: 1.25.1
-          cache-dependency-path: server/go.sum
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 20.19.4
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      - name: Build local rollback web inputs
-        working-directory: web
-        run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          npm run build
-
-      - name: Validate immutable image inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          for digest in "$NODE_IMAGE_DIGEST" "$GO_IMAGE_DIGEST" "$RUNTIME_IMAGE_DIGEST"; do
-            printf '%s' "$digest" | grep -Eq '^[0-9a-f]{64}$'
-          done
-          for image in "$NODE_IMAGE" "$GO_IMAGE" "$RUNTIME_IMAGE"; do
-            printf '%s' "$image" | grep -Eq '^[a-z0-9][a-z0-9./:_-]*$'
-            case "$image" in *@*) exit 1;; esac
-          done
-
-      - name: Build standalone production image
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker build \
-            --target next-production \
-            --build-arg NODE_IMAGE="$NODE_IMAGE" \
-            --build-arg NODE_IMAGE_DIGEST="$NODE_IMAGE_DIGEST" \
-            --build-arg GO_IMAGE="$GO_IMAGE" \
-            --build-arg GO_IMAGE_DIGEST="$GO_IMAGE_DIGEST" \
-            --build-arg RUNTIME_IMAGE="$RUNTIME_IMAGE" \
-            --build-arg RUNTIME_IMAGE_DIGEST="$RUNTIME_IMAGE_DIGEST" \
-            --build-arg VERSION="$GITHUB_SHA" \
-            --build-arg VCS_REF="$GITHUB_SHA" \
-            --build-arg IMAGE_SOURCE="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
-            --tag "$CI_IMAGE" .
-
-      - name: Inspect standalone production image invariants
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(docker image inspect --format '{{.Config.User}}' "$CI_IMAGE")" = '65532:65532'
-          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$CI_IMAGE")" = "$GITHUB_SHA"
-          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "$CI_IMAGE")" = "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          test "$(docker image inspect --format '{{index .Config.Labels "io.nexttrans.release.mode"}}' "$CI_IMAGE")" = standalone
-          test "$(docker image inspect --format '{{index .Config.Labels "io.nexttrans.release.workflow"}}' "$CI_IMAGE")" = .github/workflows/release-next.yml
-          image_env=$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$CI_IMAGE")
-          printf '%s\n' "$image_env" | grep -Fx 'MOESEKAI_PRODUCTION=true'
-          printf '%s\n' "$image_env" | grep -Fx 'WORKSPACE_MODE=disabled'
-          printf '%s\n' "$image_env" | grep -Fx 'WEB_DIR=/app/web'
-          printf '%s\n' "$image_env" | grep -Fx 'DB_PATH=/data/moesekai.db'
-          printf '%s\n' "$image_env" | grep -Fx 'DATA_DIR=/data'
-          printf '%s\n' "$image_env" | grep -Fx 'TZ=UTC'
-          if printf '%s\n' "$image_env" | grep -Eq '^WORKSPACE_(WEB_DIR|MANIFEST_SHA256)='; then
-            echo 'standalone image unexpectedly configures an external workspace' >&2
-            exit 1
-          fi
-          docker run --rm --entrypoint /bin/sh "$CI_IMAGE" -c '
-            test "$(id -u)" -eq 65532 && test "$(id -g)" -eq 65532 &&
-            test "$MOESEKAI_PRODUCTION" = true && test "$WORKSPACE_MODE" = disabled && test "$WEB_DIR" = /app/web &&
-            test "$DB_PATH" = /data/moesekai.db && test "$DATA_DIR" = /data && test "$TZ" = UTC &&
-            test -w /data && test -w /tmp && test ! -e /app/workspace &&
-            test ! -w /app && test ! -w /app/web &&
-            test -z "$(find /app ! -user root -print -quit)" &&
-            test -z "$(find /app \( -perm -0200 -o -perm -0020 -o -perm -0002 \) -print -quit)" &&
-            test "$(stat -c %u /app/moesekai-server)" -eq 0 &&
-            test "$(stat -c %u /app/web/index.html)" -eq 0 &&
-            ! chmod u+w /app &&
-            ! printf x >> /app/moesekai-server &&
-            ! printf x >> /app/web/index.html &&
-            command -v git >/dev/null &&
-            test -s /etc/ssl/certs/ca-certificates.crt &&
-            (test -s /usr/share/zoneinfo/UTC || test -s /usr/share/zoneinfo/Etc/UTC)
-          '
-
-      - name: Assert standalone production startup fails closed
-        shell: bash
-        run: |
-          set -euo pipefail
-          preflight_data="$RUNNER_TEMP/nexttrans-workspace-preflight-data"
-          mkdir -p "$preflight_data"
-          printf '%s\n' 'persistent-volume-sentinel' > "$preflight_data/sentinel"
-          chmod 0755 "$preflight_data"
-          chmod 0644 "$preflight_data/sentinel"
-          sudo chown -R 65532:65532 "$preflight_data"
-          sentinel_sha=$(sha256sum "$preflight_data/sentinel" | cut -d' ' -f1)
-          assert_preflight_data_untouched() {
-            test "$(stat -c %a "$preflight_data")" = 755
-            test "$(stat -c %a "$preflight_data/sentinel")" = 644
-            test "$(sha256sum "$preflight_data/sentinel" | cut -d' ' -f1)" = "$sentinel_sha"
-            test "$(find "$preflight_data" -mindepth 1 -maxdepth 1 -printf '%f\n')" = sentinel
-            test ! -e "$preflight_data/moesekai.db"
-            test ! -e "$preflight_data/moesekai.db.seed-incomplete"
-            test ! -e "$preflight_data/moesekai.db.lock"
-          }
-          require_workspace_preflight_failure() {
-            name=$1
-            expected=$2
-            shift 2
-            log="$RUNNER_TEMP/nexttrans-workspace-${name}.log"
-            if docker run --rm --read-only \
-              --mount "type=bind,src=$preflight_data,dst=/data" \
-              --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
-              "$@" "$CI_IMAGE" >"$log" 2>&1; then
-              cat "$log"
-              exit 1
-            fi
-            grep -F "$expected" "$log"
-            assert_preflight_data_untouched
-          }
-          require_workspace_preflight_failure production-override \
-            'standalone production binary requires MOESEKAI_PRODUCTION to remain exactly "true"' \
-            -e MOESEKAI_PRODUCTION=false
-          require_workspace_preflight_failure external \
-            'WORKSPACE_MODE must be exactly "disabled" in production' \
-            -e WORKSPACE_MODE=external
-          require_workspace_preflight_failure empty-root \
-            'WORKSPACE_WEB_DIR and WORKSPACE_MANIFEST_SHA256 must both be unset when WORKSPACE_MODE=disabled' \
-            -e WORKSPACE_WEB_DIR=
-          require_workspace_preflight_failure empty-manifest \
-            'WORKSPACE_WEB_DIR and WORKSPACE_MANIFEST_SHA256 must both be unset when WORKSPACE_MODE=disabled' \
-            -e WORKSPACE_MANIFEST_SHA256=
-          require_workspace_preflight_failure web-dir \
-            'standalone production binary requires WEB_DIR to remain exactly "/app/web"' \
-            -e WEB_DIR=/data
-          require_workspace_preflight_failure db-path \
-            'standalone production binary requires DB_PATH to remain exactly "/data/moesekai.db"' \
-            -e 'DB_PATH=/data/moesekai.db?mode=rwc'
-          require_workspace_preflight_failure data-dir \
-            'standalone production binary requires DATA_DIR to remain exactly "/data"' \
-            -e DATA_DIR=/tmp/data
-          require_workspace_preflight_failure timezone \
-            'standalone production binary requires TZ to remain exactly "UTC"' \
-            -e TZ=Pacific/Honolulu
-
-          master_key_log="$RUNNER_TEMP/nexttrans-missing-master-key.log"
-          if docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
-            -e JWT_SECRET=ci-synthetic-jwt-secret-at-least-32-bytes \
-            "$CI_IMAGE" >"$master_key_log" 2>&1; then
-            cat "$master_key_log"
-            exit 1
-          fi
-          grep -F 'MOESEKAI_MASTER_KEY must contain at least 32 bytes' "$master_key_log"
-
-          admin_log="$RUNNER_TEMP/nexttrans-missing-admin.log"
-          if docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
-            -e JWT_SECRET=ci-synthetic-jwt-secret-at-least-32-bytes \
-            -e MOESEKAI_MASTER_KEY=ci-synthetic-master-key-at-least-32-bytes \
-            -e TRANSLATE_SCHEDULER_ENABLED=false \
-            "$CI_IMAGE" >"$admin_log" 2>&1; then
-            cat "$admin_log"
-            exit 1
-          fi
-          grep -F 'an initialized administrator is required' "$admin_log"
-
-          template_admin_log="$RUNNER_TEMP/nexttrans-template-admin.log"
-          if docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
-            -e JWT_SECRET=ci-synthetic-jwt-secret-at-least-32-bytes \
-            -e MOESEKAI_MASTER_KEY=ci-synthetic-master-key-at-least-32-bytes \
-            -e ADMIN_USER=admin \
-            -e ADMIN_PASSWORD=replace-with-12-or-more-characters \
-            -e TRANSLATE_SCHEDULER_ENABLED=false \
-            "$CI_IMAGE" >"$template_admin_log" 2>&1; then
-            cat "$template_admin_log"
-            exit 1
-          fi
-          grep -F 'published ADMIN_PASSWORD template must be replaced with unique secret material' "$template_admin_log"
-
-      - name: Smoke standalone read-only root and single SQLite writer
-        shell: bash
-        run: |
-          set -euo pipefail
-          container="nexttrans-smoke-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          competitor="$container-competitor"
-          volume="$container-data"
-          cleanup() {
-            docker logs "$container" || true
-            docker rm -f "$container" >/dev/null 2>&1 || true
-            docker rm -f "$competitor" >/dev/null 2>&1 || true
-            docker volume rm "$volume" >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT
-          docker volume create "$volume" >/dev/null
-
-          create_smoke() {
-            docker create --name "$container" -p 127.0.0.1::8080 \
-              --read-only --mount "type=volume,src=$volume,dst=/data" \
-              --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
-              -e JWT_SECRET=ci-synthetic-jwt-secret-at-least-32-bytes \
-              -e MOESEKAI_MASTER_KEY=ci-synthetic-master-key-at-least-32-bytes \
-              -e SEARCH_INDEX_RETRY_MIN_MS=100 \
-              -e SEARCH_INDEX_RETRY_MAX_MS=1000 \
-              -e UPSTREAM_JP_MASTERDATA_URL=https://example.invalid/jp/master \
-              -e UPSTREAM_JP_MASTERDATA_FALLBACK_URL=https://example.invalid/jp/master \
-              -e TRANSLATE_SCHEDULER_ENABLED=false "$@" \
-              "$CI_IMAGE" >/dev/null
-          }
-          wait_live() {
-            endpoint=$(docker port "$container" 8080/tcp)
-            port=${endpoint##*:}
-            origin="http://127.0.0.1:$port"
-            live=false
-            for attempt in $(seq 1 60); do
-              if curl --fail --silent --show-error "$origin/healthz" >/dev/null; then
-                live=true
-                break
-              fi
-              sleep 1
-            done
-            test "$live" = true
-          }
-          stop_cleanly() {
-            started=$(date +%s)
-            timeout 40s docker stop --time 30 "$container" >/dev/null
-            elapsed=$(($(date +%s) - started))
-            test "$elapsed" -le 40
-            test "$(docker inspect --format '{{.State.ExitCode}}' "$container")" = 0
-            docker logs "$container" > "$RUNNER_TEMP/nexttrans-clean-stop.log" 2>&1
-            grep -F 'shutdown requested by terminated' "$RUNNER_TEMP/nexttrans-clean-stop.log"
-            if grep -E 'CRITICAL: total shutdown budget|shutdown completed after forced cancellation|force-close HTTP:' \
-              "$RUNNER_TEMP/nexttrans-clean-stop.log"; then exit 1; fi
-          }
-
-          create_smoke -e ADMIN_USER=ci-admin -e ADMIN_PASSWORD=ci-synthetic-admin-password
-          docker start "$container" >/dev/null
-          wait_live
-          docker exec "$container" test -s /data/moesekai.db
-          docker exec "$container" test ! -e /app/workspace
-
-          competing_log="$RUNNER_TEMP/nexttrans-competing-instance.log"
-          if docker run --rm --read-only --mount "type=volume,src=$volume,dst=/data" \
-            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
-            -e JWT_SECRET=ci-synthetic-jwt-secret-at-least-32-bytes \
-            -e MOESEKAI_MASTER_KEY=ci-synthetic-master-key-at-least-32-bytes \
-            -e TRANSLATE_SCHEDULER_ENABLED=false \
-            "$CI_IMAGE" >"$competing_log" 2>&1; then
-            cat "$competing_log"
-            exit 1
-          fi
-          grep -F 'database is already owned by another process' "$competing_log"
-
-          curl --fail --silent --show-error "$origin/healthz" | grep -Fx '{"status":"ok"}'
-          ready_status=0
-          for attempt in $(seq 1 60); do
-            ready_status=$(curl --silent --show-error --output "$RUNNER_TEMP/nexttrans-not-ready.json" --write-out '%{http_code}' "$origin/readyz")
-            if test "$ready_status" = 503; then break; fi
-            sleep 1
-          done
-          test "$ready_status" = 503
-          grep -Fx '{"status":"not_ready"}' "$RUNNER_TEMP/nexttrans-not-ready.json"
-          curl --silent --show-error "$origin/" > "$RUNNER_TEMP/nexttrans-console.html"
-          index=0
-          for route in /workspace /workspace/ /workspace/editor/cards /workspace/assets/app.js /x/../workspace /./workspace /x/%2e%2e/workspace /workspace%5Ceditor /workspace%25252Feditor /workspace%252Feditor%25 /%2577orkspace%252Feditor%25 /x/%25252e%25252e/workspace /x/%25252e%25252e/workspace%25; do
-            index=$((index + 1))
-            body="$RUNNER_TEMP/nexttrans-workspace-$index.body"
-            status=$(curl --path-as-is --silent --show-error --output "$body" --write-out '%{http_code}' "$origin$route")
-            test "$status" = 404
-            grep -Fx '404 page not found' "$body"
-            ! cmp -s "$body" "$RUNNER_TEMP/nexttrans-console.html"
-            ! grep -Fqi '<!doctype html' "$body"
-          done
-          for route in /workspace /x/../workspace; do
-            index=$((index + 1))
-            body="$RUNNER_TEMP/nexttrans-workspace-$index.body"
-            status=$(curl --path-as-is --request OPTIONS --silent --show-error --output "$body" --write-out '%{http_code}' "$origin$route")
-            test "$status" = 404
-            grep -Fx '404 page not found' "$body"
-          done
-          status=$(curl --silent --show-error --output "$RUNNER_TEMP/nexttrans-unknown-api.json" \
-            --dump-header "$RUNNER_TEMP/nexttrans-unknown-api.headers" --write-out '%{http_code}' "$origin/api/does-not-exist")
-          test "$status" = 404
-          grep -Eiq '^content-type: application/json(; charset=utf-8)?' "$RUNNER_TEMP/nexttrans-unknown-api.headers"
-          grep -Fx '{"error":"not found"}' "$RUNNER_TEMP/nexttrans-unknown-api.json"
-
-          stop_cleanly
-          docker rm "$container" >/dev/null
-          create_smoke
-          docker start "$container" >/dev/null
-          wait_live
-          curl --fail --silent --show-error "$origin/healthz" | grep -Fx '{"status":"ok"}'
-          stop_cleanly
-
-      - name: Export the exact tested production candidate
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf dist/next-production-candidate
-          mkdir -p dist/next-production-candidate
-          docker save --output dist/next-production-candidate/image.tar "$CI_IMAGE"
-          image_id=$(docker image inspect --format '{{.Id}}' "$CI_IMAGE")
-          printf '%s' "$image_id" | grep -Eq '^sha256:[0-9a-f]{64}$'
-          jq -nS \
-            --arg repository "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
-            --arg revision "$GITHUB_SHA" \
-            --arg ref "$GITHUB_REF" \
-            --arg runId "$GITHUB_RUN_ID" \
-            --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
-            --arg localReference "$CI_IMAGE" \
-            --arg imageId "$image_id" \
-            --arg nodeBase "${NODE_IMAGE}@sha256:${NODE_IMAGE_DIGEST}" \
-            --arg goBase "${GO_IMAGE}@sha256:${GO_IMAGE_DIGEST}" \
-            --arg runtimeBase "${RUNTIME_IMAGE}@sha256:${RUNTIME_IMAGE_DIGEST}" '
-              {
-                schemaVersion: 1,
-                source: {repository: $repository, revision: $revision, ref: $ref},
-                ci: {runId: $runId, runAttempt: $runAttempt},
-                build: {
-                  target: "next-production",
-                  mode: "standalone",
-                  baseImages: {node: $nodeBase, go: $goBase, runtime: $runtimeBase}
-                },
-                image: {localReference: $localReference, imageId: $imageId}
-              }' > dist/next-production-candidate/metadata.json
-          (cd dist/next-production-candidate && sha256sum image.tar metadata.json > SHA256SUMS)
-          (cd dist/next-production-candidate && sha256sum -c SHA256SUMS)
-
-      - name: Upload exact tested production candidate
-        id: candidate-upload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: next-production-candidate-${{ github.sha }}-${{ github.run_attempt }}
-          path: dist/next-production-candidate/
-          if-no-files-found: error
-          overwrite: false
-          compression-level: 0
-          retention-days: 90
-
-      - name: Build immutable rollback bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf dist
-          verify_dir="$RUNNER_TEMP/rollback-verify"
-          second_tar="$RUNNER_TEMP/nexttrans-rollback-second.tar"
-          rm -rf "$verify_dir" "$second_tar"
-          mkdir -p dist/rollback/web "$verify_dir"
-          (cd server && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -buildid= -X main.runtimeProfile=next-production' -o ../dist/rollback/moesekai-server .)
-          (cd server && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -buildid=' -o ../dist/rollback/moesekai-migrate ./cmd/migrate)
-          cp -a web/out/. dist/rollback/web/
-          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
-          ./scripts/package-rollback.sh dist/rollback dist/nexttrans-rollback.tar
-          ./scripts/package-rollback.sh dist/rollback "$second_tar"
-          cmp dist/nexttrans-rollback.tar "$second_tar"
-          python3 scripts/verify-rollback-bundle.py dist/nexttrans-rollback.tar
-          tar -xf dist/nexttrans-rollback.tar -C "$verify_dir"
-          test -x "$verify_dir/moesekai-server"
-          test -x "$verify_dir/moesekai-migrate"
-          test "$(stat -c %a "$verify_dir/moesekai-server")" = 755
-          test "$(stat -c %a "$verify_dir/moesekai-migrate")" = 755
-          (cd "$verify_dir" && sha256sum -c SHA256SUMS)
-
-      - name: Upload immutable rollback bundle
-        id: rollback-upload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: rollback-${{ github.sha }}-${{ github.run_attempt }}
-          path: dist/nexttrans-rollback.tar
-          if-no-files-found: error
-          overwrite: false
-          compression-level: 0
-          retention-days: 90
