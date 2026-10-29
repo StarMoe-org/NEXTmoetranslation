@@ -1,9 +1,10 @@
-# Builds the image on manual dispatch, pushes it to GHCR and points the
+# Builds the image on every push to main, pushes it to GHCR and points the
 # manifests in cnb.cool/StarMoe-org/infra at it (ArgoCD rolls it out).
 name: Deploy
 
 on:
-  # Service is suspended while it is being reworked; switch to push when ready.
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
