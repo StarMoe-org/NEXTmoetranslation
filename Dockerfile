@@ -5,8 +5,7 @@
 #     --target next-production \
 #     --build-arg NODE_IMAGE=node:20.19.4-alpine3.22 \
 #     --build-arg NODE_IMAGE_DIGEST=<64-hex-digest> \
-#     --build-arg GO_IMAGE=golang:1.25.1-alpine3.22 \
-#     --build-arg GO_IMAGE_DIGEST=<64-hex-digest> \
+#     --build-arg GO_IMAGE=golang:1.25.1-bookworm \
 #     --build-arg RUNTIME_IMAGE=<approved-runtime-with-git> \
 #     --build-arg RUNTIME_IMAGE_DIGEST=<64-hex-digest> \
 #     --build-arg VERSION=<release> --build-arg VCS_REF=$(git rev-parse HEAD) \
@@ -18,14 +17,12 @@
 
 ARG NODE_IMAGE=node:20.19.4-alpine3.22
 ARG NODE_IMAGE_DIGEST=df02558528d3d3d0d621f112e232611aecfee7cbc654f6b375765f72bb262799
-ARG GO_IMAGE=golang:1.25.1-alpine3.22
-ARG GO_IMAGE_DIGEST=b6ed3fd0452c0e9bcdef5597f29cc1418f61672e9d3a2f55bf02e7222c014abd
+ARG GO_IMAGE=golang:1.25.1-bookworm
 ARG RUNTIME_IMAGE=buildpack-deps:bookworm-scm
 ARG RUNTIME_IMAGE_DIGEST=877e9e4d949edfbcbedabc3a2d7ab593955fee5d6d0777adf3a991eb30c750d8
 
-# These are the approved immutable defaults for direct source builders such as
-# Zeabur. CI and release jobs still pass explicit repository values and validate
-# every digest before building or publishing.
+# Build frontend static bundle and CGO-enabled Go binaries (Bookworm glibc ABI
+# matches buildpack-deps:bookworm-scm runtime).
 FROM ${NODE_IMAGE}@sha256:${NODE_IMAGE_DIGEST} AS web-builder
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
@@ -34,14 +31,14 @@ COPY web/ .
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-FROM ${GO_IMAGE}@sha256:${GO_IMAGE_DIGEST} AS go-builder
+FROM ${GO_IMAGE} AS go-builder
 WORKDIR /src
 COPY server/go.mod server/go.sum* ./
 RUN go mod download && go mod verify
 COPY server/ .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -buildid=" -o /moesekai-server .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -buildid= -X main.runtimeProfile=next-production" -o /moesekai-server-next-production .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -buildid=" -o /moesekai-migrate ./cmd/migrate
+RUN CGO_ENABLED=1 GOOS=linux go build -trimpath -ldflags="-s -w -buildid=" -o /moesekai-server .
+RUN CGO_ENABLED=1 GOOS=linux go build -trimpath -ldflags="-s -w -buildid= -X main.runtimeProfile=next-production" -o /moesekai-server-next-production .
+RUN CGO_ENABLED=1 GOOS=linux go build -trimpath -ldflags="-s -w -buildid=" -o /moesekai-migrate ./cmd/migrate
 
 FROM ${RUNTIME_IMAGE}@sha256:${RUNTIME_IMAGE_DIGEST} AS runtime
 ARG VERSION=dev

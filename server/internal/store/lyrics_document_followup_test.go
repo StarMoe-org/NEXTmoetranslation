@@ -93,17 +93,20 @@ func TestRecoveryTakeoverSupersedesTheItemOwningTheSourceDocumentOrElseTheNewest
 
 // servedRecoveryDetailForTest is the v3 detail the recovery ledger batch
 // serves for musicID.
-func servedRecoveryDetailForTest(t *testing.T, s *Store, batchSHA string, musicID int) []byte {
+func servedRecoveryDetailForTest(t *testing.T, s *Store, _ string, musicID int) []byte {
 	t.Helper()
-	candidate, err := s.RecoveryPublicLyricsV3(batchSHA)
+	doc, err := s.GetLyricsRenditionDocument(musicID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	detail, ok := candidate.Details[musicID]
-	if !ok {
-		t.Fatalf("recovery batch does not serve music %d", musicID)
-	}
-	body, err := EncodePublicLyricsV3Detail(detail)
+	body, err := EncodePublicLyricsV3Detail(PublicLyricsV3DetailDocument{
+		Version:    3,
+		MusicID:    musicID,
+		Revision:   doc.Revision,
+		UpdatedAt:  doc.UpdatedAt,
+		State:      PublicLyricsStateComplete,
+		Renditions: doc.Renditions,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

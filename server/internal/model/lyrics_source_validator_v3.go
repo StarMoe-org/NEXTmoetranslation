@@ -66,7 +66,7 @@ func ValidateLyricsSourceRenditionPayload(rendition LyricsSourceRendition) error
 func validateLyricsSourceRenditionPayload(index int, rendition LyricsSourceRendition) error {
 	prefix := fmt.Sprintf("lyrics source rendition %d", index+1)
 	if len(rendition.RenditionKey) > maxLyricsSourceRenditionKeyBytes ||
-		!canonicalLyricsSourceRenditionKey.MatchString(rendition.RenditionKey) {
+		!isCanonicalLyricsSourceRenditionKey(rendition.RenditionKey) {
 		return fmt.Errorf("%s has an invalid logical key", prefix)
 	}
 	if !IsValidLyricsSourceRenditionKind(rendition.SourceKind) {
@@ -230,7 +230,7 @@ func validateLyricsSourceRenditionSourcePerformerIDs(ids []string) error {
 	last := ""
 	for _, id := range ids {
 		if len(id) == 0 || len(id) > maxLyricsSourcePerformerIDBytes ||
-			!canonicalLyricsSourcePerformerID.MatchString(id) || last != "" && last >= id {
+			!isCanonicalLyricsSourcePerformerID(id) || last != "" && last >= id {
 			return errors.New("source performer IDs are invalid or not canonically ordered")
 		}
 		if _, duplicate := seen[id]; duplicate {

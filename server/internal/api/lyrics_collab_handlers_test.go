@@ -225,7 +225,9 @@ func openCollabDraft(t *testing.T, h *lyricsCollabAPIHarness, musicID int) *coll
 	}
 	client := &collabDraftClient{t: t, connection: connection, local: crdt.New()}
 	t.Cleanup(func() { connection.Close() })
-	client.sync()
+	// Consume ygo's unsolicited initial SyncStep2 sent on connect so later
+	// sync() calls pair 1:1 with their own SyncStep1 request.
+	client.readSyncStep2()
 	return client
 }
 
@@ -237,12 +239,8 @@ func (c *collabDraftClient) send(message []byte) {
 	}
 }
 
-// sync asks for everything the server has and applies the reply. The server
-// answers one connection's messages in order, so the reply follows every
-// update this client sent before it.
-func (c *collabDraftClient) sync() {
+func (c *collabDraftClient) readSyncStep2() {
 	c.t.Helper()
-	c.send(ysync.EncodeSyncStep1(c.local))
 	if err := c.connection.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		c.t.Fatal(err)
 	}
@@ -262,6 +260,15 @@ func (c *collabDraftClient) sync() {
 			return
 		}
 	}
+}
+
+// sync asks for everything the server has and applies the reply. The server
+// answers one connection's messages in order, so the reply follows every
+// update this client sent before it.
+func (c *collabDraftClient) sync() {
+	c.t.Helper()
+	c.send(ysync.EncodeSyncStep1(c.local))
+	c.readSyncStep2()
 }
 
 // setFullChinese replaces the first Full zh-CN line of the source-v3 draft and

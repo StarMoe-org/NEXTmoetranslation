@@ -258,7 +258,11 @@ func (s *Store) CatalogMusic(query string, newlyWrittenOnly bool, limit, cursor 
 		return model.CatalogMusicResponse{}, err
 	}
 	defer rows.Close()
-	response := model.CatalogMusicResponse{Items: []model.CatalogMusicItem{}}
+	capHint := limit + 1
+	if capHint > 256 {
+		capHint = 256
+	}
+	response := model.CatalogMusicResponse{Items: make([]model.CatalogMusicItem, 0, capHint)}
 	for rows.Next() {
 		var item model.CatalogMusicItem
 		var newlyWritten int

@@ -12,7 +12,7 @@ import (
 	"moesekai/server/internal/lyricsprovideroutcome"
 	"moesekai/server/internal/model"
 
-	_ "modernc.org/sqlite"
+	_ "moesekai/server/internal/sqlitedriver"
 )
 
 const immutableLyricsCatalogPath = "/private/tmp/moesekai-lyrics-catalog-v18-20260731-704.db"

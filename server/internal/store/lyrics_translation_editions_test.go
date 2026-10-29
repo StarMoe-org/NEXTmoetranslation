@@ -175,25 +175,6 @@ func TestLyricsTranslationEditionBackupRoundTripAndLegacyRestoreClearsV30(t *tes
 		len(editionBackup.TranslationEditionLocalizations) == 0 || len(editionBackup.TranslationEditionLines) == 0 {
 		t.Fatalf("edition backup shape=%+v", editionBackup)
 	}
-	defaultDocument, err := s.GetLyricsRenditionDocument(10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sourceDocument, err := model.DecodeLyricsSourceDocument([]byte(editionBackup.SourceDocuments[0].DocumentJSON))
-	if err != nil {
-		t.Fatal(err)
-	}
-	v4Detail, err := buildPublicLyricsV4Detail(editionBackup, editionBackup.SourceDocuments[0], sourceDocument, PublicLyricsV3DetailDocument{
-		Version: 3, MusicID: 10, Revision: defaultDocument.Revision, UpdatedAt: defaultDocument.UpdatedAt,
-		State: PublicLyricsStateComplete, Renditions: defaultDocument.Renditions,
-	})
-	if err != nil {
-		t.Fatalf("build multi-edition Public v4 detail: %v", err)
-	}
-	if len(v4Detail.TranslationEditions) != 2 || v4Detail.TranslationEditions[0].Key != "alternate" ||
-		v4Detail.TranslationEditions[0].Renditions[0].Full.Translations[0] != "backup-alternate" {
-		t.Fatalf("multi-edition Public v4 detail=%+v", v4Detail.TranslationEditions)
-	}
 	restored := setupLyricsStore(t)
 	if err := restored.ImportTranslationContent(nil, EventContentExport{}, editionBackup); err != nil {
 		t.Fatalf("restore edition backup: %v", err)

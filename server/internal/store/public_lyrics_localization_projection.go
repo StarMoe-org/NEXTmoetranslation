@@ -22,32 +22,53 @@ import (
 // Edited rendition documents are cached per music ID and revision so frequent
 // public rebuilds do not reload the full source bundle for every untouched
 // song: only songs edited since the previous rebuild pay the document build.
+type projectedLocalizationCandidate struct {
+	musicID    int
+	documentID int64
+	revision   int
+	updatedAt  int64
+	title      model.LocalizedTitle
+}
+
+type projectedLocalizationEntry struct {
+	revision          int
+	skip              bool
+	detail            PublicLyricsV3DetailDocument
+	hasV4             bool
+	v4Detail          PublicLyricsV4DetailDocument
+	availableVersions []string
+}
+
 func (s *Store) PublishedLyricsLocalizationProjection() ([]PublicLyricsIndexSong, map[int]PublicLyricsV3DetailDocument, map[int]PublicLyricsV4DetailDocument, error) {
 	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT d.music_id, d.document_id,
-		MAX(l.revision) AS localization_revision, MAX(l.updated_at) AS localization_updated_at,
+	rows, err := tx.Query(`WITH edited AS (
+		SELECT document_id,
+			MAX(revision) AS localization_revision,
+			MAX(updated_at) AS localization_updated_at
+		FROM song_lyrics_rendition_localizations
+		GROUP BY document_id
+		HAVING MAX(revision) > 1
+	)
+	SELECT d.music_id, d.document_id,
+		edited.localization_revision, edited.localization_updated_at,
 		m.title_ja, COALESCE(NULLIF(zh.cn_text,''), m.title_zh), COALESCE(NULLIF(en.text,''), m.title_en)
-		FROM song_lyrics_source_documents d
-		JOIN song_lyrics_rendition_localizations l ON l.document_id=d.document_id
+		FROM edited
+		JOIN song_lyrics_source_documents d ON d.document_id=edited.document_id
 		JOIN catalog_music m ON m.music_id=d.music_id
 		LEFT JOIN entries zh ON zh.category='music' AND zh.field='title' AND zh.jp_key=m.title_ja
 		LEFT JOIN entry_localizations en ON en.category='music' AND en.field='title'
 		 AND en.jp_key=m.title_ja AND en.locale='en-US'
 		LEFT JOIN song_lyrics_publications p ON p.music_id=d.music_id
 		WHERE p.music_id IS NULL
-		GROUP BY d.document_id, d.music_id, m.title_ja, zh.cn_text, m.title_zh, en.text, m.title_en
-		HAVING MAX(l.revision) > 1
 		ORDER BY d.music_id`)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	index := []PublicLyricsIndexSong{}
-	details := make(map[int]PublicLyricsV3DetailDocument)
-	v4Details := make(map[int]PublicLyricsV4DetailDocument)
+	var candidates []projectedLocalizationCandidate
 	for rows.Next() {
 		var musicID, documentID, localizationRevision, localizationUpdatedAt int64
 		var title model.LocalizedTitle
@@ -59,50 +80,13 @@ func (s *Store) PublishedLyricsLocalizationProjection() ([]PublicLyricsIndexSong
 		if localizationRevision <= 1 {
 			continue
 		}
-		document, err := s.projectionRenditionDocument(int(musicID), int(localizationRevision))
-		if err != nil {
-			if !errors.Is(err, ErrLyricsNotFound) {
-				log.Printf("[projection] lyrics localization %d unavailable; skipping: %v", musicID, err)
-			}
-			continue
-		}
-		if document.Revision <= 1 || !lyricsRenditionHasLocalizationCredit(document) {
-			continue
-		}
-		state := PublicLyricsStateGameOnly
-		for _, rendition := range document.Renditions {
-			if rendition.Full != nil {
-				state = PublicLyricsStateComplete
-				break
-			}
-		}
-		detail := PublicLyricsV3DetailDocument{
-			Version: 3, MusicID: int(musicID), Revision: document.Revision,
-			UpdatedAt: document.UpdatedAt, State: state,
-			Renditions: document.Renditions,
-		}
-		if err := validatePublicLyricsV3Detail(detail); err != nil {
-			log.Printf("[projection] lyrics localization %d invalid; skipping: %v", musicID, err)
-			continue
-		}
-		if len(document.TranslationEditions) > 1 {
-			v4Detail, ok, v4Err := s.buildProjectedV4Detail(tx, int(musicID), detail)
-			if v4Err != nil {
-				log.Printf("[projection] lyrics localization %d v4 detail build failed: %v", musicID, v4Err)
-			} else if ok {
-				v4Details[int(musicID)] = v4Detail
-			}
-		}
-		entry := PublicLyricsIndexSong{
-			MusicID: int(musicID), Revision: document.Revision, UpdatedAt: document.UpdatedAt,
-			State: state, Title: title, AvailableVersions: publicV3AvailableVersions(detail),
-		}
-		if !validLocalizationIndexEntry(entry) {
-			log.Printf("[projection] lyrics localization %d index entry invalid; skipping", musicID)
-			continue
-		}
-		index = append(index, entry)
-		details[int(musicID)] = detail
+		candidates = append(candidates, projectedLocalizationCandidate{
+			musicID:    int(musicID),
+			documentID: documentID,
+			revision:   int(localizationRevision),
+			updatedAt:  localizationUpdatedAt,
+			title:      title,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -110,6 +94,33 @@ func (s *Store) PublishedLyricsLocalizationProjection() ([]PublicLyricsIndexSong
 	}
 	if err := rows.Close(); err != nil {
 		return nil, nil, nil, err
+	}
+
+	index := make([]PublicLyricsIndexSong, 0, len(candidates))
+	details := make(map[int]PublicLyricsV3DetailDocument, len(candidates))
+	v4Details := make(map[int]PublicLyricsV4DetailDocument)
+	for _, candidate := range candidates {
+		projected, ok := s.projectionEntry(tx, candidate.musicID, candidate.revision)
+		if !ok || projected.skip {
+			continue
+		}
+		entry := PublicLyricsIndexSong{
+			MusicID:           candidate.musicID,
+			Revision:          projected.detail.Revision,
+			UpdatedAt:         projected.detail.UpdatedAt,
+			State:             projected.detail.State,
+			Title:             candidate.title,
+			AvailableVersions: projected.availableVersions,
+		}
+		if !validLocalizationIndexEntry(entry) {
+			log.Printf("[projection] lyrics localization %d index entry invalid; skipping", candidate.musicID)
+			continue
+		}
+		index = append(index, entry)
+		details[candidate.musicID] = projected.detail
+		if projected.hasV4 {
+			v4Details[candidate.musicID] = projected.v4Detail
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, nil, nil, err
@@ -126,6 +137,15 @@ func (s *Store) buildProjectedV4Detail(tx *sql.Tx, musicID int, v3 PublicLyricsV
 	if err != nil {
 		return PublicLyricsV4DetailDocument{}, false, err
 	}
+	return s.buildProjectedV4DetailFromBundle(tx, bundle, selection, v3)
+}
+
+func (s *Store) buildProjectedV4DetailFromBundle(
+	tx *sql.Tx,
+	bundle lyricsRenditionEditorBundle,
+	selection lyricsTranslationEditionSelection,
+	v3 PublicLyricsV3DetailDocument,
+) (PublicLyricsV4DetailDocument, bool, error) {
 	if len(selection.editions) <= 1 {
 		return PublicLyricsV4DetailDocument{}, false, nil
 	}
@@ -143,9 +163,15 @@ func (s *Store) buildProjectedV4Detail(tx *sql.Tx, musicID int, v3 PublicLyricsV
 		result.Renditions[index] = publicLyricsV4SourceRendition(rendition)
 	}
 	for editionIndex, summary := range selection.editions {
-		edSelection, err := loadLyricsTranslationEditionSelection(tx, bundle, summary.Key, true)
-		if err != nil {
-			return PublicLyricsV4DetailDocument{}, false, err
+		var edSelection lyricsTranslationEditionSelection
+		if summary.Key == selection.key {
+			edSelection = selection
+		} else {
+			var err error
+			edSelection, err = loadLyricsTranslationEditionSelection(tx, bundle, summary.Key, true)
+			if err != nil {
+				return PublicLyricsV4DetailDocument{}, false, err
+			}
 		}
 		edDoc, err := buildLyricsTranslationEditionDocument(bundle, edSelection)
 		if err != nil {
@@ -184,28 +210,81 @@ func (s *Store) buildProjectedV4Detail(tx *sql.Tx, musicID int, v3 PublicLyricsV
 	return result, true, nil
 }
 
-// projectionRenditionDocument returns the rendition document for the given
-// localization revision, reusing the cached document when the revision is
-// unchanged since the previous public rebuild.
-func (s *Store) projectionRenditionDocument(musicID, revision int) (LyricsRenditionDocument, error) {
+// projectionEntry returns the validated projected localization entry for the
+// given localization revision inside tx, reusing the cached entry when the
+// revision is unchanged since the previous public rebuild.
+func (s *Store) projectionEntry(tx *sql.Tx, musicID, revision int) (projectedLocalizationEntry, bool) {
 	s.localizationProjectionMu.RLock()
 	cached, ok := s.localizationProjectionCache[musicID]
 	s.localizationProjectionMu.RUnlock()
-	if ok && cached.Revision == revision {
-		return cached, nil
+	if ok && cached.revision == revision {
+		return cached, true
 	}
-	document, err := s.GetLyricsRenditionDocument(musicID)
+
+	bundle, err := loadLyricsRenditionEditorBundle(tx, musicID)
 	if err != nil {
-		return LyricsRenditionDocument{}, err
+		if !errors.Is(err, ErrLyricsNotFound) {
+			log.Printf("[projection] lyrics localization %d unavailable; skipping: %v", musicID, err)
+		}
+		return projectedLocalizationEntry{}, false
 	}
+	selection, err := loadLyricsTranslationEditionSelection(tx, bundle, "", false)
+	if err != nil {
+		log.Printf("[projection] lyrics localization %d unavailable; skipping: %v", musicID, err)
+		return projectedLocalizationEntry{}, false
+	}
+	document, err := buildLyricsTranslationEditionDocument(bundle, selection)
+	if err != nil {
+		log.Printf("[projection] lyrics localization %d unavailable; skipping: %v", musicID, err)
+		return projectedLocalizationEntry{}, false
+	}
+	if document.Revision <= 1 || !lyricsRenditionHasLocalizationCredit(document) {
+		entry := projectedLocalizationEntry{revision: document.Revision, skip: true}
+		s.storeProjectionEntry(musicID, entry)
+		return entry, true
+	}
+	state := PublicLyricsStateGameOnly
+	for _, rendition := range document.Renditions {
+		if rendition.Full != nil {
+			state = PublicLyricsStateComplete
+			break
+		}
+	}
+	detail := PublicLyricsV3DetailDocument{
+		Version: 3, MusicID: musicID, Revision: document.Revision,
+		UpdatedAt: document.UpdatedAt, State: state,
+		Renditions: document.Renditions,
+	}
+	if err := validatePublicLyricsV3Detail(detail); err != nil {
+		log.Printf("[projection] lyrics localization %d invalid; skipping: %v", musicID, err)
+		return projectedLocalizationEntry{}, false
+	}
+	built := projectedLocalizationEntry{
+		revision:          document.Revision,
+		detail:            detail,
+		availableVersions: publicV3AvailableVersions(detail),
+	}
+	if len(selection.editions) > 1 {
+		v4Detail, v4OK, v4Err := s.buildProjectedV4DetailFromBundle(tx, bundle, selection, detail)
+		if v4Err != nil {
+			log.Printf("[projection] lyrics localization %d v4 detail build failed: %v", musicID, v4Err)
+		} else if v4OK {
+			built.hasV4 = true
+			built.v4Detail = v4Detail
+		}
+	}
+	s.storeProjectionEntry(musicID, built)
+	return built, true
+}
+
+func (s *Store) storeProjectionEntry(musicID int, entry projectedLocalizationEntry) {
 	const maxLocalizationProjectionCacheEntries = 1024
 	s.localizationProjectionMu.Lock()
 	if s.localizationProjectionCache == nil || len(s.localizationProjectionCache) >= maxLocalizationProjectionCacheEntries {
-		s.localizationProjectionCache = make(map[int]LyricsRenditionDocument)
+		s.localizationProjectionCache = make(map[int]projectedLocalizationEntry)
 	}
-	s.localizationProjectionCache[musicID] = document
+	s.localizationProjectionCache[musicID] = entry
 	s.localizationProjectionMu.Unlock()
-	return document, nil
 }
 
 // invalidateLocalizationProjectionCache drops every cached rendition document.

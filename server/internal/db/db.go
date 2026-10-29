@@ -3,9 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "moesekai/server/internal/sqlitedriver"
 )
 
 var (
@@ -65,8 +63,8 @@ type DB struct {
 	path string
 }
 
-// Open opens (or creates) the SQLite database at path and applies the schema.
-// modernc.org/sqlite is a pure-Go driver, so no CGO is required.
+// Open opens (or creates) the SQLite database at path and applies the schema
+// using the CGO SQLite driver registered by internal/sqlitedriver.
 func Open(path string) (*DB, error) {
 	return openDatabase(path, true)
 }
@@ -151,66 +149,6 @@ func openDatabase(path string, allowFreshTemplate bool) (*DB, error) {
 		return nil, fmt.Errorf("verify sqlite integrity: %w", err)
 	}
 	return d, nil
-}
-
-// OpenOfflinePinned opens an existing offline database without applying schema
-// or migrations. It uses one FULL-synchronous WAL connection; callers must
-// checkpoint before discarding the supplied pinned path and must preserve that
-// path on an ambiguous or failed post-commit checkpoint.
-func OpenOfflinePinned(path string) (*DB, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, fmt.Errorf("inspect offline sqlite: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("offline sqlite must be a direct regular file")
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return nil, fmt.Errorf("secure offline sqlite: %w", err)
-	}
-	databaseURL := &url.URL{Scheme: "file", Path: path}
-	query := databaseURL.Query()
-	query.Add("_pragma", "journal_mode(WAL)")
-	query.Add("_pragma", "busy_timeout(10000)")
-	query.Add("_pragma", "foreign_keys(ON)")
-	query.Add("_pragma", "synchronous(FULL)")
-	query.Set("_txlock", "immediate")
-	databaseURL.RawQuery = query.Encode()
-	sqlDB, err := sql.Open("sqlite", databaseURL.String())
-	if err != nil {
-		return nil, fmt.Errorf("open offline sqlite: %w", err)
-	}
-	sqlDB.SetMaxOpenConns(1)
-	sqlDB.SetMaxIdleConns(1)
-	sqlDB.SetConnMaxLifetime(0)
-	closeWithError := func(cause error) (*DB, error) {
-		if closeErr := sqlDB.Close(); closeErr != nil {
-			return nil, errors.Join(cause, closeErr)
-		}
-		return nil, cause
-	}
-	if err := sqlDB.Ping(); err != nil {
-		return closeWithError(fmt.Errorf("ping offline sqlite: %w", err))
-	}
-	var journalMode string
-	if err := sqlDB.QueryRow(`PRAGMA journal_mode`).Scan(&journalMode); err != nil {
-		return closeWithError(fmt.Errorf("read offline sqlite journal mode: %w", err))
-	}
-	if journalMode != "wal" {
-		return closeWithError(fmt.Errorf("offline sqlite journal mode is %q, want wal", journalMode))
-	}
-	var synchronous int
-	if err := sqlDB.QueryRow(`PRAGMA synchronous`).Scan(&synchronous); err != nil {
-		return closeWithError(fmt.Errorf("read offline sqlite synchronous mode: %w", err))
-	}
-	if synchronous != 2 {
-		return closeWithError(fmt.Errorf("offline sqlite synchronous mode is %d, want FULL", synchronous))
-	}
-	database := &DB{DB: sqlDB, path: path}
-	if err := database.IntegrityCheck(context.Background()); err != nil {
-		return closeWithError(fmt.Errorf("verify offline sqlite integrity: %w", err))
-	}
-	return database, nil
 }
 
 // Path returns the SQLite database path used by Open.

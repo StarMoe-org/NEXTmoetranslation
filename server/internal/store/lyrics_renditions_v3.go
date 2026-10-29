@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -11,12 +12,97 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"moesekai/server/internal/lyricscontract"
 	"moesekai/server/internal/model"
 )
+
+const maxVerifiedSourceV3DocCacheEntries = 64
+
+type verifiedSourceV3ArtifactEntry struct {
+	identity       model.LyricsSourceFixedIdentity
+	identityJSON   string
+	identitySHA    string
+	categoriesJSON string
+	evidenceJSON   string
+}
+
+type verifiedSourceV3ContributionEntry struct {
+	renditionKey string
+	sha256Hex    string
+}
+
+type verifiedSourceV3Doc struct {
+	schemaVersion    int
+	reasonCode       string
+	document         model.LyricsSourceDocument
+	bindings         []model.LyricsSourceRenditionComponentBinding
+	identities       map[string]model.LyricsSourceFixedIdentity
+	artifactRows     map[string]verifiedSourceV3ArtifactEntry
+	contributions    map[string]verifiedSourceV3ContributionEntry
+	contributionKeys map[string]string
+}
+
+var (
+	verifiedSourceV3DocCacheMu   sync.RWMutex
+	verifiedSourceV3DocCacheMap  = make(map[[32]byte]*verifiedSourceV3Doc, maxVerifiedSourceV3DocCacheEntries)
+	verifiedSourceV3DocCacheRing [maxVerifiedSourceV3DocCacheEntries][32]byte
+	verifiedSourceV3DocCachePos  int
+	verifiedSourceV3DocCacheFull bool
+)
+
+func getVerifiedSourceV3Doc(digest [32]byte) (*verifiedSourceV3Doc, bool) {
+	verifiedSourceV3DocCacheMu.RLock()
+	entry, ok := verifiedSourceV3DocCacheMap[digest]
+	verifiedSourceV3DocCacheMu.RUnlock()
+	return entry, ok
+}
+
+func putVerifiedSourceV3Doc(digest [32]byte, entry *verifiedSourceV3Doc) {
+	verifiedSourceV3DocCacheMu.Lock()
+	defer verifiedSourceV3DocCacheMu.Unlock()
+	if _, exists := verifiedSourceV3DocCacheMap[digest]; exists {
+		return
+	}
+	if verifiedSourceV3DocCacheFull {
+		delete(verifiedSourceV3DocCacheMap, verifiedSourceV3DocCacheRing[verifiedSourceV3DocCachePos])
+	}
+	verifiedSourceV3DocCacheRing[verifiedSourceV3DocCachePos] = digest
+	verifiedSourceV3DocCacheMap[digest] = entry
+	verifiedSourceV3DocCachePos++
+	if verifiedSourceV3DocCachePos >= maxVerifiedSourceV3DocCacheEntries {
+		verifiedSourceV3DocCachePos = 0
+		verifiedSourceV3DocCacheFull = true
+	}
+}
+
+func hexEqualsSHA256(hexStr string, digest [32]byte) bool {
+	if len(hexStr) != 64 {
+		return false
+	}
+	const hextable = "0123456789abcdef"
+	for i := 0; i < 32; i++ {
+		b := digest[i]
+		if hexStr[i*2] != hextable[b>>4] || hexStr[i*2+1] != hextable[b&0x0f] {
+			return false
+		}
+	}
+	return true
+}
+
+func storedIdentityScalarsEqual(stored, canonical model.LyricsSourceFixedIdentity) bool {
+	return stored.Provider == canonical.Provider && stored.Origin == canonical.Origin &&
+		stored.PageID == canonical.PageID && stored.RevisionID == canonical.RevisionID &&
+		stored.RevisionTimestamp == canonical.RevisionTimestamp && stored.SHA1 == canonical.SHA1 &&
+		stored.Title == canonical.Title && stored.CanonicalURL == canonical.CanonicalURL &&
+		stored.FetchedAt == canonical.FetchedAt &&
+		stored.Section == canonical.Section && stored.RenditionKey == canonical.RenditionKey &&
+		stored.CompositionRenditionKey == canonical.CompositionRenditionKey &&
+		stored.VersionReason == canonical.VersionReason
+}
 
 func storeV3DocumentComponentRefs(document model.LyricsSourceDocument) (map[string]string, error) {
 	bindings, err := model.EnumerateLyricsSourceRenditionComponents(document.Renditions)
@@ -519,15 +605,94 @@ func resolveLyricsRenditionEditorProvenance(q queryRower, bundle lyricsRendition
 }
 
 func loadLyricsRenditionEditorBundle(q queryRower, musicID int) (lyricsRenditionEditorBundle, error) {
+	return loadLyricsRenditionEditorBundleMode(q, musicID, false)
+}
+
+func loadMutableLyricsRenditionEditorBundle(q queryRower, musicID int) (lyricsRenditionEditorBundle, error) {
+	return loadLyricsRenditionEditorBundleMode(q, musicID, true)
+}
+
+func decodeAndVerifySourceV3Doc(documentBytes []byte, documentSHA string) (*verifiedSourceV3Doc, error) {
+	document, err := model.DecodeLyricsSourceDocument(documentBytes)
+	if err != nil {
+		return nil, errors.New("source v3 editor document is invalid or stale")
+	}
+	if err := validateStoreV3DocumentGraph(document); err != nil {
+		return nil, err
+	}
+	canonicalJSON, err := json.Marshal(document)
+	if err != nil || !bytes.Equal(canonicalJSON, documentBytes) {
+		return nil, errors.New("source v3 editor document JSON is not canonical")
+	}
+	bindings, err := model.EnumerateLyricsSourceRenditionComponents(document.Renditions)
+	if err != nil {
+		return nil, err
+	}
+	identities := make(map[string]model.LyricsSourceFixedIdentity, len(document.FixedIdentities))
+	artifactRows := make(map[string]verifiedSourceV3ArtifactEntry, len(document.FixedIdentities))
+	for _, identity := range document.FixedIdentities {
+		if _, duplicate := identities[identity.RenditionKey]; duplicate {
+			return nil, errors.New("source v3 editor document repeats a fixed identity")
+		}
+		identityBytes, err := json.Marshal(identity)
+		if err != nil {
+			return nil, err
+		}
+		categoriesBytes, err := json.Marshal(identity.Categories)
+		if err != nil {
+			return nil, err
+		}
+		evidenceBytes, err := json.Marshal(identity.IndexEvidenceRefs)
+		if err != nil {
+			return nil, err
+		}
+		idDigest := sha256.Sum256(identityBytes)
+		identities[identity.RenditionKey] = identity
+		artifactRows[identity.RenditionKey] = verifiedSourceV3ArtifactEntry{
+			identity:       identity,
+			identityJSON:   string(identityBytes),
+			identitySHA:    hex.EncodeToString(idDigest[:]),
+			categoriesJSON: string(categoriesBytes),
+			evidenceJSON:   string(evidenceBytes),
+		}
+	}
+	expectedRefs, err := storeV3DocumentComponentRefs(document)
+	if err != nil {
+		return nil, err
+	}
+	contributions := make(map[string]verifiedSourceV3ContributionEntry, len(expectedRefs))
+	contributionKeys := make(map[string]string, len(expectedRefs))
+	for component, identityKey := range expectedRefs {
+		contribDigest := sha256.Sum256([]byte(documentSHA + "\x00" + component + "\x00" + identityKey))
+		contributions[component] = verifiedSourceV3ContributionEntry{
+			renditionKey: identityKey,
+			sha256Hex:    hex.EncodeToString(contribDigest[:]),
+		}
+		contributionKeys[component] = identityKey
+	}
+	return &verifiedSourceV3Doc{
+		schemaVersion:    document.SchemaVersion,
+		reasonCode:       string(document.ReasonCode),
+		document:         document,
+		bindings:         bindings,
+		identities:       identities,
+		artifactRows:     artifactRows,
+		contributions:    contributions,
+		contributionKeys: contributionKeys,
+	}, nil
+}
+
+func loadLyricsRenditionEditorBundleMode(q queryRower, musicID int, mutable bool) (lyricsRenditionEditorBundle, error) {
 	bundle := lyricsRenditionEditorBundle{musicID: musicID}
 	var schemaVersion int
-	var reasonCode, documentJSON string
+	var reasonCode string
+	var documentBytes []byte
 	if err := q.QueryRow(`SELECT document_id,schema_version,reason_code,document_json,document_sha256,
 		manifest_batch_sha256,created_at
 		FROM song_lyrics_source_documents AS source
 		WHERE source.music_id=? AND source.schema_version=?`,
 		musicID, model.LyricsSourceDocumentSchemaVersionV3).Scan(
-		&bundle.documentID, &schemaVersion, &reasonCode, &documentJSON, &bundle.documentSHA,
+		&bundle.documentID, &schemaVersion, &reasonCode, &documentBytes, &bundle.documentSHA,
 		&bundle.manifestBatchSHA256, &bundle.createdAt,
 	); err == sql.ErrNoRows {
 		return lyricsRenditionEditorBundle{}, ErrLyricsNotFound
@@ -544,37 +709,38 @@ func loadLyricsRenditionEditorBundle(q queryRower, musicID int) (lyricsRendition
 	if legacyRows != 0 {
 		return lyricsRenditionEditorBundle{}, errors.New("source v3 editor document mixes plural localizations with legacy editable lyrics")
 	}
-	digest := sha256.Sum256([]byte(documentJSON))
-	if hex.EncodeToString(digest[:]) != bundle.documentSHA {
+	digest := sha256.Sum256(documentBytes)
+	if !hexEqualsSHA256(bundle.documentSHA, digest) {
 		return lyricsRenditionEditorBundle{}, errors.New("source v3 editor document checksum changed")
 	}
-	document, err := model.DecodeLyricsSourceDocument([]byte(documentJSON))
-	if err != nil || document.SchemaVersion != schemaVersion || string(document.ReasonCode) != reasonCode {
+	var verified *verifiedSourceV3Doc
+	if !mutable {
+		if cached, ok := getVerifiedSourceV3Doc(digest); ok {
+			verified = cached
+		}
+	}
+	if verified == nil {
+		var err error
+		verified, err = decodeAndVerifySourceV3Doc(documentBytes, bundle.documentSHA)
+		if err != nil {
+			return lyricsRenditionEditorBundle{}, err
+		}
+		if !mutable {
+			putVerifiedSourceV3Doc(digest, verified)
+		}
+	}
+	if verified.schemaVersion != schemaVersion || verified.reasonCode != reasonCode {
 		return lyricsRenditionEditorBundle{}, errors.New("source v3 editor document is invalid or stale")
 	}
-	if err := validateStoreV3DocumentGraph(document); err != nil {
-		return lyricsRenditionEditorBundle{}, err
-	}
-	canonicalJSON, err := json.Marshal(document)
-	if err != nil || string(canonicalJSON) != documentJSON {
-		return lyricsRenditionEditorBundle{}, errors.New("source v3 editor document JSON is not canonical")
-	}
-	bundle.document = document
+	bundle.document = verified.document
+	var err error
 	bundle.recoveryProvenance, err = resolveLyricsRenditionEditorProvenance(q, bundle)
 	if err != nil {
 		return lyricsRenditionEditorBundle{}, err
 	}
-	bundle.bindings, err = model.EnumerateLyricsSourceRenditionComponents(document.Renditions)
-	if err != nil {
-		return lyricsRenditionEditorBundle{}, err
-	}
-	bundle.identities = make(map[string]model.LyricsSourceFixedIdentity, len(document.FixedIdentities))
-	for _, identity := range document.FixedIdentities {
-		if _, duplicate := bundle.identities[identity.RenditionKey]; duplicate {
-			return lyricsRenditionEditorBundle{}, errors.New("source v3 editor document repeats a fixed identity")
-		}
-		bundle.identities[identity.RenditionKey] = identity
-	}
+	bundle.bindings = verified.bindings
+	bundle.identities = verified.identities
+
 	artifactQuery := `SELECT provider,rendition_key,origin,page_id,revision_id,revision_timestamp,
 		mediawiki_sha1,page_title,canonical_revision_url,fetched_at,categories_json,section,
 		composition_rendition_key,version_reason,index_evidence_refs_json,fixed_identity_json,fixed_identity_sha256
@@ -591,7 +757,7 @@ func loadLyricsRenditionEditorBundle(q queryRower, musicID int) (lyricsRendition
 	if err != nil {
 		return lyricsRenditionEditorBundle{}, err
 	}
-	seenArtifacts := make(map[string]struct{}, len(bundle.identities))
+	seenArtifacts := make(map[string]struct{}, len(verified.identities))
 	for rows.Next() {
 		var stored model.LyricsSourceFixedIdentity
 		var categoriesJSON, evidenceJSON, identityJSON, identitySHA string
@@ -602,27 +768,25 @@ func loadLyricsRenditionEditorBundle(q queryRower, musicID int) (lyricsRendition
 			rows.Close()
 			return lyricsRenditionEditorBundle{}, err
 		}
-		if err := json.Unmarshal([]byte(categoriesJSON), &stored.Categories); err != nil {
-			rows.Close()
-			return lyricsRenditionEditorBundle{}, err
-		}
-		if err := json.Unmarshal([]byte(evidenceJSON), &stored.IndexEvidenceRefs); err != nil {
-			rows.Close()
-			return lyricsRenditionEditorBundle{}, err
-		}
-		decoded, err := model.DecodeLyricsSourceFixedIdentity([]byte(identityJSON))
-		if err != nil {
-			rows.Close()
-			return lyricsRenditionEditorBundle{}, err
-		}
-		canonicalIdentityJSON, err := json.Marshal(decoded)
-		identityDigest := sha256.Sum256([]byte(identityJSON))
-		expected, found := bundle.identities[stored.RenditionKey]
-		if err != nil || !found || !publicLyricsFixedIdentityScalarsMatch(stored, decoded) ||
-			!reflect.DeepEqual(decoded, expected) || string(canonicalIdentityJSON) != identityJSON ||
-			hex.EncodeToString(identityDigest[:]) != identitySHA {
+		art, found := verified.artifactRows[stored.RenditionKey]
+		if !found || identityJSON != art.identityJSON || identitySHA != art.identitySHA ||
+			!storedIdentityScalarsEqual(stored, art.identity) {
 			rows.Close()
 			return lyricsRenditionEditorBundle{}, fmt.Errorf("source v3 editor artifact %q changed", stored.RenditionKey)
+		}
+		if categoriesJSON != art.categoriesJSON {
+			if err := json.Unmarshal([]byte(categoriesJSON), &stored.Categories); err != nil ||
+				!reflect.DeepEqual(stored.Categories, art.identity.Categories) {
+				rows.Close()
+				return lyricsRenditionEditorBundle{}, fmt.Errorf("source v3 editor artifact %q changed", stored.RenditionKey)
+			}
+		}
+		if evidenceJSON != art.evidenceJSON {
+			if err := json.Unmarshal([]byte(evidenceJSON), &stored.IndexEvidenceRefs); err != nil ||
+				!reflect.DeepEqual(stored.IndexEvidenceRefs, art.identity.IndexEvidenceRefs) {
+				rows.Close()
+				return lyricsRenditionEditorBundle{}, fmt.Errorf("source v3 editor artifact %q changed", stored.RenditionKey)
+			}
 		}
 		if _, duplicate := seenArtifacts[stored.RenditionKey]; duplicate {
 			rows.Close()
@@ -637,14 +801,10 @@ func loadLyricsRenditionEditorBundle(q queryRower, musicID int) (lyricsRendition
 	if err := rows.Close(); err != nil {
 		return lyricsRenditionEditorBundle{}, err
 	}
-	if len(seenArtifacts) != len(bundle.identities) {
+	if len(seenArtifacts) != len(verified.identities) {
 		return lyricsRenditionEditorBundle{}, errors.New("source v3 editor artifacts do not cover every fixed identity")
 	}
-	expectedRefs, err := storeV3DocumentComponentRefs(document)
-	if err != nil {
-		return lyricsRenditionEditorBundle{}, err
-	}
-	bundle.contributions = make(map[string]string, len(expectedRefs))
+
 	contributionQuery := `SELECT component,rendition_key,contribution_sha256
 		FROM song_lyrics_component_contributions WHERE document_id=? ORDER BY component`
 	contributionArgs := []any{bundle.documentID}
@@ -658,20 +818,20 @@ func loadLyricsRenditionEditorBundle(q queryRower, musicID int) (lyricsRendition
 	if err != nil {
 		return lyricsRenditionEditorBundle{}, err
 	}
+	seenContribs := make(map[string]struct{}, len(verified.contributions))
 	for rows.Next() {
 		var component, identityKey, contributionSHA string
 		if err := rows.Scan(&component, &identityKey, &contributionSHA); err != nil {
 			rows.Close()
 			return lyricsRenditionEditorBundle{}, err
 		}
-		expected, found := expectedRefs[component]
-		contributionDigest := sha256.Sum256([]byte(bundle.documentSHA + "\x00" + component + "\x00" + identityKey))
-		if !found || expected != identityKey || bundle.contributions[component] != "" ||
-			hex.EncodeToString(contributionDigest[:]) != contributionSHA {
+		expected, found := verified.contributions[component]
+		if _, dup := seenContribs[component]; !found || dup ||
+			expected.renditionKey != identityKey || expected.sha256Hex != contributionSHA {
 			rows.Close()
 			return lyricsRenditionEditorBundle{}, fmt.Errorf("source v3 editor contribution %q changed", component)
 		}
-		bundle.contributions[component] = identityKey
+		seenContribs[component] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -680,10 +840,18 @@ func loadLyricsRenditionEditorBundle(q queryRower, musicID int) (lyricsRendition
 	if err := rows.Close(); err != nil {
 		return lyricsRenditionEditorBundle{}, err
 	}
-	if len(bundle.contributions) != len(expectedRefs) {
+	if len(seenContribs) != len(verified.contributions) {
 		return lyricsRenditionEditorBundle{}, errors.New("source v3 editor contributions are incomplete")
 	}
-	localization, err := loadLyricsRenditionLocalizationState(q, bundle.documentID, document)
+	if mutable {
+		bundle.contributions = make(map[string]string, len(verified.contributionKeys))
+		for k, v := range verified.contributionKeys {
+			bundle.contributions[k] = v
+		}
+	} else {
+		bundle.contributions = verified.contributionKeys
+	}
+	localization, err := loadLyricsRenditionLocalizationState(q, bundle.documentID, verified.document)
 	if err != nil {
 		return lyricsRenditionEditorBundle{}, err
 	}
@@ -697,7 +865,6 @@ func loadLyricsRenditionLocalizationState(q queryRower, documentID int64, docume
 	if err != nil {
 		return lyricsRenditionLocalizationState{}, err
 	}
-	defer rows.Close()
 	byKey := make(map[string]lyricscontract.RenditionTranslation, len(document.Renditions))
 	state := lyricsRenditionLocalizationState{}
 	for rows.Next() {
@@ -706,22 +873,30 @@ func loadLyricsRenditionLocalizationState(q queryRower, documentID int64, docume
 		var updatedAt int64
 		var revision int
 		if err := rows.Scan(&item.RenditionKey, &locale, &item.TranslationCredit, &item.ProofreadingCredit, &updatedAt, &revision); err != nil {
+			rows.Close()
 			return lyricsRenditionLocalizationState{}, err
 		}
 		if locale != "zh-CN" || revision <= 0 || updatedAt <= 0 {
+			rows.Close()
 			return lyricsRenditionLocalizationState{}, errors.New("source v3 editor localization metadata is unsupported")
 		}
 		if _, duplicate := byKey[item.RenditionKey]; duplicate {
+			rows.Close()
 			return lyricsRenditionLocalizationState{}, fmt.Errorf("source v3 editor localization %q is duplicated", item.RenditionKey)
 		}
 		if !state.HasRows {
 			state.HasRows, state.Revision, state.UpdatedAt = true, revision, updatedAt
 		} else if revision != state.Revision || updatedAt != state.UpdatedAt {
+			rows.Close()
 			return lyricsRenditionLocalizationState{}, errors.New("source v3 editor localization revisions are inconsistent")
 		}
 		byKey[item.RenditionKey] = item
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
+		return lyricsRenditionLocalizationState{}, err
+	}
+	if err := rows.Close(); err != nil {
 		return lyricsRenditionLocalizationState{}, err
 	}
 	if !state.HasRows {
@@ -771,7 +946,7 @@ func loadLyricsRenditionLocalizationState(q queryRower, documentID int64, docume
 		if len(lines) != 0 && len(lines) != renditionLineCountForStore(rendition) {
 			return lyricsRenditionLocalizationState{}, fmt.Errorf("source v3 editor localization %q has incomplete translation lines", rendition.RenditionKey)
 		}
-		item.Translations = append([]string(nil), lines...)
+		item.Translations = lines
 		state.Translations = append(state.Translations, item)
 	}
 	peerRows, err := q.Query(`SELECT rendition_key,side,locale,position,text
@@ -1018,7 +1193,7 @@ func (s *Store) saveLyricsRenditionMutation(
 func loadLyricsRenditionMutationTx(tx *sql.Tx, input LyricsRenditionDocument) (
 	lyricsRenditionEditorBundle, lyricsTranslationEditionSelection, LyricsRenditionDocument, error,
 ) {
-	bundle, err := loadLyricsRenditionEditorBundle(tx, input.MusicID)
+	bundle, err := loadMutableLyricsRenditionEditorBundle(tx, input.MusicID)
 	if err != nil {
 		return lyricsRenditionEditorBundle{}, lyricsTranslationEditionSelection{}, LyricsRenditionDocument{}, err
 	}

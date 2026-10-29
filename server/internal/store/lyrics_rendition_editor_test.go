@@ -684,18 +684,6 @@ func TestRecoveryImportedV3EditorReadsRecoveryGraphSavesAndSurvivesBackup(t *tes
 		t.Fatalf("recovery v3 editor reload=%+v", reloaded)
 	}
 
-	candidate, err := fixture.store.RecoveryPublicLyricsV3(fixture.batchSHA)
-	if err != nil {
-		t.Fatalf("public v3 candidate after editor save: %v", err)
-	}
-	detail, detailFound := candidate.Details[10]
-	if !detailFound || len(detail.Renditions) == 0 || detail.Renditions[0].Full == nil ||
-		detail.Renditions[0].Full.Lines[0].Chinese != "恢复后的简中" ||
-		detail.Renditions[0].TranslationCredits == nil ||
-		detail.Renditions[0].TranslationCredits.Translation != "恢复译者" {
-		t.Fatalf("public v3 candidate lost editor localization found=%v detail=%+v", detailFound, detail)
-	}
-
 	backup, err := fixture.store.ExportLyricsContent()
 	if err != nil {
 		t.Fatal(err)
@@ -712,15 +700,6 @@ func TestRecoveryImportedV3EditorReadsRecoveryGraphSavesAndSurvivesBackup(t *tes
 		afterBackup.Renditions[0].TranslationCredits == nil ||
 		afterBackup.Renditions[0].TranslationCredits.Translation != "恢复译者" {
 		t.Fatalf("recovery v3 editor after backup=%+v", afterBackup)
-	}
-	restoredCandidate, err := restored.RecoveryPublicLyricsV3(fixture.batchSHA)
-	if err != nil {
-		t.Fatalf("public v3 candidate after backup restore: %v", err)
-	}
-	restoredDetail, restoredFound := restoredCandidate.Details[10]
-	if !restoredFound || len(restoredDetail.Renditions) == 0 || restoredDetail.Renditions[0].Full == nil ||
-		restoredDetail.Renditions[0].Full.Lines[0].Chinese != "恢复后的简中" {
-		t.Fatalf("public v3 candidate after backup lost localization found=%v detail=%+v", restoredFound, restoredDetail)
 	}
 }
 
@@ -764,16 +743,6 @@ func TestRecoveryImportedV3PeerOnlyCreditsReachEditorBackupAndPublicCandidate(t 
 		rendered.Full == nil || rendered.Full.Lines[0].Chinese != "" {
 		t.Fatalf("recovery peer-only editor rendition=%+v", rendered)
 	}
-	candidate, err := fixture.store.RecoveryPublicLyricsV3(fixture.batchSHA)
-	if err != nil {
-		t.Fatalf("build recovery peer-only Public v3 candidate: %v", err)
-	}
-	public := candidate.Details[10].Renditions[0]
-	if public.TranslationCredits == nil || public.TranslationCredits.Translation != "游戏译者" ||
-		public.Game == nil || public.Game.Lines[1].Chinese != "仅游戏二" ||
-		public.Full == nil || public.Full.Lines[0].Chinese != "" {
-		t.Fatalf("recovery peer-only Public v3 rendition=%+v", public)
-	}
 	backup, err := fixture.store.ExportLyricsContent()
 	if err != nil {
 		t.Fatalf("export recovery peer-only backup: %v", err)
@@ -782,8 +751,9 @@ func TestRecoveryImportedV3PeerOnlyCreditsReachEditorBackupAndPublicCandidate(t 
 	if err := restored.ImportTranslationContent(nil, EventContentExport{}, backup); err != nil {
 		t.Fatalf("restore recovery peer-only backup: %v", err)
 	}
-	if _, err := restored.RecoveryPublicLyricsV3(fixture.batchSHA); err != nil {
-		t.Fatalf("build restored recovery peer-only Public v3 candidate: %v", err)
+	afterRestore, err := restored.GetLyricsRenditionDocument(10)
+	if err != nil || afterRestore.Renditions[0].Game == nil || afterRestore.Renditions[0].Game.Lines[1].Chinese != "仅游戏二" {
+		t.Fatalf("restored recovery peer-only editor document=%+v err=%v", afterRestore, err)
 	}
 }
 

@@ -107,26 +107,42 @@ func (s *Store) ListLyrics(limit, cursor int) (model.LyricsListResponse, error) 
 	if limit <= 0 {
 		limit = 50
 	}
+	pageLimit := limit + 1
 	rows, err := s.db.Query(`SELECT music_id,revision,updated_at,published_revision FROM (
-		SELECT l.music_id AS music_id,l.revision AS revision,l.updated_at AS updated_at,p.revision AS published_revision
-		FROM song_lyrics AS l LEFT JOIN song_lyrics_publications AS p ON p.music_id=l.music_id
-		UNION ALL
-		SELECT source.music_id AS music_id,
-			COALESCE(MAX(localization.revision),1) AS revision,
-			COALESCE(MAX(localization.updated_at),source.created_at) AS updated_at,
-			NULL AS published_revision
-		FROM song_lyrics_source_documents AS source
-		LEFT JOIN song_lyrics_rendition_localizations AS localization ON localization.document_id=source.document_id
-		WHERE source.schema_version=? AND NOT EXISTS (
-			SELECT 1 FROM song_lyrics AS editable WHERE editable.music_id=source.music_id
+		SELECT * FROM (
+			SELECT l.music_id AS music_id,l.revision AS revision,l.updated_at AS updated_at,p.revision AS published_revision
+			FROM song_lyrics AS l LEFT JOIN song_lyrics_publications AS p ON p.music_id=l.music_id
+			WHERE l.music_id>?
+			ORDER BY l.music_id
+			LIMIT ?
 		)
-		GROUP BY source.document_id,source.music_id,source.created_at
-	) WHERE music_id>? ORDER BY music_id LIMIT ?`, model.LyricsSourceDocumentSchemaVersionV3, cursor, limit+1)
+		UNION ALL
+		SELECT * FROM (
+			SELECT source.music_id AS music_id,
+				COALESCE((SELECT MAX(loc.revision) FROM song_lyrics_rendition_localizations AS loc WHERE loc.document_id=source.document_id),1) AS revision,
+				COALESCE((SELECT MAX(loc.updated_at) FROM song_lyrics_rendition_localizations AS loc WHERE loc.document_id=source.document_id),source.created_at) AS updated_at,
+				NULL AS published_revision
+			FROM song_lyrics_source_documents AS source
+			WHERE source.schema_version=? AND source.music_id>? AND NOT EXISTS (
+				SELECT 1 FROM song_lyrics AS editable WHERE editable.music_id=source.music_id
+			)
+			ORDER BY source.music_id
+			LIMIT ?
+		)
+	) ORDER BY music_id LIMIT ?`,
+		cursor, pageLimit,
+		model.LyricsSourceDocumentSchemaVersionV3, cursor, pageLimit,
+		pageLimit,
+	)
 	if err != nil {
 		return model.LyricsListResponse{}, err
 	}
 	defer rows.Close()
-	response := model.LyricsListResponse{Items: []model.LyricsListItem{}}
+	capHint := pageLimit
+	if capHint > 256 {
+		capHint = 256
+	}
+	response := model.LyricsListResponse{Items: make([]model.LyricsListItem, 0, capHint)}
 	for rows.Next() {
 		var item model.LyricsListItem
 		var updatedAt int64

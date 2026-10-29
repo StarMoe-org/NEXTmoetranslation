@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "modernc.org/sqlite"
+	_ "moesekai/server/internal/sqlitedriver"
 )
 
 func TestRenditionV3MigrationPreservesV26LayoutBytesForeignKeysAndTriggers(t *testing.T) {

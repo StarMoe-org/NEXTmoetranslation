@@ -7,12 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"moesekai/server/internal/jsonstrict"
 )
 
 const (
@@ -41,17 +42,105 @@ const (
 	maxLyricsSourceRubyReadingTotalBytes = 1 << 20
 )
 
-var (
-	canonicalLyricsSourceSHA1              = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	canonicalLyricsSourceSHA256            = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	canonicalLyricsSourceColor             = regexp.MustCompile(`^#[0-9A-F]{6}$`)
-	canonicalLyricsSourcePerformerID       = regexp.MustCompile(`^[\pL\pN_-]+$`)
-	canonicalLyricsSourceLineID            = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	canonicalLyricsSourceReferenceID       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`)
-	canonicalLyricsSourceRenditionKey      = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
-	lyricsSourcePerformerAnnotationPattern = regexp.MustCompile(`@[0-9]+`)
-	lyricsSourceColorAnnotationPattern     = regexp.MustCompile(`(?i)#[0-9a-f]{6}`)
-)
+func isCanonicalLyricsSourceLowerHex(s string, wantLen int) bool {
+	if len(s) != wantLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func isCanonicalLyricsSourceColor(s string) bool {
+	if len(s) != 7 || s[0] != '#' {
+		return false
+	}
+	for i := 1; i < 7; i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func isCanonicalLyricsSourcePerformerID(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 0x80 {
+			for _, r := range s {
+				if r != '_' && r != '-' && !unicode.IsLetter(r) && !unicode.IsNumber(r) {
+					return false
+				}
+			}
+			return true
+		}
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func isCanonicalLyricsSourceLineID(s string) bool {
+	if len(s) == 0 || len(s) > 128 {
+		return false
+	}
+	c0 := s[0]
+	if !((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z') || (c0 >= '0' && c0 <= '9')) {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '.' || c == '_' || c == ':' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func isCanonicalLyricsSourceReferenceID(s string) bool {
+	if len(s) == 0 || len(s) > 256 {
+		return false
+	}
+	c0 := s[0]
+	if !((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z') || (c0 >= '0' && c0 <= '9')) {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '.' || c == '_' || c == ':' || c == '/' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func isCanonicalLyricsSourceRenditionKey(s string) bool {
+	if len(s) == 0 || len(s) > 128 {
+		return false
+	}
+	c0 := s[0]
+	if !((c0 >= 'a' && c0 <= 'z') || (c0 >= '0' && c0 <= '9')) {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
 
 func IsValidLyricsSourceProvider(provider LyricsSourceProvider) bool {
 	switch provider {
@@ -121,7 +210,7 @@ func ValidateLyricsSourceFixedIdentity(identity LyricsSourceFixedIdentity) error
 		return fmt.Errorf("lyrics source provider %q requires one of the origins %q, not %q",
 			identity.Provider, LyricsSourceProviderOrigins(identity.Provider), identity.Origin)
 	}
-	if identity.PageID <= 0 || identity.RevisionID <= 0 || !canonicalLyricsSourceSHA1.MatchString(identity.SHA1) {
+	if identity.PageID <= 0 || identity.RevisionID <= 0 || !isCanonicalLyricsSourceLowerHex(identity.SHA1, 40) {
 		return errors.New("lyrics source fixed identity has an invalid page, revision, or SHA1")
 	}
 	if !validLyricsSourceLabel(identity.Title, maxLyricsSourceTitleBytes) {
@@ -131,12 +220,12 @@ func ValidateLyricsSourceFixedIdentity(identity LyricsSourceFixedIdentity) error
 		return errors.New("lyrics source fixed identity has an invalid section")
 	}
 	if len(identity.RenditionKey) > maxLyricsSourceRenditionKeyBytes ||
-		!canonicalLyricsSourceRenditionKey.MatchString(identity.RenditionKey) {
+		!isCanonicalLyricsSourceRenditionKey(identity.RenditionKey) {
 		return errors.New("lyrics source fixed identity has an invalid artifact rendition key")
 	}
 	if identity.CompositionRenditionKey != "" &&
 		(len(identity.CompositionRenditionKey) > maxLyricsSourceRenditionKeyBytes ||
-			!canonicalLyricsSourceRenditionKey.MatchString(identity.CompositionRenditionKey)) {
+			!isCanonicalLyricsSourceRenditionKey(identity.CompositionRenditionKey)) {
 		return errors.New("lyrics source fixed identity has an invalid composition rendition key")
 	}
 	if identity.VersionReason != "" && !IsValidLyricsSourceCandidateVersionReasonCode(identity.VersionReason) {
@@ -181,8 +270,8 @@ func ValidateLyricsSourceFixedIdentity(identity LyricsSourceFixedIdentity) error
 	seenEvidence := make(map[string]struct{}, len(identity.IndexEvidenceRefs))
 	for _, reference := range identity.IndexEvidenceRefs {
 		if len(reference.EvidenceID) > maxLyricsSourceReferenceIDBytes ||
-			!canonicalLyricsSourceReferenceID.MatchString(reference.EvidenceID) ||
-			!canonicalLyricsSourceSHA256.MatchString(reference.SHA256) {
+			!isCanonicalLyricsSourceReferenceID(reference.EvidenceID) ||
+			!isCanonicalLyricsSourceLowerHex(reference.SHA256, 64) {
 			return errors.New("lyrics source fixed identity has an invalid index evidence reference")
 		}
 		if _, exists := seenEvidence[reference.EvidenceID]; exists {
@@ -222,9 +311,9 @@ func validateLyricsSourceFull(full LyricsSourceFull, authoritativeVocaloidSegmen
 	performers := make(map[string]struct{}, len(full.Performers))
 	for _, performer := range full.Performers {
 		if len(performer.PerformerID) == 0 || len(performer.PerformerID) > maxLyricsSourcePerformerIDBytes ||
-			!canonicalLyricsSourcePerformerID.MatchString(performer.PerformerID) ||
+			!isCanonicalLyricsSourcePerformerID(performer.PerformerID) ||
 			!validLyricsSourceLabel(performer.Name, maxLyricsSourcePerformerNameBytes) ||
-			(performer.Color != "" && !canonicalLyricsSourceColor.MatchString(performer.Color)) {
+			(performer.Color != "" && !isCanonicalLyricsSourceColor(performer.Color)) {
 			return errors.New("lyrics source Full has an invalid performer")
 		}
 		if _, exists := performers[performer.PerformerID]; exists {
@@ -240,7 +329,7 @@ func validateLyricsSourceFull(full LyricsSourceFull, authoritativeVocaloidSegmen
 	totalRubyReadingBytes := 0
 	hasRubyReading := false
 	for lineIndex, line := range full.Lines {
-		if !canonicalLyricsSourceLineID.MatchString(line.ID) {
+		if !isCanonicalLyricsSourceLineID(line.ID) {
 			return fmt.Errorf("lyrics source Full line %d has an invalid ID", lineIndex+1)
 		}
 		if _, exists := seenLineIDs[line.ID]; exists {
@@ -272,7 +361,7 @@ func validateLyricsSourceFull(full LyricsSourceFull, authoritativeVocaloidSegmen
 		if err := validateLyricsSourcePerformerRefs(line.TrailingPerformerIDs, performers); err != nil {
 			return fmt.Errorf("lyrics source Full line %d trailing performers: %w", lineIndex+1, err)
 		}
-		var lineText strings.Builder
+		lineOffset := 0
 		for segmentIndex, segment := range line.Segments {
 			if !validLyricsSourceLineText(segment.Text, maxLyricsSourceLineBytes) || segment.PerformerIDs == nil ||
 				segment.Ruby == nil || len(segment.Ruby) == 0 ||
@@ -282,8 +371,7 @@ func validateLyricsSourceFull(full LyricsSourceFull, authoritativeVocaloidSegmen
 			if err := validateLyricsSourcePerformerRefs(segment.PerformerIDs, performers); err != nil {
 				return fmt.Errorf("lyrics source Full line %d segment %d performers: %w", lineIndex+1, segmentIndex+1, err)
 			}
-			lineText.WriteString(segment.Text)
-			var rubyText strings.Builder
+			rubyOffset := 0
 			for spanIndex, span := range segment.Ruby {
 				if !validLyricsSourceSpanText(span.Text, maxLyricsSourceRubyTextBytes) ||
 					len(span.Reading) > maxLyricsSourceRubyReadingBytes || !validLyricsSourceRubyReading(span.Reading) {
@@ -294,13 +382,20 @@ func validateLyricsSourceFull(full LyricsSourceFull, authoritativeVocaloidSegmen
 				}
 				totalRubyReadingBytes += len(span.Reading)
 				hasRubyReading = hasRubyReading || span.Reading != ""
-				rubyText.WriteString(span.Text)
+				if !strings.HasPrefix(segment.Text[rubyOffset:], span.Text) {
+					return fmt.Errorf("lyrics source Full line %d segment %d ruby spans do not concatenate to segment text", lineIndex+1, segmentIndex+1)
+				}
+				rubyOffset += len(span.Text)
 			}
-			if rubyText.String() != segment.Text {
+			if rubyOffset != len(segment.Text) {
 				return fmt.Errorf("lyrics source Full line %d segment %d ruby spans do not concatenate to segment text", lineIndex+1, segmentIndex+1)
 			}
+			if !strings.HasPrefix(line.Text[lineOffset:], segment.Text) {
+				return fmt.Errorf("lyrics source Full line %d segments do not concatenate to authoritative text", lineIndex+1)
+			}
+			lineOffset += len(segment.Text)
 		}
-		if lineText.String() != line.Text {
+		if lineOffset != len(line.Text) {
 			return fmt.Errorf("lyrics source Full line %d segments do not concatenate to authoritative text", lineIndex+1)
 		}
 	}
@@ -357,7 +452,7 @@ func validateLyricsSourceAlternateVocalPayload(index int, alternate LyricsSource
 	seenSingerIDs := make(map[string]struct{}, len(alternate.SingerIDs))
 	for _, singerID := range alternate.SingerIDs {
 		if len(singerID) == 0 || len(singerID) > maxLyricsSourcePerformerIDBytes ||
-			!canonicalLyricsSourcePerformerID.MatchString(singerID) {
+			!isCanonicalLyricsSourcePerformerID(singerID) {
 			return fmt.Errorf("lyrics source alternate vocal %d has an invalid singer ID", index+1)
 		}
 		if _, duplicate := seenSingerIDs[singerID]; duplicate {
@@ -637,13 +732,33 @@ func validateLyricsSourceVersion(version LyricsSourceVersion) error {
 }
 
 func validateLyricsSourcePerformerRefs(references []string, performers map[string]struct{}) error {
+	if len(references) == 0 {
+		return nil
+	}
 	if len(references) > maxLyricsSourcePerformers {
 		return errors.New("too many performer IDs")
+	}
+	if len(references) <= 8 {
+		for i, performerID := range references {
+			if len(performerID) == 0 || len(performerID) > maxLyricsSourcePerformerIDBytes ||
+				!isCanonicalLyricsSourcePerformerID(performerID) {
+				return errors.New("invalid performer ID")
+			}
+			for j := 0; j < i; j++ {
+				if references[j] == performerID {
+					return errors.New("duplicate performer ID")
+				}
+			}
+			if _, exists := performers[performerID]; !exists {
+				return errors.New("unknown performer ID")
+			}
+		}
+		return nil
 	}
 	seen := make(map[string]struct{}, len(references))
 	for _, performerID := range references {
 		if len(performerID) == 0 || len(performerID) > maxLyricsSourcePerformerIDBytes ||
-			!canonicalLyricsSourcePerformerID.MatchString(performerID) {
+			!isCanonicalLyricsSourcePerformerID(performerID) {
 			return errors.New("invalid performer ID")
 		}
 		if _, exists := seen[performerID]; exists {
@@ -765,7 +880,32 @@ func validLyricsSourceSpanText(value string, maxBytes int) bool {
 }
 
 func hasLyricsSourceInlinePerformerAnnotation(value string) bool {
-	return lyricsSourcePerformerAnnotationPattern.MatchString(value) || lyricsSourceColorAnnotationPattern.MatchString(value)
+	if idx := strings.IndexByte(value, '@'); idx >= 0 {
+		for i := idx; i+1 < len(value); i++ {
+			if value[i] == '@' && value[i+1] >= '0' && value[i+1] <= '9' {
+				return true
+			}
+		}
+	}
+	if idx := strings.IndexByte(value, '#'); idx >= 0 {
+		for i := idx; i+6 < len(value); i++ {
+			if value[i] != '#' {
+				continue
+			}
+			allHex := true
+			for j := i + 1; j <= i+6; j++ {
+				c := value[j]
+				if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+					allHex = false
+					break
+				}
+			}
+			if allHex {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func validLyricsSourceRubyReading(value string) bool {
@@ -795,6 +935,66 @@ func validLyricsSourceRubyReading(value string) bool {
 	return hasKana
 }
 
+var (
+	romanizationForbiddenPatterns = [][]byte{
+		[]byte("romaji"),
+		[]byte("romanization"),
+		[]byte("romanisation"),
+		[]byte("romanized"),
+		[]byte("romanised"),
+	}
+)
+
+func checkLyricsSourceJSONKey(key []byte) error {
+	if isLyricsSourceRomanizationKeyBytes(key) {
+		return fmt.Errorf("romanization field %q is forbidden at the lyrics source boundary", string(key))
+	}
+	return nil
+}
+
+func isLyricsSourceRomanizationKeyBytes(key []byte) bool {
+	hasR := false
+	hasNonASCII := false
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		if c >= 0x80 {
+			hasNonASCII = true
+			break
+		}
+		if c == 'r' || c == 'R' {
+			hasR = true
+		}
+	}
+	if !hasNonASCII {
+		if !hasR {
+			return false
+		}
+		if len(key) <= 64 {
+			var norm [64]byte
+			n := 0
+			for i := 0; i < len(key); i++ {
+				c := key[i]
+				switch {
+				case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+					norm[n] = c
+					n++
+				case c >= 'A' && c <= 'Z':
+					norm[n] = c + ('a' - 'A')
+					n++
+				}
+			}
+			slice := norm[:n]
+			for _, pat := range romanizationForbiddenPatterns {
+				if bytes.Contains(slice, pat) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return isLyricsSourceRomanizationField(string(key))
+}
+
 func decodeClosedLyricsSourceJSON(body []byte, target any) error {
 	if target == nil || len(body) == 0 {
 		return errors.New("JSON body and target are required")
@@ -802,13 +1002,12 @@ func decodeClosedLyricsSourceJSON(body []byte, target any) error {
 	if len(body) > MaxLyricsSourceDocumentBytes {
 		return fmt.Errorf("lyrics source JSON exceeds %d bytes", MaxLyricsSourceDocumentBytes)
 	}
-	if !utf8.Valid(body) {
-		return errors.New("lyrics source JSON is not valid UTF-8")
-	}
-	if err := validateLyricsSourceJSONSurrogates(body); err != nil {
-		return err
-	}
-	if err := inspectLyricsSourceJSON(body); err != nil {
+	if err := jsonstrict.Scan(body, jsonstrict.Options{
+		MaxDepth:             MaxLyricsSourceJSONDepth,
+		ForbidLoneSurrogates: true,
+		RequireValidUTF8:     true,
+		CheckKey:             checkLyricsSourceJSONKey,
+	}); err != nil {
 		return err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
@@ -821,153 +1020,6 @@ func decodeClosedLyricsSourceJSON(body []byte, target any) error {
 			return err
 		}
 		return errors.New("trailing JSON value")
-	}
-	return nil
-}
-
-func validateLyricsSourceJSONSurrogates(body []byte) error {
-	inString := false
-	for index := 0; index < len(body); {
-		current := body[index]
-		if !inString {
-			if current == '"' {
-				inString = true
-			}
-			index++
-			continue
-		}
-		switch current {
-		case '"':
-			inString = false
-			index++
-		case '\\':
-			if index+1 >= len(body) {
-				return errors.New("lyrics source JSON contains an incomplete escape")
-			}
-			if body[index+1] != 'u' {
-				index += 2
-				continue
-			}
-			codeUnit, ok := parseLyricsSourceJSONHexQuad(body, index+2)
-			if !ok {
-				return errors.New("lyrics source JSON contains an invalid Unicode escape")
-			}
-			switch {
-			case codeUnit >= 0xD800 && codeUnit <= 0xDBFF:
-				lowIndex := index + 6
-				if lowIndex+6 > len(body) || body[lowIndex] != '\\' || body[lowIndex+1] != 'u' {
-					return errors.New("lyrics source JSON contains an escaped lone high surrogate")
-				}
-				low, validLow := parseLyricsSourceJSONHexQuad(body, lowIndex+2)
-				if !validLow || low < 0xDC00 || low > 0xDFFF {
-					return errors.New("lyrics source JSON contains an escaped lone high surrogate")
-				}
-				index = lowIndex + 6
-			case codeUnit >= 0xDC00 && codeUnit <= 0xDFFF:
-				return errors.New("lyrics source JSON contains an escaped lone low surrogate")
-			default:
-				index += 6
-			}
-		default:
-			index++
-		}
-	}
-	return nil
-}
-
-func parseLyricsSourceJSONHexQuad(body []byte, start int) (uint16, bool) {
-	if start < 0 || start+4 > len(body) {
-		return 0, false
-	}
-	var value uint16
-	for _, current := range body[start : start+4] {
-		value <<= 4
-		switch {
-		case current >= '0' && current <= '9':
-			value |= uint16(current - '0')
-		case current >= 'a' && current <= 'f':
-			value |= uint16(current-'a') + 10
-		case current >= 'A' && current <= 'F':
-			value |= uint16(current-'A') + 10
-		default:
-			return 0, false
-		}
-	}
-	return value, true
-}
-
-func inspectLyricsSourceJSON(body []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
-	if err := inspectLyricsSourceJSONValue(decoder, 1); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		if err != nil {
-			return err
-		}
-		return errors.New("trailing JSON value")
-	}
-	return nil
-}
-
-func inspectLyricsSourceJSONValue(decoder *json.Decoder, depth int) error {
-	if depth > MaxLyricsSourceJSONDepth {
-		return fmt.Errorf("lyrics source JSON exceeds maximum nesting depth %d", MaxLyricsSourceJSONDepth)
-	}
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delimiter, isDelimiter := token.(json.Delim)
-	if !isDelimiter {
-		return nil
-	}
-	switch delimiter {
-	case '{':
-		seen := map[string]struct{}{}
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return errors.New("lyrics source JSON object contains a non-string key")
-			}
-			if _, exists := seen[key]; exists {
-				return fmt.Errorf("duplicate lyrics source JSON field %q", key)
-			}
-			seen[key] = struct{}{}
-			if isLyricsSourceRomanizationField(key) {
-				return fmt.Errorf("romanization field %q is forbidden at the lyrics source boundary", key)
-			}
-			if err := inspectLyricsSourceJSONValue(decoder, depth+1); err != nil {
-				return err
-			}
-		}
-		closing, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		if closing != json.Delim('}') {
-			return errors.New("invalid lyrics source JSON object")
-		}
-	case '[':
-		for decoder.More() {
-			if err := inspectLyricsSourceJSONValue(decoder, depth+1); err != nil {
-				return err
-			}
-		}
-		closing, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		if closing != json.Delim(']') {
-			return errors.New("invalid lyrics source JSON array")
-		}
-	default:
-		return errors.New("invalid lyrics source JSON delimiter")
 	}
 	return nil
 }

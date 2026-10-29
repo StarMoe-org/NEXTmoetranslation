@@ -40,7 +40,7 @@ type Store struct {
 	lyricsMutexes [lyricsMutexStripeCount]sync.Mutex
 
 	localizationProjectionMu    sync.RWMutex
-	localizationProjectionCache map[int]LyricsRenditionDocument
+	localizationProjectionCache map[int]projectedLocalizationEntry
 }
 
 func New(database *db.DB) *Store {

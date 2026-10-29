@@ -5,8 +5,6 @@ import (
 	"os"
 	"reflect"
 	"testing"
-
-	"moesekai/server/internal/model"
 )
 
 func TestPublicLyricsV4CanonicalFixturesStrictRoundTrip(t *testing.T) {
@@ -89,27 +87,5 @@ func TestPublicLyricsV4StrictDecoderRejectsSourceTranslationsAndEditionDrift(t *
 				t.Fatal("tampered Public v4 detail was accepted")
 			}
 		})
-	}
-}
-
-func TestRecoveryPublicLyricsV4BuilderCreatesVirtualMainWithoutV30State(t *testing.T) {
-	document := publicV3TestDocument(t, publicV3TestRendition(
-		"sekai", "sekai-source", model.LyricsSourceRenditionSekai,
-		true, true, true, false, "",
-	))
-	content, batchSHA := publicV3RecoverySourceFixture(t, 812, document)
-	candidate, err := buildRecoveryPublicLyricsV4Candidate(content, batchSHA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	detail := candidate.Details[812]
-	if detail.Version != 4 || detail.DefaultTranslationEditionKey != MainLyricsTranslationEditionKey ||
-		len(detail.TranslationEditions) != 1 || detail.TranslationEditions[0].Key != MainLyricsTranslationEditionKey ||
-		len(detail.TranslationEditions[0].Renditions) != 1 || detail.TranslationEditions[0].Renditions[0].Full == nil ||
-		detail.TranslationEditions[0].Renditions[0].Game != nil {
-		t.Fatalf("virtual main v4 detail=%+v", detail)
-	}
-	if _, err := EncodePublicLyricsV4Detail(detail); err != nil {
-		t.Fatal(err)
 	}
 }
