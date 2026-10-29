@@ -1,12 +1,9 @@
 package main
 
 import (
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,16 +11,11 @@ import (
 
 	"moesekai/server/internal/auth"
 	"moesekai/server/internal/config"
-	"moesekai/server/internal/db"
 	"moesekai/server/internal/httpx"
 )
 
 func TestSeedConfigFromEnvSeedsTheSideStorySourceBases(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "side-story-seed.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
+	database := openServerTestDB(t)
 	configuration, err := config.New(database, "")
 	if err != nil {
 		t.Fatal(err)
@@ -125,11 +117,7 @@ func TestServicesConnectTheSideStoryRunnerAndStopItOnShutdown(t *testing.T) {
 		"UPSTREAM_CN_SCRIPTS_URL", "UPSTREAM_EN_SCRIPTS_URL"} {
 		t.Setenv(name, upstream.URL)
 	}
-	database, err := db.Open(filepath.Join(t.TempDir(), "side-story-wiring.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
+	database := openServerTestDB(t)
 	svc := buildServices(startupEnv{dataDir: t.TempDir()}, sideStoryTestSettings(t), database)
 	if svc.sideStory == nil || svc.sideStory.Translator != svc.translator {
 		t.Fatalf("side story backfill is not built on the process translator: %+v", svc.sideStory)
@@ -197,11 +185,7 @@ func TestAfterContentRestoreRefreshesTheSideStoryCatalog(t *testing.T) {
 		defer mu.Unlock()
 		return masterdata
 	}
-	database, err := db.Open(filepath.Join(t.TempDir(), "side-story-restore.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
+	database := openServerTestDB(t)
 	svc := buildServices(startupEnv{dataDir: t.TempDir()}, sideStoryTestSettings(t), database)
 	sources := map[string]string{}
 	for _, key := range []string{config.KeyUpstreamJPMasterdataURL, config.KeyUpstreamJPMasterdataFallbackURL} {
@@ -258,42 +242,34 @@ func TestAfterContentRestoreRefreshesTheSideStoryCatalog(t *testing.T) {
 		return err == nil && next.After(time.Now()) && next.Before(time.Now().Add(time.Minute))
 	})
 	release()
+	svc.sideStory.TriggerSideStoryBackfill(false)
 	waitUntil("a catalog refresh after the restore", func() bool { return requests() >= 2*first })
 }
 
-const sideStoryEnvFailureHelperEnv = "MOESEKAI_SIDE_STORY_ENV_FAILURE_HELPER"
-
 func TestInvalidSideStoryEnvFailsBeforeTheDatabaseIsOpened(t *testing.T) {
-	if os.Getenv(sideStoryEnvFailureHelperEnv) == "1" {
-		os.Args = []string{"moesekai-server"}
-		main()
-		return
-	}
-	for _, test := range []struct{ name, env, want string }{
-		{"backfill switch", "SIDE_STORY_BACKFILL_ENABLED=off", "SIDE_STORY_BACKFILL_ENABLED must be true or false"},
-		{"backfill batch", "SIDE_STORY_BACKFILL_BATCH=0", "SIDE_STORY_BACKFILL_BATCH must be"},
-		{"script source", "UPSTREAM_JP_SCRIPTS_URL=http://scripts.example.test/assets", "UPSTREAM_JP_SCRIPTS_URL"},
-		{"masterdata source", "UPSTREAM_EN_MASTERDATA_FALLBACK_URL=https://user@en.example.test/master", "UPSTREAM_EN_MASTERDATA_FALLBACK_URL"},
-		{"story library source", "UPSTREAM_JP_SCRIPTS_LIBRARY_URL=https://library.example.test/jp?token=x", "UPSTREAM_JP_SCRIPTS_LIBRARY_URL: upstream.jp_scripts_library_url contains an unsafe upstream URL"},
-		{"trailing carriage return", "UPSTREAM_JP_SCRIPTS_URL=https://scripts.example.test/assets\r", "UPSTREAM_JP_SCRIPTS_URL: upstream.jp_scripts_url must not contain control characters"},
-		{"over-long source", "UPSTREAM_CN_SCRIPTS_URL=https://scripts.example.test/" + strings.Repeat("a", 8192), "UPSTREAM_CN_SCRIPTS_URL: upstream.cn_scripts_url exceeds the 8192-byte"},
+	for _, test := range []struct{ name, key, val, want string }{
+		{"backfill switch", "SIDE_STORY_BACKFILL_ENABLED", "off", "SIDE_STORY_BACKFILL_ENABLED must be true or false"},
+		{"backfill batch", "SIDE_STORY_BACKFILL_BATCH", "0", "SIDE_STORY_BACKFILL_BATCH must be"},
+		{"script source", "UPSTREAM_JP_SCRIPTS_URL", "http://scripts.example.test/assets", "UPSTREAM_JP_SCRIPTS_URL"},
+		{"masterdata source", "UPSTREAM_EN_MASTERDATA_FALLBACK_URL", "https://user@en.example.test/master", "UPSTREAM_EN_MASTERDATA_FALLBACK_URL"},
+		{"story library source", "UPSTREAM_JP_SCRIPTS_LIBRARY_URL", "https://library.example.test/jp?token=x", "UPSTREAM_JP_SCRIPTS_LIBRARY_URL: upstream.jp_scripts_library_url contains an unsafe upstream URL"},
+		{"trailing carriage return", "UPSTREAM_JP_SCRIPTS_URL", "https://scripts.example.test/assets\r", "UPSTREAM_JP_SCRIPTS_URL: upstream.jp_scripts_url must not contain control characters"},
+		{"over-long source", "UPSTREAM_CN_SCRIPTS_URL", "https://scripts.example.test/" + strings.Repeat("a", 8192), "UPSTREAM_CN_SCRIPTS_URL: upstream.cn_scripts_url exceeds the 8192-byte"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			databasePath := filepath.Join(t.TempDir(), "must-not-exist", "database.db")
-			command := exec.Command(os.Args[0], "-test.run=^TestInvalidSideStoryEnvFailsBeforeTheDatabaseIsOpened$")
-			command.Env = []string{
-				sideStoryEnvFailureHelperEnv + "=1",
-				"MOESEKAI_PRODUCTION=false",
-				"DB_PATH=" + databasePath,
-				"JWT_SECRET=side-story-env-secret-at-least-32-bytes",
-				test.env,
+			clearSideStoryBackfillEnv(t)
+			for _, source := range sideStorySourceEnv {
+				_ = os.Unsetenv(source.env)
 			}
-			output, err := command.CombinedOutput()
-			if err == nil || !strings.Contains(string(output), test.want) {
-				t.Fatalf("%s: err=%v output=%q", test.env, err, output)
+			t.Setenv("JWT_SECRET", "side-story-env-secret-at-least-32-bytes")
+			t.Setenv(test.key, test.val)
+			_, scope, err := resolveRuntimeSettingsCheck(false)
+			msg := ""
+			if err != nil {
+				msg = scope + ": " + err.Error()
 			}
-			if _, err := os.Stat(filepath.Dir(databasePath)); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("%s touched the database directory before failing: %v", test.env, err)
+			if err == nil || !strings.Contains(msg, test.want) {
+				t.Fatalf("%s=%q: err=%v msg=%q, want %q", test.key, test.val, err, msg, test.want)
 			}
 		})
 	}

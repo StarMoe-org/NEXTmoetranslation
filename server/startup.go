@@ -41,19 +41,27 @@ type runtimeSettings struct {
 }
 
 func resolveEnvironment() startupEnv {
-	verifyWorkspaceOnly := len(os.Args) == 2 && os.Args[1] == "--verify-workspace"
-	verifyRuntimeOnly := len(os.Args) == 2 && os.Args[1] == "--verify-runtime"
-	if len(os.Args) > 1 && !verifyWorkspaceOnly && !verifyRuntimeOnly {
-		fatal("arguments", errors.New("usage: moesekai-server [--verify-workspace|--verify-runtime]"))
+	env, scope, err := resolveEnvironmentFromArgs(os.Args)
+	if err != nil {
+		fatal(scope, err)
+	}
+	return env
+}
+
+func resolveEnvironmentFromArgs(args []string) (startupEnv, string, error) {
+	verifyWorkspaceOnly := len(args) == 2 && args[1] == "--verify-workspace"
+	verifyRuntimeOnly := len(args) == 2 && args[1] == "--verify-runtime"
+	if len(args) > 1 && !verifyWorkspaceOnly && !verifyRuntimeOnly {
+		return startupEnv{}, "arguments", errors.New("usage: moesekai-server [--verify-workspace|--verify-runtime]")
 	}
 
 	production, err := resolveProductionMode(os.Getenv("MOESEKAI_PRODUCTION"))
 	if err != nil {
-		fatal("MOESEKAI_PRODUCTION", err)
+		return startupEnv{}, "MOESEKAI_PRODUCTION", err
 	}
 	timezoneRaw, timezoneConfigured := os.LookupEnv("TZ")
 	if err := validateRuntimeTimezone(production, timezoneRaw, timezoneConfigured); err != nil {
-		fatal("TZ", err)
+		return startupEnv{}, "TZ", err
 	}
 	if production {
 		// Enforce UTC even if the approved base image's /etc/localtime differs.
@@ -75,28 +83,28 @@ func resolveEnvironment() startupEnv {
 		verifiedWorkspace, err = workspaceverify.VerifyRuntime(workspaceConfig)
 	}
 	if err != nil {
-		fatal("workspace verification", err)
+		return startupEnv{}, "workspace verification", err
 	}
 	webDirRaw, webDirConfigured := os.LookupEnv("WEB_DIR")
 	webDir, err := resolveWebDir(production, webDirRaw, webDirConfigured)
 	if err != nil {
-		fatal("WEB_DIR", err)
+		return startupEnv{}, "WEB_DIR", err
 	}
 	dbPathRaw, dbPathConfigured := os.LookupEnv("DB_PATH")
 	dbPath, err := resolveDBPath(production, dbPathRaw, dbPathConfigured)
 	if err != nil {
-		fatal("DB_PATH", err)
+		return startupEnv{}, "DB_PATH", err
 	}
 	dataDirRaw, dataDirConfigured := os.LookupEnv("DATA_DIR")
 	dataDir, err := resolveDataDir(production, dataDirRaw, dataDirConfigured)
 	if err != nil {
-		fatal("DATA_DIR", err)
+		return startupEnv{}, "DATA_DIR", err
 	}
 	return startupEnv{
 		production: production, verifyOnly: verifyWorkspaceOnly || verifyRuntimeOnly,
 		webDir: webDir, dbPath: dbPath, dataDir: dataDir,
 		workspaceMode: workspaceModeRaw, workspaceWebDir: workspaceWebDir, verifiedWorkspace: verifiedWorkspace,
-	}
+	}, "", nil
 }
 
 func logWorkspaceVerification(env startupEnv) {
@@ -112,6 +120,18 @@ func logWorkspaceVerification(env startupEnv) {
 }
 
 func resolveRuntimeSettings(production bool) runtimeSettings {
+	settings, scope, err := resolveRuntimeSettingsCheck(production)
+	if err != nil {
+		if scope == "JWT_SECRET" {
+			fmt.Fprintf(os.Stderr, "Fatal: JWT_SECRET: %v\n", err)
+			os.Exit(1)
+		}
+		fatal(scope, err)
+	}
+	return settings
+}
+
+func resolveRuntimeSettingsCheck(production bool) (runtimeSettings, string, error) {
 	settings := runtimeSettings{
 		port:        envOr("PORT", "8080"),
 		masterKey:   os.Getenv("MOESEKAI_MASTER_KEY"),
@@ -120,31 +140,30 @@ func resolveRuntimeSettings(production bool) runtimeSettings {
 	}
 	shutdownConfig, err := shutdownConfigFromEnv()
 	if err != nil {
-		fatal("shutdown configuration", err)
+		return runtimeSettings{}, "shutdown configuration", err
 	}
 	settings.shutdown = shutdownConfig
 	if err := httpx.ValidateUpstreamEnvironment(production); err != nil {
-		fatal("upstream network configuration", err)
+		return runtimeSettings{}, "upstream network configuration", err
 	}
 	sideStoryOptions, err := sideStoryBackfillOptionsFromEnv()
 	if err != nil {
-		fatal("side story backfill configuration", err)
+		return runtimeSettings{}, "side story backfill configuration", err
 	}
 	settings.sideStory = sideStoryOptions
 	if err := validateSideStorySourceEnv(); err != nil {
-		fatal("side story source configuration", err)
+		return runtimeSettings{}, "side story source configuration", err
 	}
 	if err := validateConsoleOrigin(production, settings.allowOrigin); err != nil {
-		fatal("CONSOLE_ORIGIN", err)
+		return runtimeSettings{}, "CONSOLE_ORIGIN", err
 	}
 	if err := validateProductionMasterKey(production, settings.masterKey); err != nil {
-		fatal("production startup validation", err)
+		return runtimeSettings{}, "production startup validation", err
 	}
 	if err := auth.ValidateJWTSecret(settings.jwtSecret); err != nil {
-		fmt.Fprintf(os.Stderr, "Fatal: JWT_SECRET: %v\n", err)
-		os.Exit(1)
+		return runtimeSettings{}, "JWT_SECRET", err
 	}
-	return settings
+	return settings, "", nil
 }
 
 // sideStorySourceEnv are the source URL env seedConfigFromEnv gained with side

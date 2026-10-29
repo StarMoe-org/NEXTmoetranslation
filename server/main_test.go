@@ -3,22 +3,16 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"moesekai/server/internal/auth"
-	"moesekai/server/internal/db"
 )
 
 // The lifecycle probes answer any method otherwise, because their handlers never
 // inspect r.Method.
 func TestLifecycleProbesRejectWriteMethods(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "probes.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
+	database := openServerTestDB(t)
 	mux := http.NewServeMux()
 	registerOperationalRoutes(mux, operationalDeps{
 		database: database,

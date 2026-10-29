@@ -785,10 +785,9 @@ func sekaipediaHybridRubyRegions(japanese string) []sekaipediaHybridRubyRegion {
 		}
 		if containsKanji(surface) {
 			region := sekaipediaHybridRubyRegion{text: surface, variable: true, annotate: true}
-			features := token.Features()
-			if len(features) >= 8 && features[7] != "*" {
-				reading := []rune(katakanaToHiragana(features[7]))
-				if validGeneratedRubyReading(string(reading)) {
+			if candidate, ok := furiganaTokenHiraganaReading(token); ok {
+				reading := []rune(candidate)
+				if validGeneratedRubyReading(candidate) {
 					if spans, aligned := rubySpansFromKanaReading(surface, reading); aligned {
 						region.dictionary = markRubyReadingEvidence(
 							spans, model.LyricsSourceReadingEvidenceDeterministicDictionary, rubyGeneratorVersion,

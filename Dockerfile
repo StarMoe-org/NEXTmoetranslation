@@ -80,7 +80,8 @@ ENV DB_PATH=/data/moesekai.db \
     DATA_DIR=/data \
     WEB_DIR=/app/web \
     HOME=/tmp \
-    TZ=UTC
+    TZ=UTC \
+    GOMEMLIMIT=1GiB
 
 VOLUME ["/data"]
 EXPOSE 8080

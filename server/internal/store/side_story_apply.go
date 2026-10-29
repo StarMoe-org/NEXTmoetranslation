@@ -285,6 +285,10 @@ func replaceSideStoryLinesTx(ctx context.Context, tx *sql.Tx, fetch SideStoryEpi
 		}
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, false, 0, err
+	}
+	if err := rows.Close(); err != nil {
 		return nil, false, 0, err
 	}
 	lines := sideStoryScriptLines(script, titleKey)

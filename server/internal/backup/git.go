@@ -1,11 +1,9 @@
 package backup
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,7 +75,8 @@ func (m *Manager) backupGitContext(ctx context.Context) error {
 	work := filepath.Join(m.workDir, "git-backup")
 	_ = os.RemoveAll(work)
 	defer os.RemoveAll(work)
-	translationsDir, contentDir, err := m.materializeBackupPayloadContext(ctx, filepath.Join(work, "materialized"))
+	materializedDir := filepath.Join(work, "materialized")
+	translationsDir, contentDir, err := m.materializeBackupPayloadContext(ctx, materializedDir)
 	if err != nil {
 		return err
 	}
@@ -86,15 +85,15 @@ func (m *Manager) backupGitContext(ctx context.Context) error {
 		return err
 	}
 	if len(encryptionKey) > 0 {
-		artifact, err := encryptBackupPayloadContext(ctx, filepath.Join(work, "artifact"), backupPayload{
+		artifactPath, err := encryptBackupPayloadToFileContext(ctx, filepath.Join(work, "artifact"), backupPayload{
 			translationsDir: translationsDir,
 			contentDir:      contentDir,
 		}, encryptionKey)
+		_ = os.RemoveAll(materializedDir)
 		if err != nil {
 			return err
 		}
-		defer clear(artifact)
-		return m.publishGitBackupArtifactContext(ctx, repoDir, repoURL, branch, artifact)
+		return m.publishGitBackupArtifactFileContext(ctx, repoDir, repoURL, branch, artifactPath)
 	}
 	return m.publishGitBackupUnencryptedContext(ctx, repoDir, repoURL, branch, backupPayload{
 		translationsDir: translationsDir,
@@ -152,7 +151,11 @@ func (m *Manager) publishGitBackupUnencryptedContext(ctx context.Context, repoDi
 	return commitAndPushGitBackupContext(ctx, repoDir, repoURL, branch)
 }
 
-func (m *Manager) publishGitBackupArtifactContext(ctx context.Context, repoDir, repoURL, branch string, artifact []byte) error {
+func (m *Manager) publishGitBackupArtifactFileContext(ctx context.Context, repoDir, repoURL, branch, sourceArtifactPath string) error {
+	isGzip, err := fileHasGzipMagic(sourceArtifactPath)
+	if err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(repoDir)
 	if err != nil {
 		return err
@@ -169,13 +172,28 @@ func (m *Manager) publishGitBackupArtifactContext(ctx context.Context, repoDir, 
 		}
 	}
 	fileName := "backup.tar.gz"
-	if !bytes.HasPrefix(artifact, []byte{0x1f, 0x8b}) {
+	if !isGzip {
 		fileName = backupEnvelopeFilename
 	}
 	artifactPath := filepath.Join(repoDir, fileName)
 	temporaryPath := artifactPath + ".tmp"
-	if err := os.WriteFile(temporaryPath, artifact, 0o600); err != nil {
+	src, err := os.Open(sourceArtifactPath)
+	if err != nil {
 		return err
+	}
+	dst, err := os.OpenFile(temporaryPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		_ = src.Close()
+		return err
+	}
+	_, copyErr := copyWithContext(ctx, dst, src)
+	srcCloseErr := src.Close()
+	dstCloseErr := dst.Close()
+	for _, stepErr := range []error{copyErr, srcCloseErr, dstCloseErr} {
+		if stepErr != nil {
+			_ = os.Remove(temporaryPath)
+			return stepErr
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		_ = os.Remove(temporaryPath)
@@ -266,7 +284,7 @@ func (m *Manager) prepareGitRestoreContext(ctx context.Context) (restoreCandidat
 	if err := gitRemoteContext(ctx, work, repoURL, "clone", "--depth", "1", "--branch", branch, repoURL, repoDir); err != nil {
 		return restoreCandidate{}, err
 	}
-	artifact, hasArtifact, err := readGitBackupArtifactContext(ctx, repoDir)
+	artifactPath, hasArtifact, err := findGitBackupArtifactPathContext(ctx, repoDir)
 	if err != nil {
 		return restoreCandidate{}, err
 	}
@@ -275,23 +293,29 @@ func (m *Manager) prepareGitRestoreContext(ctx context.Context) (restoreCandidat
 		return restoreCandidate{}, err
 	}
 	if hasArtifact {
-		var archive []byte
-		if bytes.HasPrefix(artifact, []byte{0x1f, 0x8b}) {
-			archive = artifact
-		} else if len(encryptionKey) > 0 {
-			var errDecrypt error
-			archive, errDecrypt = decryptBackupEnvelope(artifact, encryptionKey)
-			clear(artifact)
-			if errDecrypt != nil {
-				return restoreCandidate{}, errDecrypt
-			}
-		} else {
-			clear(artifact)
-			return restoreCandidate{}, errors.New("git backup artifact is encrypted but no encryption key was provided")
-		}
-		defer clear(archive)
-		if err := untarGzContext(ctx, archive, extracted); err != nil {
+		isGzip, err := fileHasGzipMagic(artifactPath)
+		if err != nil {
 			return restoreCandidate{}, err
+		}
+		archivePath := artifactPath
+		var cleanupArchive bool
+		if !isGzip {
+			if len(encryptionKey) == 0 {
+				return restoreCandidate{}, errors.New("git backup artifact is encrypted but no encryption key was provided")
+			}
+			decryptedPath := filepath.Join(work, "decrypted.tar.gz")
+			if err := decryptBackupEnvelopeFile(ctx, decryptedPath, artifactPath, encryptionKey); err != nil {
+				return restoreCandidate{}, err
+			}
+			archivePath = decryptedPath
+			cleanupArchive = true
+		}
+		errUntar := untarGzFileContext(ctx, archivePath, extracted)
+		if cleanupArchive {
+			_ = os.Remove(archivePath)
+		}
+		if errUntar != nil {
+			return restoreCandidate{}, errUntar
 		}
 	} else {
 		extracted = repoDir
@@ -314,15 +338,15 @@ func (m *Manager) prepareGitRestoreContext(ctx context.Context) (restoreCandidat
 	return restoreCandidate{payload: payload, result: result, content: content, contentPresent: present}, nil
 }
 
-func readGitBackupArtifactContext(ctx context.Context, repoDir string) ([]byte, bool, error) {
+func findGitBackupArtifactPathContext(ctx context.Context, repoDir string) (string, bool, error) {
 	entries, err := os.ReadDir(repoDir)
 	if err != nil {
-		return nil, false, err
+		return "", false, err
 	}
 	var artifactName string
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
-			return nil, false, err
+			return "", false, err
 		}
 		name := entry.Name()
 		if name == ".git" || name == ".gitignore" || name == ".gitattributes" || strings.HasPrefix(name, "README") {
@@ -330,34 +354,26 @@ func readGitBackupArtifactContext(ctx context.Context, repoDir string) ([]byte, 
 		}
 		if name == "backup.tar.gz" || name == backupEnvelopeFilename {
 			if artifactName != "" && artifactName != name {
-				return nil, false, fmt.Errorf("git backup checkout contains multiple artifact entries %q and %q", artifactName, name)
+				return "", false, fmt.Errorf("git backup checkout contains multiple artifact entries %q and %q", artifactName, name)
 			}
 			artifactName = name
 		}
 	}
 	if artifactName == "" {
-		return nil, false, nil
+		return "", false, nil
 	}
-	file, err := os.Open(filepath.Join(repoDir, artifactName))
+	artifactPath := filepath.Join(repoDir, artifactName)
+	info, err := os.Lstat(artifactPath)
 	if err != nil {
-		return nil, false, err
+		return "", false, err
 	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, false, err
+	if !info.Mode().IsRegular() || info.Size() < 0 {
+		return "", false, errors.New("git backup artifact is not a regular file")
 	}
-	if !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > int64(maxBackupEnvelopeBytes) {
-		return nil, false, errors.New("git backup artifact is not a regular file")
+	if info.Size() > int64(maxBackupEnvelopeBytes) {
+		return "", false, fmt.Errorf("git backup artifact exceeds %d bytes", maxBackupEnvelopeBytes)
 	}
-	artifact, err := io.ReadAll(io.LimitReader(&contextReader{ctx: ctx, reader: file}, int64(maxBackupEnvelopeBytes)+1))
-	if err != nil {
-		return nil, false, err
-	}
-	if len(artifact) > maxBackupEnvelopeBytes {
-		return nil, false, fmt.Errorf("git backup artifact exceeds %d bytes", maxBackupEnvelopeBytes)
-	}
-	return artifact, true, nil
+	return artifactPath, true, nil
 }
 
 func validateGitRestoreTree(repoDir string) error {

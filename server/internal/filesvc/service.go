@@ -7,17 +7,21 @@ package filesvc
 
 import (
 	"bytes"
+	"compress/flate"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"moesekai/server/internal/files"
@@ -25,6 +29,232 @@ import (
 	"moesekai/server/internal/publiclyricsbundle"
 	"moesekai/server/internal/store"
 )
+
+const (
+	assetCompressMinBytes           = 512
+	publicLyricsEmbeddedSentinelKey = "\x00embedded_public_lyrics_bundle"
+)
+
+var assetFlateWriterPool = sync.Pool{
+	New: func() any {
+		w, _ := flate.NewWriter(io.Discard, flate.BestSpeed)
+		return w
+	},
+}
+
+type assetBlob struct {
+	sha256     [32]byte
+	data       []byte
+	rawLen     int
+	compressed bool
+}
+
+func newAssetBlob(sum [32]byte, raw []byte) *assetBlob {
+	if len(raw) >= assetCompressMinBytes {
+		var buf bytes.Buffer
+		buf.Grow(len(raw) / 4)
+		zw := assetFlateWriterPool.Get().(*flate.Writer)
+		zw.Reset(&buf)
+		_, writeErr := zw.Write(raw)
+		closeErr := zw.Close()
+		zw.Reset(io.Discard)
+		assetFlateWriterPool.Put(zw)
+		if writeErr == nil && closeErr == nil && buf.Len() < len(raw) {
+			return &assetBlob{
+				sha256:     sum,
+				data:       bytes.Clone(buf.Bytes()),
+				rawLen:     len(raw),
+				compressed: true,
+			}
+		}
+	}
+	return &assetBlob{
+		sha256:     sum,
+		data:       bytes.Clone(raw),
+		rawLen:     len(raw),
+		compressed: false,
+	}
+}
+
+func (b *assetBlob) bytes() ([]byte, error) {
+	if b == nil {
+		return nil, nil
+	}
+	if !b.compressed {
+		return b.data, nil
+	}
+	out := make([]byte, b.rawLen)
+	zr := flate.NewReader(bytes.NewReader(b.data))
+	_, err := io.ReadFull(zr, out)
+	closeErr := zr.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return out, nil
+}
+
+type assetBlobDeduper struct {
+	existing map[[32]byte]*assetBlob
+	created  map[[32]byte]*assetBlob
+}
+
+func newAssetBlobDeduper(current map[string]asset) *assetBlobDeduper {
+	existing := make(map[[32]byte]*assetBlob, len(current))
+	for _, item := range current {
+		if item.blob != nil {
+			existing[item.blob.sha256] = item.blob
+		}
+	}
+	return &assetBlobDeduper{
+		existing: existing,
+		created:  make(map[[32]byte]*assetBlob),
+	}
+}
+
+type embeddedLyricsCache struct {
+	err               error
+	indexBytes        []byte
+	index             store.PublicLyricsIndexDocument
+	indexDecoded      bool
+	initialProvenance map[int]SongProvenance
+	initialSummary    LyricsProjectionSummary
+	bundleMap         map[string][]byte
+	sentinels         []byte
+	preinterned       map[string]asset
+}
+
+var (
+	embeddedLyricsOnce  sync.Once
+	embeddedLyricsReady atomic.Bool
+	embeddedLyricsState embeddedLyricsCache
+)
+
+func getEmbeddedLyricsState() *embeddedLyricsCache {
+	embeddedLyricsOnce.Do(func() {
+		defer embeddedLyricsReady.Store(true)
+		raw, err := publiclyricsbundle.Load()
+		if err != nil {
+			embeddedLyricsState.err = err
+			return
+		}
+		keys := make([]string, 0, len(raw))
+		for k := range raw {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		sentinels := make([]byte, len(keys))
+		bundleMap := make(map[string][]byte, len(keys))
+		preinterned := make(map[string]asset, len(keys))
+		for i, k := range keys {
+			body := raw[k]
+			sum := sha256.Sum256(body)
+			preinterned[k] = asset{
+				blob:        newAssetBlob(sum, body),
+				etag:        `"` + hex.EncodeToString(sum[:16]) + `"`,
+				contentType: "application/json; charset=utf-8",
+			}
+			if k == publicLyricsIndexKey {
+				idxCopy := bytes.Clone(body)
+				embeddedLyricsState.indexBytes = idxCopy
+				bundleMap[k] = idxCopy
+			} else {
+				bundleMap[k] = sentinels[i : i+1 : i+1]
+			}
+		}
+		embeddedLyricsState.sentinels = sentinels
+		embeddedLyricsState.bundleMap = bundleMap
+		embeddedLyricsState.preinterned = preinterned
+
+		var bundleIndex store.PublicLyricsIndexDocument
+		if err := json.Unmarshal(embeddedLyricsState.indexBytes, &bundleIndex); err == nil {
+			embeddedLyricsState.index = bundleIndex
+			embeddedLyricsState.indexDecoded = true
+			prov := make(map[int]SongProvenance, len(bundleIndex.Songs))
+			for _, song := range bundleIndex.Songs {
+				prov[song.MusicID] = SongProvenance{
+					MusicID:           song.MusicID,
+					Source:            string(sourceBundle),
+					Revision:          song.Revision,
+					State:             string(song.State),
+					AvailableVersions: append([]string(nil), song.AvailableVersions...),
+					UpdatedAt:         song.UpdatedAt,
+					HasDetail:         song.State == store.PublicLyricsStateComplete || song.State == store.PublicLyricsStateGameOnly,
+				}
+			}
+			embeddedLyricsState.initialProvenance = prov
+			embeddedLyricsState.initialSummary = LyricsProjectionSummary{
+				TotalSongs:         len(bundleIndex.Songs),
+				BundleSongs:        len(bundleIndex.Songs),
+				DBPublicationSongs: 0,
+				LocalizationSongs:  0,
+				Degraded:           false,
+				BundleReleaseID:    publiclyricsbundle.ReleaseID,
+			}
+		}
+	})
+	return &embeddedLyricsState
+}
+
+func (c *embeddedLyricsCache) preinternedAsset(key string, body []byte, t time.Time, source assetSource, revision int) (asset, bool) {
+	if c == nil || c.bundleMap == nil {
+		return asset{}, false
+	}
+	expected, ok := c.bundleMap[key]
+	if !ok || len(body) != len(expected) || len(body) == 0 || &body[0] != &expected[0] {
+		return asset{}, false
+	}
+	pre, ok := c.preinterned[key]
+	if !ok {
+		return asset{}, false
+	}
+	pre.modTime = t
+	pre.source = source
+	pre.revision = revision
+	return pre, true
+}
+
+func cloneSongProvenanceMap(src map[int]SongProvenance) map[int]SongProvenance {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[int]SongProvenance, len(src))
+	for k, v := range src {
+		v.AvailableVersions = append([]string(nil), v.AvailableVersions...)
+		dst[k] = v
+	}
+	return dst
+}
+
+func (d *assetBlobDeduper) intern(body []byte, contentType string, t time.Time, source assetSource, revision int) asset {
+	sum := sha256.Sum256(body)
+	var blob *assetBlob
+	if d != nil {
+		if existing, ok := d.created[sum]; ok && existing.rawLen == len(body) {
+			blob = existing
+		} else if existing, ok := d.existing[sum]; ok && existing.rawLen == len(body) {
+			blob = existing
+			d.created[sum] = blob
+		}
+	}
+	if blob == nil {
+		blob = newAssetBlob(sum, body)
+		if d != nil {
+			d.created[sum] = blob
+		}
+	}
+	return asset{
+		blob:        blob,
+		etag:        `"` + hex.EncodeToString(sum[:16]) + `"`,
+		contentType: contentType,
+		modTime:     t,
+		source:      source,
+		revision:    revision,
+	}
+}
 
 type assetSource string
 
@@ -43,12 +273,23 @@ const (
 )
 
 type asset struct {
-	body        []byte
+	blob        *assetBlob
 	etag        string
 	contentType string
 	modTime     time.Time
 	source      assetSource
 	revision    int
+}
+
+func (a asset) bytes() []byte {
+	if a.blob == nil {
+		return nil
+	}
+	b, err := a.blob.bytes()
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 type SongProvenance struct {
@@ -126,7 +367,8 @@ type Service struct {
 }
 
 func New(s *store.Store, es *store.EventStore, gen *files.Generator) *Service {
-	publicLyrics, publicLyricsErr := publiclyricsbundle.Load()
+	emb := getEmbeddedLyricsState()
+	publicLyricsErr := emb.err
 	if publicLyricsErr != nil {
 		log.Printf("[projection] embedded public lyrics bundle unavailable; serving database-only lyrics: %v", publicLyricsErr)
 	}
@@ -134,36 +376,23 @@ func New(s *store.Store, es *store.EventStore, gen *files.Generator) *Service {
 
 	var initialSummary LyricsProjectionSummary
 	var initialProvenance map[int]SongProvenance
-	if publicLyrics != nil {
-		if bundleIndex, err := decodePublicLyricsIndex(publicLyrics[publicLyricsIndexKey]); err == nil {
-			initialProvenance = make(map[int]SongProvenance, len(bundleIndex.Songs))
-			for _, song := range bundleIndex.Songs {
-				initialProvenance[song.MusicID] = SongProvenance{
-					MusicID:           song.MusicID,
-					Source:            string(sourceBundle),
-					Revision:          song.Revision,
-					State:             string(song.State),
-					AvailableVersions: append([]string(nil), song.AvailableVersions...),
-					UpdatedAt:         song.UpdatedAt,
-					HasDetail:         song.State == store.PublicLyricsStateComplete || song.State == store.PublicLyricsStateGameOnly,
-				}
-			}
-			initialSummary = LyricsProjectionSummary{
-				TotalSongs:         len(bundleIndex.Songs),
-				BundleSongs:        len(bundleIndex.Songs),
-				DBPublicationSongs: 0,
-				LocalizationSongs:  0,
-				Degraded:           false,
-				BundleReleaseID:    publiclyricsbundle.ReleaseID,
-			}
+	var storedPublicLyrics map[string][]byte
+	if publicLyricsErr == nil && emb.bundleMap != nil {
+		if emb.indexDecoded {
+			initialProvenance = cloneSongProvenanceMap(emb.initialProvenance)
+			initialSummary = emb.initialSummary
 		}
+		// Sentinel map marks that the embedded bundle is active without pinning
+		// ~25 MiB of uncompressed JSON permanently on Service; tests that set
+		// svc.publicLyrics = nil or replace it with a custom map continue to work.
+		storedPublicLyrics = map[string][]byte{publicLyricsEmbeddedSentinelKey: nil}
 	}
 
 	svc := &Service{
 		gen:             gen,
 		store:           s,
 		events:          es,
-		publicLyrics:    publicLyrics,
+		publicLyrics:    storedPublicLyrics,
 		publicLyricsErr: publicLyricsErr,
 		maxAge:          5 * time.Minute,
 		lyricsMaxAge:    15 * time.Second,
@@ -326,12 +555,23 @@ func (svc *Service) SongProvenance(musicID int) (SongProvenance, bool) {
 // /files/translation/lyrics/music_<musicID>.json.
 func (svc *Service) PublicLyricsDetail(musicID int) ([]byte, bool) {
 	svc.mu.RLock()
-	defer svc.mu.RUnlock()
 	a, ok := svc.assets[fmt.Sprintf("translation/lyrics/music_%d.json", musicID)]
+	svc.mu.RUnlock()
 	if !ok {
 		return nil, false
 	}
-	return bytes.Clone(a.body), true
+	return bytes.Clone(a.bytes()), true
+}
+
+func (svc *Service) activePublicLyricsBundle() (map[string][]byte, *embeddedLyricsCache, error) {
+	if svc.publicLyrics == nil {
+		return nil, nil, svc.publicLyricsErr
+	}
+	if _, embedded := svc.publicLyrics[publicLyricsEmbeddedSentinelKey]; embedded && len(svc.publicLyrics) == 1 {
+		emb := getEmbeddedLyricsState()
+		return emb.bundleMap, emb, emb.err
+	}
+	return svc.publicLyrics, nil, nil
 }
 
 func (svc *Service) loop() {
@@ -647,6 +887,7 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 
 	svc.mu.RLock()
 	startEpoch := svc.assetEpoch
+	deduper := newAssetBlobDeduper(svc.assets)
 	svc.mu.RUnlock()
 
 	next := map[string]asset{}
@@ -660,12 +901,12 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("flat %s: %w", cat, err)
 		}
-		next["translation/"+cat+".json"] = makeAsset(b, "application/json; charset=utf-8", now)
+		next["translation/"+cat+".json"] = deduper.intern(b, "application/json; charset=utf-8", now, sourceGenerated, 0)
 		b, err = svc.gen.CategoryFullJSON(cat)
 		if err != nil {
 			return fmt.Errorf("full %s: %w", cat, err)
 		}
-		next["translation/"+cat+".full.json"] = makeAsset(b, "application/json; charset=utf-8", now)
+		next["translation/"+cat+".full.json"] = deduper.intern(b, "application/json; charset=utf-8", now, sourceGenerated, 0)
 	}
 	for _, locale := range model.SupportedLocales {
 		for _, cat := range model.SupportedCategories {
@@ -677,13 +918,13 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 				return fmt.Errorf("locale flat %s/%s: %w", locale, cat, err)
 			}
 			key := fmt.Sprintf("v2/%s/translation/%s.json", locale, cat)
-			next[key] = makeAsset(b, "application/json; charset=utf-8", now)
+			next[key] = deduper.intern(b, "application/json; charset=utf-8", now, sourceGenerated, 0)
 			b, err = svc.gen.CategoryLocaleFullJSON(cat, locale)
 			if err != nil {
 				return fmt.Errorf("locale full %s/%s: %w", locale, cat, err)
 			}
 			key = fmt.Sprintf("v2/%s/translation/%s.full.json", locale, cat)
-			next[key] = makeAsset(b, "application/json; charset=utf-8", now)
+			next[key] = deduper.intern(b, "application/json; charset=utf-8", now, sourceGenerated, 0)
 		}
 	}
 	summaries, err := svc.events.List()
@@ -699,17 +940,17 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 			return fmt.Errorf("event %d: %w", sum.EventID, err)
 		}
 		key := fmt.Sprintf("translation/eventStory/event_%d.json", sum.EventID)
-		next[key] = makeAsset(b, "application/json; charset=utf-8", now)
+		next[key] = deduper.intern(b, "application/json; charset=utf-8", now, sourceGenerated, 0)
 		for _, locale := range model.SupportedLocales {
 			b, err := svc.gen.EventStoryLocaleJSON(sum.EventID, locale)
 			if err != nil {
 				return fmt.Errorf("locale event %s/%d: %w", locale, sum.EventID, err)
 			}
 			key = fmt.Sprintf("v2/%s/translation/eventStory/event_%d.json", locale, sum.EventID)
-			next[key] = makeAsset(b, "application/json; charset=utf-8", now)
+			next[key] = deduper.intern(b, "application/json; charset=utf-8", now, sourceGenerated, 0)
 		}
 	}
-	if err := svc.addSideStoryAssets(ctx, next, now); err != nil {
+	if err := svc.addSideStoryAssets(ctx, next, deduper, now); err != nil {
 		return err
 	}
 	// The accepted recovery-v3 projection is public, immutable release content
@@ -726,19 +967,21 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 	var lyricsSummary LyricsProjectionSummary
 	var lyricsProvenance map[int]SongProvenance
 
-	if svc.publicLyrics == nil {
+	activeBundle, embCache, activeBundleErr := svc.activePublicLyricsBundle()
+	if activeBundle == nil {
 		lyrics, err = svc.gen.PublishedLyricsJSON()
 		if err != nil {
 			return fmt.Errorf("lyrics: %w", err)
 		}
 		lyricsSummary, lyricsProvenance = svc.databaseOnlyLyricsSummary(lyrics)
-		if svc.publicLyricsErr != nil {
+		if activeBundleErr != nil {
 			lyricsSummary.Degraded = true
 			lyricsSummary.DegradedReason = "bundle: embedded runtime bundle unavailable"
 		}
 	} else {
-		lyrics, lyricsSummary, lyricsProvenance = svc.overlayPublishedLyrics(svc.publicLyrics)
+		lyrics, lyricsSummary, lyricsProvenance = svc.overlayPublishedLyrics(activeBundle)
 	}
+	activeBundle = nil
 	lyrics, lyricsSummary, lyricsProvenance = svc.applyLyricsWithdrawals(lyrics, lyricsSummary, lyricsProvenance)
 	for key, body := range lyrics {
 		source := sourceGenerated
@@ -754,13 +997,20 @@ func (svc *Service) rebuildAssetsContext(ctx context.Context) error {
 				}
 			}
 		}
-		lyricsAsset := makeAssetWithSource(body, "application/json; charset=utf-8", now, source, rev)
+		var lyricsAsset asset
+		if pre, ok := embCache.preinternedAsset(key, body, now, source, rev); ok {
+			lyricsAsset = pre
+		} else {
+			lyricsAsset = deduper.intern(body, "application/json; charset=utf-8", now, source, rev)
+		}
 		next[key] = lyricsAsset
 		for _, locale := range model.SupportedLocales {
 			localizedKey := fmt.Sprintf("v2/%s/%s", locale, key)
 			next[localizedKey] = lyricsAsset
 		}
 	}
+	lyrics = nil
+	deduper = nil
 
 	svc.mu.Lock()
 	// Preserve only externally-set assets. Locale mirrors are generated above and
@@ -1021,6 +1271,17 @@ func (svc *Service) overlayPublishedLyrics(bundle map[string][]byte) (map[string
 // decodePublicLyricsIndex decodes an index.json document into the exported
 // store read model shared by the legacy generator and the reviewed v3 bundle.
 func decodePublicLyricsIndex(body []byte) (store.PublicLyricsIndexDocument, error) {
+	if embeddedLyricsReady.Load() {
+		emb := &embeddedLyricsState
+		if emb.indexDecoded && len(body) > 0 && len(body) == len(emb.indexBytes) && &body[0] == &emb.indexBytes[0] {
+			songs := make([]store.PublicLyricsIndexSong, len(emb.index.Songs))
+			copy(songs, emb.index.Songs)
+			return store.PublicLyricsIndexDocument{
+				Version: emb.index.Version,
+				Songs:   songs,
+			}, nil
+		}
+	}
 	var index store.PublicLyricsIndexDocument
 	if err := json.Unmarshal(body, &index); err != nil {
 		return store.PublicLyricsIndexDocument{}, err
@@ -1136,15 +1397,8 @@ func makeAsset(body []byte, contentType string, t time.Time) asset {
 }
 
 func makeAssetWithSource(body []byte, contentType string, t time.Time, source assetSource, revision int) asset {
-	sum := sha256.Sum256(body)
-	return asset{
-		body:        body,
-		etag:        `"` + hex.EncodeToString(sum[:16]) + `"`,
-		contentType: contentType,
-		modTime:     t,
-		source:      source,
-		revision:    revision,
-	}
+	var deduper *assetBlobDeduper
+	return deduper.intern(body, contentType, t, source, revision)
 }
 
 // Handler serves GET /files/<path>. Path traversal is impossible because lookup
@@ -1181,10 +1435,18 @@ func (svc *Service) Handler() http.HandlerFunc {
 			return
 		}
 		if r.Method == http.MethodHead {
+			if a.blob != nil {
+				h.Set("Content-Length", strconv.Itoa(a.blob.rawLen))
+			}
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		http.ServeContent(w, r, key, a.modTime, newReadSeeker(a.body))
+		body, err := a.blob.bytes()
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		http.ServeContent(w, r, key, a.modTime, newReadSeeker(body))
 	}
 }
 

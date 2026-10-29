@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
+	"runtime/debug"
 	"strings"
 
 	"moesekai/server/internal/auth"
@@ -31,11 +33,17 @@ func applyEmbeddedLyricsEditorSeed(st *store.Store) {
 	if runtimeProfile != runtimeProfileNextProduction {
 		return
 	}
+	defer func() {
+		embeddedlyricsseed.Release()
+		runtime.GC()
+		debug.FreeOSMemory()
+	}()
 	editorSeed, err := embeddedlyricsseed.Load()
 	if err != nil {
 		fatal("load embedded lyrics editor seed", err)
 	}
 	seedResult, err := st.ApplyEmbeddedLyricsEditorSeed(context.Background(), editorSeed)
+	editorSeed = embeddedlyricsseed.Bundle{}
 	if errors.Is(err, store.ErrEmbeddedLyricsEditorSeedCatalogNotReady) {
 		log.Printf("embedded lyrics editor seed: deferred because catalog is not initialized")
 	} else if err != nil {

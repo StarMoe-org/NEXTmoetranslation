@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"regexp"
 	"sort"
@@ -794,8 +795,9 @@ func lyricsDocumentRoundTripRejectionWarned(err *store.LyricsDocumentError, warn
 	return true
 }
 
-// Every song detail of the embedded public bundle is exported, published by
-// PUT and compared with the served detail.
+// Representative song details of the embedded public bundle (or all songs when
+// MOESEKAI_EXHAUSTIVE_BUNDLE_TESTS=1) are exported, published by PUT and
+// compared with the served detail.
 func TestLyricsDocumentExportRoundTripsTheEmbeddedBundle(t *testing.T) {
 	assets, err := publiclyricsbundle.Load()
 	if err != nil {
@@ -806,10 +808,21 @@ func TestLyricsDocumentExportRoundTripsTheEmbeddedBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	var musicIDs []int
-	for key := range assets {
-		var musicID int
-		if n, _ := fmt.Sscanf(key, "translation/lyrics/music_%d.json", &musicID); n == 1 {
-			musicIDs = append(musicIDs, musicID)
+	if os.Getenv("MOESEKAI_EXHAUSTIVE_BUNDLE_TESTS") == "1" {
+		for key := range assets {
+			var musicID int
+			if n, _ := fmt.Sscanf(key, "translation/lyrics/music_%d.json", &musicID); n == 1 {
+				musicIDs = append(musicIDs, musicID)
+			}
+		}
+	} else {
+		// Deterministic corpus covering allowlisted, identical, warning-explained
+		// diffs, PUT source-revision rejection (795), and multi-performer segment
+		// boundaries (68, 299, 307, 378, 637) without running 694 SQLite writes.
+		for _, candidate := range []int{1, 2, 10, 46, 68, 131, 299, 307, 378, 550, 637, 795} {
+			if _, ok := assets[fmt.Sprintf("translation/lyrics/music_%d.json", candidate)]; ok {
+				musicIDs = append(musicIDs, candidate)
+			}
 		}
 	}
 	sort.Ints(musicIDs)

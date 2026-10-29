@@ -393,21 +393,8 @@ func TestApplyEmbeddedLyricsEditorSeedPreservesExistingRecoveryAvailability(t *t
 }
 
 func TestApplyEmbeddedLyricsEditorSeedReplayRejectsLostInsertedOwnership(t *testing.T) {
-	bundle, err := embeddedlyricsseed.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	database, err := db.Open(filepath.Join(t.TempDir(), "embedded-editor-seed-lost-ownership.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-	s := New(database)
-	seedEmbeddedLyricsEditorCatalog(t, database, bundle, false)
-	seedEmbeddedLyricsEditorLegacyPerformers(t, database, bundle)
-	if _, err := s.ApplyEmbeddedLyricsEditorSeed(context.Background(), bundle); err != nil {
-		t.Fatal(err)
-	}
+	s, bundle := seededContentBackupStore(t)
+	database := s.db
 	musicID := bundle.Documents[0].MusicID
 	if _, err := database.Exec(`DROP TRIGGER song_lyrics_source_documents_immutable_delete`); err != nil {
 		t.Fatal(err)

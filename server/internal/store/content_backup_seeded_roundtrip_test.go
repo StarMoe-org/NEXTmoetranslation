@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"moesekai/server/internal/db"
@@ -15,32 +17,72 @@ import (
 	"moesekai/server/internal/model"
 )
 
+var (
+	seededBackupTemplateOnce  sync.Once
+	seededBackupTemplateBytes []byte
+	seededBackupBundle        embeddedlyricsseed.Bundle
+	seededBackupTemplateErr   error
+)
+
 func seededContentBackupStore(t *testing.T) (*Store, embeddedlyricsseed.Bundle) {
 	t.Helper()
-	bundle, err := embeddedlyricsseed.Load()
-	if err != nil {
+	seededBackupTemplateOnce.Do(func() {
+		seededBackupBundle, seededBackupTemplateErr = embeddedlyricsseed.Load()
+		if seededBackupTemplateErr != nil {
+			return
+		}
+		dir, err := os.MkdirTemp("", "moesekai-seeded-store-*")
+		if err != nil {
+			seededBackupTemplateErr = err
+			return
+		}
+		defer os.RemoveAll(dir)
+		srcPath := filepath.Join(dir, "seeded-template.db")
+		database, err := db.Open(srcPath)
+		if err != nil {
+			seededBackupTemplateErr = err
+			return
+		}
+		s := New(database)
+		records := make([]MusicCatalogRecord, 0, len(seededBackupBundle.Manifest.Items))
+		for _, item := range seededBackupBundle.Manifest.Items {
+			records = append(records, MusicCatalogRecord{MusicID: item.MusicID, JapaneseTitle: item.JapaneseTitle})
+		}
+		if err := s.UpsertMusicCatalog(records); err != nil {
+			_ = database.Close()
+			seededBackupTemplateErr = err
+			return
+		}
+		seedEmbeddedLyricsEditorLegacyPerformers(t, database, seededBackupBundle)
+		if _, err := s.ApplyEmbeddedLyricsEditorSeed(context.Background(), seededBackupBundle); err != nil {
+			_ = database.Close()
+			seededBackupTemplateErr = err
+			return
+		}
+		_, _ = database.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+		if err := database.Close(); err != nil {
+			seededBackupTemplateErr = err
+			return
+		}
+		seededBackupTemplateBytes, seededBackupTemplateErr = os.ReadFile(srcPath)
+	})
+	if seededBackupTemplateErr != nil {
+		t.Fatal(seededBackupTemplateErr)
+	}
+	dbDir := filepath.Join(t.TempDir(), "seeded")
+	if err := os.MkdirAll(dbDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	database, err := db.Open(filepath.Join(t.TempDir(), "seeded-source.db"))
+	dstPath := filepath.Join(dbDir, "seeded-source.db")
+	if err := os.WriteFile(dstPath, seededBackupTemplateBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	database, err := db.Open(dstPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { database.Close() })
-	s := New(database)
-	// Catalog rows carry evidence that reproduces their fingerprint, as the
-	// catalog sync writes them; restore recomputes it.
-	records := make([]MusicCatalogRecord, 0, len(bundle.Manifest.Items))
-	for _, item := range bundle.Manifest.Items {
-		records = append(records, MusicCatalogRecord{MusicID: item.MusicID, JapaneseTitle: item.JapaneseTitle})
-	}
-	if err := s.UpsertMusicCatalog(records); err != nil {
-		t.Fatal(err)
-	}
-	seedEmbeddedLyricsEditorLegacyPerformers(t, database, bundle)
-	if _, err := s.ApplyEmbeddedLyricsEditorSeed(context.Background(), bundle); err != nil {
-		t.Fatal(err)
-	}
-	return s, bundle
+	return New(database), seededBackupBundle
 }
 
 // restoreSeededContentBackup restores the JSON form of exported into a fresh

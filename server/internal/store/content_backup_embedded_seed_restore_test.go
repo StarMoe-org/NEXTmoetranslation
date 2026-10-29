@@ -2,10 +2,8 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
-	"moesekai/server/internal/db"
 	"moesekai/server/internal/embeddedlyricsseed"
 	"moesekai/server/internal/model"
 )
@@ -31,10 +29,6 @@ func embeddedLyricsEditorSeedLedgerCounts(t *testing.T, s *Store) (int, int, int
 }
 
 func TestRestoreClearsEmbeddedLyricsEditorSeedLedgerInBothBranches(t *testing.T) {
-	bundle, err := embeddedlyricsseed.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, testCase := range []struct {
 		name            string
 		additivePresent bool
@@ -43,17 +37,8 @@ func TestRestoreClearsEmbeddedLyricsEditorSeedLedgerInBothBranches(t *testing.T)
 		{name: "legacy", additivePresent: false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			database, err := db.Open(filepath.Join(t.TempDir(), "embedded-seed-restore.db"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { database.Close() })
-			s := New(database)
-			seedEmbeddedLyricsEditorCatalog(t, database, bundle, false)
-			seedEmbeddedLyricsEditorLegacyPerformers(t, database, bundle)
-			if _, err := s.ApplyEmbeddedLyricsEditorSeed(context.Background(), bundle); err != nil {
-				t.Fatal(err)
-			}
+			s, bundle := seededContentBackupStore(t)
+			database := s.db
 
 			if err := s.RestoreBackupContext(context.Background(), restoreContractCategories(), nil, nil,
 				EventContentExport{}, LyricsContentExport{}, testCase.additivePresent, "operator"); err != nil {

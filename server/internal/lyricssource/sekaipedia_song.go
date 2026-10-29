@@ -1153,11 +1153,7 @@ func sekaipediaSourceOOVCharacterReadings(spans []RubySpan) map[rune]string {
 			if token.Surface == "" {
 				continue
 			}
-			features := token.Features()
-			candidate := ""
-			if len(features) >= 8 && features[7] != "*" {
-				candidate = katakanaToHiragana(features[7])
-			}
+			candidate, _ := furiganaTokenHiraganaReading(token)
 			if validGeneratedRubyReading(candidate) {
 				if _, ok := rubySpansFromKanaReading(token.Surface, []rune(candidate)); ok {
 					tokens = append(tokens, tokenReading{surface: token.Surface, reading: []rune(candidate)})
@@ -1229,9 +1225,7 @@ func sekaipediaReadingFromCharacterEvidence(
 			continue
 		}
 		if containsKanji(token.Surface) {
-			features := token.Features()
-			if len(features) >= 8 && features[7] != "*" {
-				candidate := katakanaToHiragana(features[7])
+			if candidate, ok := furiganaTokenHiraganaReading(token); ok {
 				if validGeneratedRubyReading(candidate) {
 					if _, ok := rubySpansFromKanaReading(token.Surface, []rune(candidate)); ok {
 						reading.WriteString(candidate)

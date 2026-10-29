@@ -2,7 +2,12 @@ package backup
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -132,5 +137,114 @@ func TestBackupAllRejectsInvalidEncryptionKeyBeforeRemoteIO(t *testing.T) {
 				t.Fatalf("invalid key invoked remote git: %v", statErr)
 			}
 		})
+	}
+}
+
+func TestBackupEnvelopeChunkedStreamingAndLegacyV1Compatibility(t *testing.T) {
+	key := bytes.Repeat([]byte{0x5a}, backupEnvelopeDataKeySize)
+
+	// Multi-chunk payload (~2.4 MiB -> 3 AEAD chunks).
+	multiChunkPlaintext := make([]byte, 2*backupEnvelopeChunkSize+384*1024+17)
+	for i := range multiChunkPlaintext {
+		multiChunkPlaintext[i] = byte((i * 31) ^ (i >> 9))
+	}
+
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "payload.tar.gz")
+	encPath := filepath.Join(dir, "backup.enc")
+	decPath := filepath.Join(dir, "decrypted.tar.gz")
+	if err := os.WriteFile(srcPath, multiChunkPlaintext, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := encryptBackupEnvelopeFile(context.Background(), encPath, srcPath, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := decryptBackupEnvelopeFile(context.Background(), decPath, encPath, key); err != nil {
+		t.Fatal(err)
+	}
+	decryptedFileBytes, err := os.ReadFile(decPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decryptedFileBytes, multiChunkPlaintext) {
+		t.Fatal("multi-chunk file round-trip mismatch")
+	}
+
+	// Swapping chunk 0 and chunk 1 (both 1 MiB + 16 B tag) must fail chunk-index AAD authentication.
+	rawEnc, err := os.ReadFile(encPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frameLen := backupEnvelopeChunkSize + backupEnvelopeAuthenticationTagSize
+	swapped := bytes.Clone(rawEnc)
+	chunk0Start := backupEnvelopeHeaderSize
+	chunk1Start := chunk0Start + frameLen
+	copy(swapped[chunk0Start:chunk1Start], rawEnc[chunk1Start:chunk1Start+frameLen])
+	copy(swapped[chunk1Start:chunk1Start+frameLen], rawEnc[chunk0Start:chunk1Start])
+	if _, err := decryptBackupEnvelope(swapped, key); !errors.Is(err, ErrBackupEnvelopeAuthentication) {
+		t.Fatalf("swapped chunks error = %v, want %v", err, ErrBackupEnvelopeAuthentication)
+	}
+
+	// Legacy single-shot dataAlgorithm == 1 envelope must still decrypt cleanly.
+	legacyPlain := []byte("legacy-single-shot-moebak01-artifact-payload")
+	dataKey := make([]byte, backupEnvelopeDataKeySize)
+	wrapNonce := make([]byte, backupEnvelopeNonceSize)
+	dataNonce := make([]byte, backupEnvelopeNonceSize)
+	if _, err := io.ReadFull(rand.Reader, dataKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(rand.Reader, wrapNonce); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(rand.Reader, dataNonce); err != nil {
+		t.Fatal(err)
+	}
+	keyIDDigest := sha256.Sum256(key)
+	var prefix [backupEnvelopePrefixSize]byte
+	copy(prefix[:len(backupEnvelopeMagic)], backupEnvelopeMagic)
+	prefix[backupEnvelopeVersionOffset] = backupEnvelopeVersion
+	prefix[backupEnvelopeKeyWrapOffset] = backupEnvelopeKeyWrapAlgorithm
+	prefix[backupEnvelopeDataAlgorithmOffset] = backupEnvelopeDataAlgorithm
+	prefix[backupEnvelopeFlagsOffset] = backupEnvelopeFlags
+	copy(prefix[backupEnvelopeKeyIDOffset:backupEnvelopeWrapNonceOffset], keyIDDigest[:backupEnvelopeKeyIDSize])
+	copy(prefix[backupEnvelopeWrapNonceOffset:backupEnvelopeDataNonceOffset], wrapNonce)
+	copy(prefix[backupEnvelopeDataNonceOffset:backupEnvelopePlaintextSizeOffset], dataNonce)
+	binary.BigEndian.PutUint64(prefix[backupEnvelopePlaintextSizeOffset:backupEnvelopePrefixSize], uint64(len(legacyPlain)))
+
+	wrapGCM, err := newAES256GCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrappedKey := wrapGCM.Seal(nil, wrapNonce, dataKey, prefix[:])
+	var header [backupEnvelopeHeaderSize]byte
+	copy(header[:backupEnvelopePrefixSize], prefix[:])
+	copy(header[backupEnvelopePrefixSize:], wrappedKey)
+
+	dataGCM, err := newAES256GCM(dataKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyEnvelope := make([]byte, 0, backupEnvelopeHeaderSize+len(legacyPlain)+backupEnvelopeAuthenticationTagSize)
+	legacyEnvelope = append(legacyEnvelope, header[:]...)
+	legacyEnvelope = dataGCM.Seal(legacyEnvelope, dataNonce, legacyPlain, header[:])
+
+	gotLegacy, err := decryptBackupEnvelope(legacyEnvelope, key)
+	if err != nil {
+		t.Fatalf("legacy v1 decrypt error = %v", err)
+	}
+	if !bytes.Equal(gotLegacy, legacyPlain) {
+		t.Fatalf("legacy v1 decrypted = %q, want %q", gotLegacy, legacyPlain)
+	}
+	legacyFile := filepath.Join(dir, "legacy.enc")
+	legacyOut := filepath.Join(dir, "legacy.out")
+	if err := os.WriteFile(legacyFile, legacyEnvelope, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := decryptBackupEnvelopeFile(context.Background(), legacyOut, legacyFile, key); err != nil {
+		t.Fatalf("legacy v1 file decrypt error = %v", err)
+	}
+	gotLegacyFile, err := os.ReadFile(legacyOut)
+	if err != nil || !bytes.Equal(gotLegacyFile, legacyPlain) {
+		t.Fatalf("legacy v1 file decrypted = %q, err = %v", gotLegacyFile, err)
 	}
 }

@@ -41,9 +41,11 @@ var (
 	structuredModelCodePattern          = regexp.MustCompile(`^[A-Z0-9]+[a-z]?(?: [A-Z0-9]+[a-z]?){0,3}$`)
 	structuredUnclosedColorCellPattern  = regexp.MustCompile(`(?i)^\|\{\{\s*lrc\s+color\s*\|\s*([^|{}\s]+)\s*\|\s*([^|{}\[\]<>]+?)\s*$`)
 
-	furiganaTokenizerOnce sync.Once
-	furiganaTokenizer     *tokenizer.Tokenizer
-	furiganaTokenizerErr  error
+	furiganaTokenizerOnce  sync.Once
+	furiganaTokenizer      *tokenizer.Tokenizer
+	furiganaTokenizerErr   error
+	furiganaReadingsBlob   string
+	furiganaReadingOffsets []uint32
 )
 
 // Named colors are normalized to hex before they can reach editor swatches.

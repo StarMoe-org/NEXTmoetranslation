@@ -12,27 +12,43 @@ const ExpectedArchiveSHA256 = "a8a2a7c841d0d73e448fd69f9adb236965b3b01a89d2ba58d
 var archiveFS embed.FS
 
 var (
-	loadOnce sync.Once
+	loadMu   sync.Mutex
+	isLoaded bool
 	loaded   Bundle
 	loadErr  error
 )
 
 func Load() (Bundle, error) {
-	loadOnce.Do(func() {
+	loadMu.Lock()
+	defer loadMu.Unlock()
+	if !isLoaded {
 		archive, err := archiveFS.ReadFile("editor-seed.tar.gz")
 		if err != nil {
 			loadErr = fmt.Errorf("read embedded lyrics editor seed: %w", err)
-			return
+		} else {
+			loaded, loadErr = DecodeArchive(archive)
+			if loadErr == nil && loaded.ArchiveSHA256 != ExpectedArchiveSHA256 {
+				loaded = Bundle{}
+				loadErr = fmt.Errorf("embedded lyrics editor seed archive SHA-256 differs")
+			}
 		}
-		loaded, loadErr = DecodeArchive(archive)
-		if loadErr == nil && loaded.ArchiveSHA256 != ExpectedArchiveSHA256 {
-			loadErr = fmt.Errorf("embedded lyrics editor seed archive SHA-256 differs")
-		}
-	})
+		isLoaded = true
+	}
 	if loadErr != nil {
 		return Bundle{}, loadErr
 	}
 	return cloneBundle(loaded), nil
+}
+
+// Release drops the decoded startup seed cache so the runtime does not retain
+// ~50 MiB of unpacked seed records after database seeding completes. Subsequent
+// Load calls re-decode the embedded archive if needed.
+func Release() {
+	loadMu.Lock()
+	loaded = Bundle{}
+	loadErr = nil
+	isLoaded = false
+	loadMu.Unlock()
 }
 
 func cloneBundle(source Bundle) Bundle {

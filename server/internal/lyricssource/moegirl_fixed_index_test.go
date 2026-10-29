@@ -633,6 +633,7 @@ func TestMoegirlFixedIndexFailuresAreNotCached(t *testing.T) {
 		{
 			name: "transport error", wantHTTPStatus: http.StatusServiceUnavailable,
 			first: func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Retry-After", "0")
 				http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			},
 		},

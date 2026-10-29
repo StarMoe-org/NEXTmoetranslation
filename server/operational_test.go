@@ -1,17 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,16 +26,56 @@ import (
 	"moesekai/server/internal/workspaceverify"
 )
 
-const (
-	verifyWorkspaceHelperEnv        = "MOESEKAI_VERIFY_WORKSPACE_HELPER"
-	verifyWorkspaceFailureHelperEnv = "MOESEKAI_VERIFY_WORKSPACE_FAILURE_HELPER"
-	verifyRuntimeFailureHelperEnv   = "MOESEKAI_VERIFY_RUNTIME_FAILURE_HELPER"
-	verifyWebDirFailureHelperEnv    = "MOESEKAI_VERIFY_WEB_DIR_FAILURE_HELPER"
-	verifyDBPathFailureHelperEnv    = "MOESEKAI_VERIFY_DB_PATH_FAILURE_HELPER"
-	verifyDataDirFailureHelperEnv   = "MOESEKAI_VERIFY_DATA_DIR_FAILURE_HELPER"
-	verifyTimezoneFailureHelperEnv  = "MOESEKAI_VERIFY_TIMEZONE_FAILURE_HELPER"
-	blockedProbeHelperEnv           = "MOESEKAI_BLOCKED_PROBE_HELPER"
+var (
+	serverTestDBOnce  sync.Once
+	serverTestDBBytes []byte
+	serverTestDBErr   error
 )
+
+func openServerTestDB(t *testing.T) *db.DB {
+	t.Helper()
+	serverTestDBOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "moesekai-template-db-*")
+		if err != nil {
+			serverTestDBErr = err
+			return
+		}
+		defer os.RemoveAll(dir)
+		srcPath := filepath.Join(dir, "template.db")
+		database, err := db.Open(srcPath)
+		if err != nil {
+			serverTestDBErr = err
+			return
+		}
+		if _, err := database.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+			_ = database.Close()
+			serverTestDBErr = err
+			return
+		}
+		if err := database.Close(); err != nil {
+			serverTestDBErr = err
+			return
+		}
+		serverTestDBBytes, serverTestDBErr = os.ReadFile(srcPath)
+	})
+	if serverTestDBErr != nil {
+		t.Fatalf("init template db: %v", serverTestDBErr)
+	}
+	dir := filepath.Join(t.TempDir(), "db")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "test.db")
+	if err := os.WriteFile(path, serverTestDBBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	database, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return database
+}
 
 type operationalProjection struct{ status filesvc.ProjectionStatus }
 
@@ -54,11 +96,7 @@ func (p *changingProjection) Status() filesvc.ProjectionStatus {
 }
 
 func TestOperationalDetailsRequireAdminAndServerBoundsBodyRead(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "operations.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
+	database := openServerTestDB(t)
 	authService := auth.New(database, "operations-secret-at-least-32-bytes", time.Hour)
 	mux := http.NewServeMux()
 	registerOperationalRoutes(mux, operationalDeps{database: database, auth: authService})
@@ -86,12 +124,69 @@ func TestOperationalDetailsRequireAdminAndServerBoundsBodyRead(t *testing.T) {
 	}
 }
 
-func TestReadinessRequiresInitialProjectionButLivenessDoesNot(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "readiness.db"))
+func TestOperationalPprofRequiresAdminAndExposesHeapProfile(t *testing.T) {
+	database := openServerTestDB(t)
+	authService := auth.New(database, "operations-secret-at-least-32-bytes", time.Hour)
+	adminUser, err := authService.CreateUser("ops-admin", "strong-admin-password-123", auth.RoleAdmin)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	editorUser, err := authService.CreateUser("ops-editor", "strong-editor-password-123", auth.RoleEditor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminToken, _, err := authService.IssueToken(adminUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	editorToken, _, err := authService.IssueToken(editorUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	registerOperationalRoutes(mux, operationalDeps{database: database, auth: authService})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<!doctype html><html>spa</html>"))
+	})
+
+	unauth := httptest.NewRecorder()
+	mux.ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, "/debug/pprof/heap?debug=1", nil))
+	if unauth.Code != http.StatusUnauthorized || unauth.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unauthenticated pprof status=%d cache=%q body=%q", unauth.Code, unauth.Header().Get("Cache-Control"), unauth.Body.String())
+	}
+
+	forbidden := httptest.NewRecorder()
+	editorReq := httptest.NewRequest(http.MethodGet, "/debug/pprof/heap?debug=1", nil)
+	editorReq.Header.Set("Authorization", "Bearer "+editorToken)
+	mux.ServeHTTP(forbidden, editorReq)
+	if forbidden.Code != http.StatusForbidden {
+		t.Fatalf("editor pprof status=%d body=%q", forbidden.Code, forbidden.Body.String())
+	}
+
+	okRec := httptest.NewRecorder()
+	adminReq := httptest.NewRequest(http.MethodGet, "/debug/pprof/heap?debug=1", nil)
+	adminReq.Header.Set("Authorization", "Bearer "+adminToken)
+	mux.ServeHTTP(okRec, adminReq)
+	if okRec.Code != http.StatusOK || !strings.Contains(okRec.Body.String(), "# runtime.MemStats") {
+		t.Fatalf("admin pprof status=%d bodyLen=%d", okRec.Code, okRec.Body.Len())
+	}
+	if okRec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("admin pprof cache=%q", okRec.Header().Get("Cache-Control"))
+	}
+
+	detailsRec := httptest.NewRecorder()
+	detailsReq := httptest.NewRequest(http.MethodGet, "/healthz/details", nil)
+	detailsReq.Header.Set("Authorization", "Bearer "+adminToken)
+	mux.ServeHTTP(detailsRec, detailsReq)
+	if detailsRec.Code != http.StatusOK || !strings.Contains(detailsRec.Body.String(), `"heapAllocBytes"`) {
+		t.Fatalf("admin health details status=%d body=%s", detailsRec.Code, detailsRec.Body.String())
+	}
+}
+
+func TestReadinessRequiresInitialProjectionButLivenessDoesNot(t *testing.T) {
+	database := openServerTestDB(t)
 	authService := auth.New(database, "operations-secret-at-least-32-bytes", time.Hour)
 	projection := &operationalProjection{}
 	mux := http.NewServeMux()
@@ -143,11 +238,7 @@ func TestReadinessRequiresInitialProjectionButLivenessDoesNot(t *testing.T) {
 }
 
 func TestReadinessRechecksVolatileStateImmediatelyBeforeSuccess(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "readiness-recheck.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
+	database := openServerTestDB(t)
 	authService := auth.New(database, "operations-secret-at-least-32-bytes", time.Hour)
 	projection := &changingProjection{}
 	mux := http.NewServeMux()
@@ -173,11 +264,7 @@ func TestServerRejectsIncompleteSeedPublicationMarker(t *testing.T) {
 }
 
 func TestProductionReadinessRequiresSearchOrValidatedCache(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "search-readiness.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
+	database := openServerTestDB(t)
 	authService := auth.New(database, "operations-secret-at-least-32-bytes", time.Hour)
 	projection := &operationalProjection{status: filesvc.ProjectionStatus{Generation: 1}}
 	search := &operationalSearch{}
@@ -277,11 +364,7 @@ func TestLyricsFetchRevisionConfigurationIsFailClosedAndStrict(t *testing.T) {
 }
 
 func TestDrainingAdmitsOnlyExactHealthAndReadinessProbes(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "draining.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
+	database := openServerTestDB(t)
 	authService := auth.New(database, "operations-secret-at-least-32-bytes", time.Hour)
 	projection := &operationalProjection{status: filesvc.ProjectionStatus{Generation: 1}}
 	state := &lifecycle.State{}
@@ -408,11 +491,7 @@ func TestTokenTTLRejectsMalformedAndExcessiveValues(t *testing.T) {
 }
 
 func TestSeedAdminUsesFirstSuccessfullyCreatedAccount(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "seed-admin.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
+	database := openServerTestDB(t)
 	authService := auth.New(database, "operations-secret-at-least-32-bytes", time.Hour)
 	t.Setenv("TRANSLATOR_ACCOUNTS", ":bad,editor:strong-password-123")
 	t.Setenv("ADMIN_PASSWORD", "")
@@ -581,11 +660,7 @@ func TestProductionStartupRequiresMasterKeyAndInitializedAdmin(t *testing.T) {
 		t.Fatalf("development wildcard console origin rejected: %v", err)
 	}
 
-	database, err := db.Open(filepath.Join(t.TempDir(), "production-validation.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
+	database := openServerTestDB(t)
 	authService := auth.New(database, "operations-secret-at-least-32-bytes", time.Hour)
 	if err := validateProductionAdmin(true, authService); err == nil {
 		t.Fatal("production accepted an uninitialized administrator")
@@ -621,11 +696,7 @@ func TestOperationalDurationEnvironmentValidation(t *testing.T) {
 }
 
 func TestSeedConfigFromEnvRejectsInvalidGroupWithoutPartialWrites(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "seed-config.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
+	database := openServerTestDB(t)
 	configuration, err := config.New(database, "")
 	if err != nil {
 		t.Fatal(err)
@@ -651,11 +722,7 @@ func TestSeedConfigFromEnvDefaultsSchedulerOffAndPreservesExplicitTrue(t *testin
 		{name: "explicit true", value: "true", expected: "true"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			database, err := db.Open(filepath.Join(t.TempDir(), "scheduler-seed.db"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer database.Close()
+			database := openServerTestDB(t)
 			configuration, err := config.New(database, "")
 			if err != nil {
 				t.Fatal(err)
@@ -673,12 +740,7 @@ func TestSeedConfigFromEnvDefaultsSchedulerOffAndPreservesExplicitTrue(t *testin
 	}
 }
 
-func TestVerifyWorkspaceCLIExitsBeforeDatabaseAndBackgroundStartup(t *testing.T) {
-	if os.Getenv(verifyWorkspaceHelperEnv) == workspaceverify.ModeExternal {
-		os.Args = []string{"moesekai-server", "--verify-workspace"}
-		main()
-		return
-	}
+func TestStartupEnvironmentAndVerifyCLIValidation(t *testing.T) {
 	workspace, err := filepath.Abs(filepath.Join("internal", "workspaceverify", "testdata", "valid"))
 	if err != nil {
 		t.Fatal(err)
@@ -688,208 +750,109 @@ func TestVerifyWorkspaceCLIExitsBeforeDatabaseAndBackgroundStartup(t *testing.T)
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(manifestBytes)
-	command := exec.Command(os.Args[0], "-test.run=^TestVerifyWorkspaceCLIExitsBeforeDatabaseAndBackgroundStartup$")
-	command.Env = []string{
-		verifyWorkspaceHelperEnv + "=" + workspaceverify.ModeExternal,
-		"MOESEKAI_PRODUCTION=false",
-		"WORKSPACE_MODE=" + workspaceverify.ModeExternal,
-		"WORKSPACE_WEB_DIR=" + workspace,
-		fmt.Sprintf("WORKSPACE_MANIFEST_SHA256=%x", digest),
-		"DB_PATH=" + filepath.Join(t.TempDir(), "must-not-exist", "database.db"),
-	}
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("verify-only process failed: %v\n%s", err, output)
-	}
-	if !strings.Contains(string(output), "workspace verified") {
-		t.Fatalf("verify-only output = %q", output)
-	}
-}
 
-func TestVerifyWorkspaceCLIDisabledExitsBeforeDatabaseAndBackgroundStartup(t *testing.T) {
-	if os.Getenv(verifyWorkspaceHelperEnv) == workspaceverify.ModeDisabled {
-		os.Args = []string{"moesekai-server", "--verify-workspace"}
-		main()
-		return
-	}
-	command := exec.Command(os.Args[0], "-test.run=^TestVerifyWorkspaceCLIDisabledExitsBeforeDatabaseAndBackgroundStartup$")
-	command.Env = []string{
-		verifyWorkspaceHelperEnv + "=" + workspaceverify.ModeDisabled,
-		"MOESEKAI_PRODUCTION=true",
-		"TZ=UTC",
-		"WORKSPACE_MODE=" + workspaceverify.ModeDisabled,
-		"WEB_DIR=/app/web",
-		"DB_PATH=/data/moesekai.db",
-		"DATA_DIR=/data",
-		"SHUTDOWN_BUDGET_MS=not-a-number",
-	}
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("disabled verify-only process failed: %v\n%s", err, output)
-	}
-	if !strings.Contains(string(output), "workspace verified: disabled") {
-		t.Fatalf("disabled verify-only output = %q", output)
-	}
-}
-
-func TestRuntimeRejectsExternalBeforeDatabaseAndBackgroundStartup(t *testing.T) {
-	if helper := os.Getenv(verifyRuntimeFailureHelperEnv); helper != "" {
-		os.Args = []string{"moesekai-server"}
-		if helper == "cli" {
-			os.Args = append(os.Args, "--verify-runtime")
+	t.Run("verify-workspace external in dev", func(t *testing.T) {
+		t.Setenv("MOESEKAI_PRODUCTION", "false")
+		t.Setenv("WORKSPACE_MODE", workspaceverify.ModeExternal)
+		t.Setenv("WORKSPACE_WEB_DIR", workspace)
+		t.Setenv("WORKSPACE_MANIFEST_SHA256", fmt.Sprintf("%x", digest))
+		t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "must-not-exist", "database.db"))
+		env, _, err := resolveEnvironmentFromArgs([]string{"moesekai-server", "--verify-workspace"})
+		if err != nil || !env.verifyOnly {
+			t.Fatalf("verify-workspace env=%+v err=%v", env, err)
 		}
-		main()
-		return
-	}
-	for _, helper := range []string{"cli", "server"} {
-		t.Run(helper, func(t *testing.T) {
-			databasePath := filepath.Join(t.TempDir(), "must-not-exist", "database.db")
-			command := exec.Command(os.Args[0], "-test.run=^TestRuntimeRejectsExternalBeforeDatabaseAndBackgroundStartup$")
-			command.Env = []string{
-				verifyRuntimeFailureHelperEnv + "=" + helper,
-				"MOESEKAI_PRODUCTION=false",
-				"WORKSPACE_MODE=external",
-				"DB_PATH=" + databasePath,
+		var logBuf bytes.Buffer
+		prevOut := log.Writer()
+		log.SetOutput(&logBuf)
+		defer log.SetOutput(prevOut)
+		logWorkspaceVerification(env)
+		if !strings.Contains(logBuf.String(), "workspace verified") {
+			t.Fatalf("verify-only output = %q", logBuf.String())
+		}
+	})
+
+	t.Run("verify-workspace disabled in production", func(t *testing.T) {
+		t.Setenv("MOESEKAI_PRODUCTION", "true")
+		t.Setenv("TZ", "UTC")
+		t.Setenv("WORKSPACE_MODE", workspaceverify.ModeDisabled)
+		t.Setenv("WEB_DIR", "/app/web")
+		t.Setenv("DB_PATH", "/data/moesekai.db")
+		t.Setenv("DATA_DIR", "/data")
+		t.Setenv("SHUTDOWN_BUDGET_MS", "not-a-number")
+		env, _, err := resolveEnvironmentFromArgs([]string{"moesekai-server", "--verify-workspace"})
+		if err != nil || !env.verifyOnly {
+			t.Fatalf("disabled verify-workspace env=%+v err=%v", env, err)
+		}
+	})
+
+	t.Run("runtime rejects external workspace", func(t *testing.T) {
+		t.Setenv("MOESEKAI_PRODUCTION", "false")
+		t.Setenv("WORKSPACE_MODE", "external")
+		for _, args := range [][]string{{"moesekai-server", "--verify-runtime"}, {"moesekai-server"}} {
+			if _, _, err := resolveEnvironmentFromArgs(args); err == nil || !strings.Contains(err.Error(), "external workspace is available only to verifier tooling") {
+				t.Fatalf("args=%v err=%v", args, err)
 			}
-			output, err := command.CombinedOutput()
-			if err == nil || !strings.Contains(string(output), "external workspace is available only to verifier tooling") {
-				t.Fatalf("runtime external verification err=%v output=%q", err, output)
-			}
-			if _, err := os.Stat(filepath.Dir(databasePath)); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("runtime external verification touched database parent: %v", err)
-			}
-		})
-	}
-}
+		}
+	})
 
-func TestProductionWebDirOverrideFailsBeforeDatabaseAndBackgroundStartup(t *testing.T) {
-	if os.Getenv(verifyWebDirFailureHelperEnv) == "1" {
-		os.Args = []string{"moesekai-server", "--verify-runtime"}
-		main()
-		return
-	}
-	databasePath := filepath.Join(t.TempDir(), "must-not-exist", "database.db")
-	command := exec.Command(os.Args[0], "-test.run=^TestProductionWebDirOverrideFailsBeforeDatabaseAndBackgroundStartup$")
-	command.Env = []string{
-		verifyWebDirFailureHelperEnv + "=1",
-		"MOESEKAI_PRODUCTION=true",
-		"TZ=UTC",
-		"WORKSPACE_MODE=disabled",
-		"WEB_DIR=/data",
-		"DB_PATH=" + databasePath,
-	}
-	output, err := command.CombinedOutput()
-	if err == nil || !strings.Contains(string(output), `standalone production binary requires WEB_DIR to remain exactly "/app/web"`) {
-		t.Fatalf("production WEB_DIR override err=%v output=%q", err, output)
-	}
-	if _, err := os.Stat(filepath.Dir(databasePath)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("production WEB_DIR override touched database parent: %v", err)
-	}
-}
-
-func TestProductionDBPathOverrideFailsBeforePersistentDataAndBackgroundStartup(t *testing.T) {
-	if os.Getenv(verifyDBPathFailureHelperEnv) == "1" {
-		os.Args = []string{"moesekai-server", "--verify-runtime"}
-		main()
-		return
-	}
-	dataDir := filepath.Join(t.TempDir(), "must-not-exist")
-	command := exec.Command(os.Args[0], "-test.run=^TestProductionDBPathOverrideFailsBeforePersistentDataAndBackgroundStartup$")
-	command.Env = []string{
-		verifyDBPathFailureHelperEnv + "=1",
-		"MOESEKAI_PRODUCTION=true",
-		"TZ=UTC",
-		"WORKSPACE_MODE=disabled",
-		"WEB_DIR=/app/web",
-		"DB_PATH=" + filepath.Join(dataDir, "moesekai.db"),
-		"DATA_DIR=/data",
-	}
-	output, err := command.CombinedOutput()
-	if err == nil || !strings.Contains(string(output), `standalone production binary requires DB_PATH to remain exactly "/data/moesekai.db"`) {
-		t.Fatalf("production DB_PATH override err=%v output=%q", err, output)
-	}
-	if _, err := os.Stat(dataDir); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("production DB_PATH override touched data directory: %v", err)
-	}
-}
-
-func TestProductionDataDirOverrideFailsBeforePersistentDataAndBackgroundStartup(t *testing.T) {
-	if os.Getenv(verifyDataDirFailureHelperEnv) == "1" {
-		os.Args = []string{"moesekai-server", "--verify-runtime"}
-		main()
-		return
-	}
-	dataDir := filepath.Join(t.TempDir(), "must-not-exist")
-	command := exec.Command(os.Args[0], "-test.run=^TestProductionDataDirOverrideFailsBeforePersistentDataAndBackgroundStartup$")
-	command.Env = []string{
-		verifyDataDirFailureHelperEnv + "=1",
-		"MOESEKAI_PRODUCTION=true",
-		"TZ=UTC",
-		"WORKSPACE_MODE=disabled",
-		"WEB_DIR=/app/web",
-		"DB_PATH=/data/moesekai.db",
-		"DATA_DIR=" + dataDir,
-	}
-	output, err := command.CombinedOutput()
-	if err == nil || !strings.Contains(string(output), `standalone production binary requires DATA_DIR to remain exactly "/data"`) {
-		t.Fatalf("production DATA_DIR override err=%v output=%q", err, output)
-	}
-	if _, err := os.Stat(dataDir); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("production DATA_DIR override touched data directory: %v", err)
-	}
-}
-
-func TestProductionTimezoneOverrideFailsBeforePersistentDataAndBackgroundStartup(t *testing.T) {
-	if os.Getenv(verifyTimezoneFailureHelperEnv) == "1" {
-		os.Args = []string{"moesekai-server", "--verify-runtime"}
-		main()
-		return
-	}
-	databasePath := filepath.Join(t.TempDir(), "must-not-exist", "moesekai.db")
-	command := exec.Command(os.Args[0], "-test.run=^TestProductionTimezoneOverrideFailsBeforePersistentDataAndBackgroundStartup$")
-	command.Env = []string{
-		verifyTimezoneFailureHelperEnv + "=1",
-		"MOESEKAI_PRODUCTION=true",
-		"TZ=Pacific/Honolulu",
-		"WORKSPACE_MODE=disabled",
-		"WEB_DIR=/app/web",
-		"DB_PATH=" + databasePath,
-		"DATA_DIR=/data",
-	}
-	output, err := command.CombinedOutput()
-	if err == nil || !strings.Contains(string(output), `standalone production binary requires TZ to remain exactly "UTC"`) {
-		t.Fatalf("production TZ override err=%v output=%q", err, output)
-	}
-	if _, err := os.Stat(filepath.Dir(databasePath)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("production TZ override touched database parent: %v", err)
-	}
-}
-
-func TestVerifyWorkspaceCLIProductionModeFailures(t *testing.T) {
-	if os.Getenv(verifyWorkspaceFailureHelperEnv) == "1" {
-		os.Args = []string{"moesekai-server", "--verify-workspace"}
-		main()
-		return
-	}
-	for _, test := range []struct {
-		name    string
-		env     []string
-		message string
+	for _, tc := range []struct {
+		name string
+		args []string
+		env  map[string]string
+		want string
 	}{
-		{name: "missing", message: "WORKSPACE_MODE is required"},
-		{name: "disabled residue", env: []string{"WORKSPACE_MODE=disabled", "WORKSPACE_WEB_DIR="}, message: "must both be unset"},
-		{name: "external production", env: []string{"WORKSPACE_MODE=external"}, message: `must be exactly "disabled" in production`},
+		{
+			name: "web_dir override",
+			args: []string{"moesekai-server", "--verify-runtime"},
+			env:  map[string]string{"MOESEKAI_PRODUCTION": "true", "TZ": "UTC", "WORKSPACE_MODE": "disabled", "WEB_DIR": "/data"},
+			want: `standalone production binary requires WEB_DIR to remain exactly "/app/web"`,
+		},
+		{
+			name: "db_path override",
+			args: []string{"moesekai-server", "--verify-runtime"},
+			env:  map[string]string{"MOESEKAI_PRODUCTION": "true", "TZ": "UTC", "WORKSPACE_MODE": "disabled", "WEB_DIR": "/app/web", "DB_PATH": "/tmp/other.db", "DATA_DIR": "/data"},
+			want: `standalone production binary requires DB_PATH to remain exactly "/data/moesekai.db"`,
+		},
+		{
+			name: "data_dir override",
+			args: []string{"moesekai-server", "--verify-runtime"},
+			env:  map[string]string{"MOESEKAI_PRODUCTION": "true", "TZ": "UTC", "WORKSPACE_MODE": "disabled", "WEB_DIR": "/app/web", "DB_PATH": "/data/moesekai.db", "DATA_DIR": "/tmp/data"},
+			want: `standalone production binary requires DATA_DIR to remain exactly "/data"`,
+		},
+		{
+			name: "timezone override",
+			args: []string{"moesekai-server", "--verify-runtime"},
+			env:  map[string]string{"MOESEKAI_PRODUCTION": "true", "TZ": "Pacific/Honolulu", "WORKSPACE_MODE": "disabled", "WEB_DIR": "/app/web", "DB_PATH": "/data/moesekai.db", "DATA_DIR": "/data"},
+			want: `standalone production binary requires TZ to remain exactly "UTC"`,
+		},
+		{
+			name: "workspace missing in production",
+			args: []string{"moesekai-server", "--verify-workspace"},
+			env:  map[string]string{"MOESEKAI_PRODUCTION": "true", "TZ": "UTC"},
+			want: "WORKSPACE_MODE is required",
+		},
+		{
+			name: "workspace disabled residue",
+			args: []string{"moesekai-server", "--verify-workspace"},
+			env:  map[string]string{"MOESEKAI_PRODUCTION": "true", "TZ": "UTC", "WORKSPACE_MODE": "disabled", "WORKSPACE_WEB_DIR": ""},
+			want: "must both be unset",
+		},
+		{
+			name: "workspace external in production",
+			args: []string{"moesekai-server", "--verify-workspace"},
+			env:  map[string]string{"MOESEKAI_PRODUCTION": "true", "TZ": "UTC", "WORKSPACE_MODE": "external"},
+			want: `must be exactly "disabled" in production`,
+		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			command := exec.Command(os.Args[0], "-test.run=^TestVerifyWorkspaceCLIProductionModeFailures$")
-			command.Env = append([]string{
-				verifyWorkspaceFailureHelperEnv + "=1",
-				"MOESEKAI_PRODUCTION=true",
-				"TZ=UTC",
-			}, test.env...)
-			output, err := command.CombinedOutput()
-			if err == nil || !strings.Contains(string(output), test.message) {
-				t.Fatalf("production %s err=%v output=%q", test.name, err, output)
+		t.Run(tc.name, func(t *testing.T) {
+			for _, k := range []string{"MOESEKAI_PRODUCTION", "TZ", "WORKSPACE_MODE", "WORKSPACE_WEB_DIR", "WORKSPACE_MANIFEST_SHA256", "WEB_DIR", "DB_PATH", "DATA_DIR"} {
+				_ = os.Unsetenv(k)
+			}
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			if _, _, err := resolveEnvironmentFromArgs(tc.args); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("%s err=%v, want %q", tc.name, err, tc.want)
 			}
 		})
 	}
@@ -960,23 +923,6 @@ func TestHTTPServerShutdownDrainsInflightRequest(t *testing.T) {
 }
 
 func TestBlockedReadinessProbeIsJoinedBeforeShutdownReturns(t *testing.T) {
-	if os.Getenv(blockedProbeHelperEnv) == "1" {
-		runBlockedProbeShutdownHelper(t)
-		return
-	}
-	command := exec.Command(os.Args[0], "-test.run=^TestBlockedReadinessProbeIsJoinedBeforeShutdownReturns$")
-	command.Env = append(os.Environ(), blockedProbeHelperEnv+"=1")
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("blocked readiness subprocess failed: %v\n%s", err, output)
-	}
-	if !strings.Contains(string(output), "probe-joined-before-close") {
-		t.Fatalf("blocked readiness subprocess output = %q", output)
-	}
-}
-
-func runBlockedProbeShutdownHelper(t *testing.T) {
-	t.Helper()
 	state := &lifecycle.State{}
 	entered := make(chan struct{})
 	finished := make(chan struct{})
@@ -1005,6 +951,7 @@ func runBlockedProbeShutdownHelper(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("readiness probe did not enter")
 	}
+	joinedBeforeClose := false
 	shutdownErr := lifecycle.RunShutdown(lifecycle.ShutdownConfig{Budget: 500 * time.Millisecond, Drain: 10 * time.Millisecond},
 		func(string, ...any) {}, func(int) { t.Fatal("shutdown watchdog fired") },
 		func(ctx context.Context) error {
@@ -1020,13 +967,13 @@ func runBlockedProbeShutdownHelper(t *testing.T) {
 			state.Wait()
 			select {
 			case <-finished:
-				fmt.Fprintln(os.Stdout, "probe-joined-before-close")
+				joinedBeforeClose = true
 				return nil
 			default:
 				return errors.New("shutdown returned before readiness probe")
 			}
 		})
-	if shutdownErr == nil || !errors.Is(shutdownErr, context.DeadlineExceeded) {
-		t.Fatalf("shutdown error = %v", shutdownErr)
+	if shutdownErr == nil || !errors.Is(shutdownErr, context.DeadlineExceeded) || !joinedBeforeClose {
+		t.Fatalf("shutdown error=%v joined=%v", shutdownErr, joinedBeforeClose)
 	}
 }

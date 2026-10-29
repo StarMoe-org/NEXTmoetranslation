@@ -193,16 +193,19 @@ func DecodeArchive(archive []byte) (Bundle, error) {
 	}
 	archiveDigest := sha256.Sum256(archive)
 	bundle := Bundle{ArchiveSHA256: hex.EncodeToString(archiveDigest[:])}
-	if err := decodeTarGzip(archive, &bundle); err != nil {
+	trustedPinned := bundle.ArchiveSHA256 == ExpectedArchiveSHA256
+	if err := decodeTarGzip(archive, &bundle, trustedPinned); err != nil {
 		return Bundle{}, err
 	}
-	if err := validateBundle(bundle); err != nil {
-		return Bundle{}, err
+	if !trustedPinned {
+		if err := validateBundle(bundle); err != nil {
+			return Bundle{}, err
+		}
 	}
 	return bundle, nil
 }
 
-func decodeTarGzip(archive []byte, bundle *Bundle) error {
+func decodeTarGzip(archive []byte, bundle *Bundle, trustedPinned bool) error {
 	source := bytes.NewReader(archive)
 	compressed, err := gzip.NewReader(source)
 	if err != nil {
@@ -220,25 +223,25 @@ func decodeTarGzip(archive []byte, bundle *Bundle) error {
 		decode func(io.Reader, int) error
 	}{
 		{DocumentsName, func(reader io.Reader, count int) error {
-			return decodeClosedJSONArray(reader, &bundle.Documents, count)
+			return decodeSeedArray(reader, &bundle.Documents, count, trustedPinned)
 		}},
 		{ArtifactsName, func(reader io.Reader, count int) error {
-			return decodeClosedJSONArray(reader, &bundle.Artifacts, count)
+			return decodeSeedArray(reader, &bundle.Artifacts, count, trustedPinned)
 		}},
 		{ContributionsName, func(reader io.Reader, count int) error {
-			return decodeClosedJSONArray(reader, &bundle.Contributions, count)
+			return decodeSeedArray(reader, &bundle.Contributions, count, trustedPinned)
 		}},
 		{LegacyDocumentsName, func(reader io.Reader, count int) error {
-			return decodeClosedJSONArray(reader, &bundle.LegacyDocuments, count)
+			return decodeSeedArray(reader, &bundle.LegacyDocuments, count, trustedPinned)
 		}},
 		{LegacyLinesName, func(reader io.Reader, count int) error {
-			return decodeClosedJSONArray(reader, &bundle.LegacyLines, count)
+			return decodeSeedArray(reader, &bundle.LegacyLines, count, trustedPinned)
 		}},
 		{LegacySegmentsName, func(reader io.Reader, count int) error {
-			return decodeClosedJSONArray(reader, &bundle.LegacySegments, count)
+			return decodeSeedArray(reader, &bundle.LegacySegments, count, trustedPinned)
 		}},
 		{AvailabilityName, func(reader io.Reader, count int) error {
-			return decodeClosedJSONArray(reader, &bundle.Availability, count)
+			return decodeSeedArray(reader, &bundle.Availability, count, trustedPinned)
 		}},
 	}
 	for index := -1; ; index++ {
@@ -271,7 +274,11 @@ func decodeTarGzip(archive []byte, bundle *Bundle) error {
 			if err != nil || entry.N != 0 {
 				return fmt.Errorf("read embedded lyrics editor seed entry %q", header.Name)
 			}
-			if err := decodeClosedJSON(body, &bundle.Manifest); err != nil {
+			if trustedPinned {
+				if err := json.Unmarshal(body, &bundle.Manifest); err != nil {
+					return fmt.Errorf("decode embedded lyrics editor seed %s: %w", header.Name, err)
+				}
+			} else if err := decodeClosedJSON(body, &bundle.Manifest); err != nil {
 				return fmt.Errorf("decode embedded lyrics editor seed %s: %w", header.Name, err)
 			}
 			if err := validateManifestIdentity(bundle.Manifest); err != nil {
@@ -280,6 +287,15 @@ func decodeTarGzip(archive []byte, bundle *Bundle) error {
 			continue
 		}
 		record := bundle.Manifest.Files[index]
+		if trustedPinned {
+			if err := targets[index].decode(entry, record.Count); err != nil {
+				return fmt.Errorf("decode embedded lyrics editor seed %s: %w", header.Name, err)
+			}
+			if entry.N != 0 {
+				return fmt.Errorf("embedded lyrics editor seed file inventory is invalid for %q", header.Name)
+			}
+			continue
+		}
 		digest := sha256.New()
 		if err := targets[index].decode(io.TeeReader(entry, digest), record.Count); err != nil {
 			return fmt.Errorf("decode embedded lyrics editor seed %s: %w", header.Name, err)
@@ -294,6 +310,30 @@ func decodeTarGzip(archive []byte, bundle *Bundle) error {
 	}
 	if limited.N <= 0 {
 		return errors.New("embedded lyrics editor seed tar exceeds its size limit")
+	}
+	if err := compressed.Close(); err != nil {
+		return fmt.Errorf("close embedded lyrics editor seed archive: %w", err)
+	}
+	if source.Len() != 0 {
+		return errors.New("embedded lyrics editor seed gzip has trailing data")
+	}
+	return nil
+}
+
+func validateCanonicalGzipNoTrailing(archive []byte) error {
+	source := bytes.NewReader(archive)
+	compressed, err := gzip.NewReader(source)
+	if err != nil {
+		return fmt.Errorf("open embedded lyrics editor seed archive: %w", err)
+	}
+	compressed.Multistream(false)
+	if compressed.Name != "" || compressed.Comment != "" || len(compressed.Extra) != 0 || !compressed.ModTime.IsZero() {
+		_ = compressed.Close()
+		return errors.New("embedded lyrics editor seed gzip metadata is not canonical")
+	}
+	if _, err := io.Copy(io.Discard, io.LimitReader(compressed, maxTarBytes+1)); err != nil {
+		_ = compressed.Close()
+		return fmt.Errorf("finish embedded lyrics editor seed archive: %w", err)
 	}
 	if err := compressed.Close(); err != nil {
 		return fmt.Errorf("close embedded lyrics editor seed archive: %w", err)
@@ -336,6 +376,19 @@ func decodeClosedJSON(body []byte, target any) error {
 		return err
 	}
 	return nil
+}
+
+func decodeSeedArray[T any](reader io.Reader, target *[]T, expectedCount int, trustedPinned bool) error {
+	if trustedPinned {
+		if err := json.NewDecoder(reader).Decode(target); err != nil {
+			return err
+		}
+		if len(*target) != expectedCount {
+			return errors.New("JSON array count differs from the manifest")
+		}
+		return nil
+	}
+	return decodeClosedJSONArray(reader, target, expectedCount)
 }
 
 func decodeClosedJSONArray[T any](reader io.Reader, target *[]T, expectedCount int) error {
