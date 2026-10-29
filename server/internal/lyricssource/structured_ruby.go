@@ -2,10 +2,12 @@ package lyricssource
 
 import (
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"unicode"
 
+	"github.com/ikawaha/kagome-dict/dict"
 	"github.com/ikawaha/kagome-dict/ipa"
 	"github.com/ikawaha/kagome/v2/tokenizer"
 
@@ -127,11 +129,7 @@ func generateRubySpansWithUniqueStandaloneDictionary(
 // tokenRubySpans resolves the ruby of one Kagome token that contains Han.
 func tokenRubySpans(token tokenizer.Token, allowUniqueStandaloneDictionary bool) ([]RubySpan, bool) {
 	surface := token.Surface
-	features := token.Features()
-	candidate := ""
-	if len(features) >= 8 && features[7] != "*" {
-		candidate = katakanaToHiragana(features[7])
-	}
+	candidate, _ := furiganaTokenHiraganaReading(token)
 	aligned, ok := rubySpansFromKanaReading(surface, []rune(candidate))
 	if validGeneratedRubyReading(candidate) && ok {
 		return markRubyReadingEvidence(
@@ -182,9 +180,71 @@ func SuggestRubySpans(text string) ([]RubySpan, error) {
 
 func initializeFuriganaTokenizer() error {
 	furiganaTokenizerOnce.Do(func() {
-		furiganaTokenizer, furiganaTokenizerErr = tokenizer.New(ipa.Dict(), tokenizer.OmitBosEos())
+		d := ipa.Dict()
+		furiganaTokenizer, furiganaTokenizerErr = tokenizer.New(d, tokenizer.OmitBosEos())
+		if furiganaTokenizerErr != nil {
+			return
+		}
+		if d.Contents != nil || len(d.POSTable.POSs) > 0 {
+			entryCount := len(d.POSTable.POSs)
+			if len(d.Contents) > entryCount {
+				entryCount = len(d.Contents)
+			}
+			offsets := make([]uint32, entryCount+1)
+			var blob strings.Builder
+			blob.Grow(entryCount * 9)
+			for id := 0; id < entryCount; id++ {
+				var feature7 string
+				posLen := 0
+				if id < len(d.POSTable.POSs) {
+					pos := d.POSTable.POSs[id]
+					posLen = len(pos)
+					if 7 < posLen && int(pos[7]) < len(d.POSTable.NameList) {
+						feature7 = d.POSTable.NameList[pos[7]]
+					}
+				}
+				if feature7 == "" && 7 >= posLen && id < len(d.Contents) {
+					c := d.Contents[id]
+					if idx := 7 - posLen; idx < len(c) {
+						feature7 = c[idx]
+					}
+				}
+				if feature7 != "" && feature7 != "*" {
+					blob.WriteString(katakanaToHiragana(feature7))
+				}
+				offsets[id+1] = uint32(blob.Len())
+			}
+			furiganaReadingsBlob = blob.String()
+			furiganaReadingOffsets = offsets
+			// Release ~75 MiB of unused IPADIC POS/feature string slices and ~2.3M GC
+			// pointers; lattice search uses Morphs/Index/Connection/Char/UnkDict only.
+			d.Contents = nil
+			d.POSTable = dict.POSTable{}
+			runtime.GC()
+		}
 	})
 	return furiganaTokenizerErr
+}
+
+// furiganaTokenHiraganaReading returns katakanaToHiragana(token.Features()[7])
+// without retaining IPADIC's 392k [][]string feature table or allocating per token.
+func furiganaTokenHiraganaReading(token tokenizer.Token) (string, bool) {
+	if token.Class == tokenizer.KNOWN {
+		if token.ID < 0 || token.ID+1 >= len(furiganaReadingOffsets) {
+			return "", false
+		}
+		start := furiganaReadingOffsets[token.ID]
+		end := furiganaReadingOffsets[token.ID+1]
+		if start == end {
+			return "", false
+		}
+		return furiganaReadingsBlob[start:end], true
+	}
+	feature7, ok := token.FeatureAt(7)
+	if !ok || feature7 == "" || feature7 == "*" {
+		return "", false
+	}
+	return katakanaToHiragana(feature7), true
 }
 
 func unresolvedGeneratedRubyError() error {
@@ -254,11 +314,10 @@ func kagomeKanaReading(surface string) ([]rune, bool) {
 		if !containsKanji(token.Surface) {
 			return nil, false
 		}
-		features := token.Features()
-		if len(features) < 8 || features[7] == "*" {
+		candidate, ok := furiganaTokenHiraganaReading(token)
+		if !ok {
 			return nil, false
 		}
-		candidate := katakanaToHiragana(features[7])
 		if !validGeneratedRubyReading(candidate) {
 			return nil, false
 		}
@@ -311,11 +370,10 @@ func kagomeUniqueStandaloneHanRubySpans(surface string) ([]RubySpan, bool) {
 			if !strings.Contains(token.Surface, surface) || !containsKanji(token.Surface) {
 				continue
 			}
-			features := token.Features()
-			if len(features) < 8 || features[7] == "*" {
+			candidate, ok := furiganaTokenHiraganaReading(token)
+			if !ok {
 				continue
 			}
-			candidate := katakanaToHiragana(features[7])
 			spans, ok := rubySpansFromKanaReading(token.Surface, []rune(candidate))
 			if !ok {
 				continue

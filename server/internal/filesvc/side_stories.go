@@ -15,19 +15,21 @@ var sideStoryRoots = []struct{ locale, prefix string }{
 	{model.LocaleEnglish, "v2/en-US/translation/"},
 }
 
-// addSideStoryAssets projects every side-story file into next, one pass per
-// locale.
-func (svc *Service) addSideStoryAssets(ctx context.Context, next map[string]asset, now time.Time) error {
+// addSideStoryAssets projects every side-story file into next, streaming one
+// file at a time per locale so 4k+ marshaled buffers are not held simultaneously.
+func (svc *Service) addSideStoryAssets(
+	ctx context.Context, next map[string]asset, deduper *assetBlobDeduper, now time.Time,
+) error {
 	for _, root := range sideStoryRoots {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		bodies, err := svc.gen.SideStoryFilesJSON(ctx, root.locale)
+		err := svc.gen.ForEachSideStoryFileJSON(ctx, root.locale, func(key string, body []byte) error {
+			next[root.prefix+key] = deduper.intern(body, "application/json; charset=utf-8", now, sourceGenerated, 0)
+			return nil
+		})
 		if err != nil {
 			return fmt.Errorf("side stories %s: %w", root.locale, err)
-		}
-		for key, body := range bodies {
-			next[root.prefix+key] = makeAsset(body, "application/json; charset=utf-8", now)
 		}
 	}
 	return nil

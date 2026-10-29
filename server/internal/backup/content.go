@@ -1,12 +1,14 @@
 package backup
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -67,6 +69,112 @@ func materializeTranslationContentFromStore(parent string, source *store.Store) 
 	return materializeTranslationContentFromStoreContext(context.Background(), parent, source)
 }
 
+type backupFileHashWriter struct {
+	name   string
+	dst    *bufio.Writer
+	hasher hash.Hash
+	bytes  int64
+	limit  int64
+}
+
+func (w *backupFileHashWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if w.bytes+int64(len(p)) > w.limit {
+		return 0, fmt.Errorf("backup file %s exceeds %d bytes", w.name, w.limit)
+	}
+	n, err := w.dst.Write(p)
+	if n > 0 {
+		_, _ = w.hasher.Write(p[:n])
+		w.bytes += int64(n)
+	}
+	return n, err
+}
+
+type trimFinalNewlineWriter struct {
+	w          io.Writer
+	hasPending bool
+}
+
+func (t *trimFinalNewlineWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if t.hasPending {
+		if _, err := t.w.Write([]byte{'\n'}); err != nil {
+			return 0, err
+		}
+		t.hasPending = false
+	}
+	total := len(p)
+	if p[len(p)-1] == '\n' {
+		t.hasPending = true
+		p = p[:len(p)-1]
+	}
+	if len(p) > 0 {
+		n, err := t.w.Write(p)
+		if err != nil {
+			return n, err
+		}
+	}
+	return total, nil
+}
+
+func writeIndentedJSONNoTrailingNewline(w io.Writer, value any) error {
+	trimmed := &trimFinalNewlineWriter{w: w}
+	enc := json.NewEncoder(trimmed)
+	enc.SetIndent("", "  ")
+	return enc.Encode(value)
+}
+
+func writeStreamedContentFile(
+	ctx context.Context,
+	dir, name string,
+	streamFn func(w io.Writer) (count int, scenarioCount int, err error),
+) (contentManifestFile, int, error) {
+	if err := ctx.Err(); err != nil {
+		return contentManifestFile{}, 0, err
+	}
+	limit := archiveFileByteLimit(filepath.Join("translation-content", name))
+	targetPath := filepath.Join(dir, name)
+	file, err := os.OpenFile(targetPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return contentManifestFile{}, 0, err
+	}
+	bw := bufio.NewWriterSize(file, 64<<10)
+	hw := &backupFileHashWriter{
+		name:   name,
+		dst:    bw,
+		hasher: sha256.New(),
+		limit:  limit,
+	}
+	count, scenarioCount, streamErr := streamFn(hw)
+	flushErr := bw.Flush()
+	closeErr := file.Close()
+	if streamErr != nil {
+		_ = os.Remove(targetPath)
+		return contentManifestFile{}, 0, streamErr
+	}
+	if flushErr != nil {
+		_ = os.Remove(targetPath)
+		return contentManifestFile{}, 0, flushErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(targetPath)
+		return contentManifestFile{}, 0, closeErr
+	}
+	record := contentManifestFile{
+		Path:   name,
+		SHA256: hex.EncodeToString(hw.hasher.Sum(nil)),
+		Count:  count,
+	}
+	if name == "event-stories.json" {
+		record.ScenarioCount = scenarioCount
+	}
+	return record, count + scenarioCount, nil
+}
+
 func materializeTranslationContentFromStoreContext(ctx context.Context, parent string, source *store.Store) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -78,69 +186,61 @@ func materializeTranslationContentFromStoreContext(ctx context.Context, parent s
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	entries, err := source.ExportEntryLocalizationsContext(ctx)
-	if err != nil {
-		return "", err
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	events, err := source.ExportEventContentContext(ctx)
-	if err != nil {
-		return "", err
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	lyrics, err := source.ExportLyricsContentContext(ctx)
-	if err != nil {
-		return "", err
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	sideStories, err := source.ExportSideStoryContentContext(ctx)
-	if err != nil {
-		return "", err
-	}
-	totalRecords := len(entries) + eventContentCount(events) + len(events.Scenarios) + lyricsContentCount(lyrics) +
-		sideStoryContentCount(sideStories)
-	if totalRecords > maxTranslationContentRecords {
-		return "", fmt.Errorf("translation content exceeds %d records", maxTranslationContentRecords)
-	}
-	files := []struct {
-		name  string
-		value any
-		count int
+
+	steps := []struct {
+		name string
+		run  func(w io.Writer) (int, int, error)
 	}{
-		{"entries.json", entries, len(entries)},
-		{"event-stories.json", events, eventContentCount(events)},
-		{"lyrics.json", lyrics, lyricsContentCount(lyrics)},
-		{"side-stories.json", sideStories, sideStoryContentCount(sideStories)},
+		{
+			name: "entries.json",
+			run: func(w io.Writer) (int, int, error) {
+				count, err := source.StreamEntryLocalizationsJSONContext(ctx, w)
+				return count, 0, err
+			},
+		},
+		{
+			name: "event-stories.json",
+			run: func(w io.Writer) (int, int, error) {
+				return source.StreamEventContentJSONContext(ctx, w)
+			},
+		},
+		{
+			name: "lyrics.json",
+			run: func(w io.Writer) (int, int, error) {
+				lyrics, err := source.ExportLyricsContentContext(ctx)
+				if err != nil {
+					return 0, 0, err
+				}
+				count := lyricsContentCount(lyrics)
+				if err := writeIndentedJSONNoTrailingNewline(w, lyrics); err != nil {
+					return 0, 0, err
+				}
+				return count, 0, nil
+			},
+		},
+		{
+			name: "side-stories.json",
+			run: func(w io.Writer) (int, int, error) {
+				count, err := source.StreamSideStoryContentJSONContext(ctx, w)
+				return count, 0, err
+			},
+		},
 	}
-	manifest := contentManifest{SchemaVersion: translationContentSchemaVersion, Files: []contentManifestFile{}}
-	for _, file := range files {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		body, err := json.MarshalIndent(file.value, "", "  ")
+
+	manifest := contentManifest{SchemaVersion: translationContentSchemaVersion, Files: make([]contentManifestFile, 0, len(steps))}
+	totalRecords := 0
+	for _, step := range steps {
+		record, records, err := writeStreamedContentFile(ctx, dir, step.name, step.run)
 		if err != nil {
 			return "", err
 		}
-		limit := archiveFileByteLimit(filepath.Join("translation-content", file.name))
-		if int64(len(body)) > limit {
-			return "", fmt.Errorf("backup file %s exceeds %d bytes", file.name, limit)
-		}
-		if err := os.WriteFile(filepath.Join(dir, file.name), body, 0o644); err != nil {
-			return "", err
-		}
-		sum := sha256.Sum256(body)
-		record := contentManifestFile{Path: file.name, SHA256: hex.EncodeToString(sum[:]), Count: file.count}
-		if file.name == "event-stories.json" {
-			record.ScenarioCount = len(events.Scenarios)
+		totalRecords += records
+		if totalRecords > maxTranslationContentRecords {
+			return "", fmt.Errorf("translation content exceeds %d records", maxTranslationContentRecords)
 		}
 		manifest.Files = append(manifest.Files, record)
 	}
+
 	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return "", err

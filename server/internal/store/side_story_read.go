@@ -76,6 +76,10 @@ func (s *Store) ListSideStoriesContext(ctx context.Context, kind, locale string)
 		summaries = append(summaries, summary)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
 	index := make(map[string]*SideStorySummary, len(summaries))
@@ -100,6 +104,10 @@ func (s *Store) ListSideStoriesContext(ctx context.Context, kind, locale string)
 		}
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
 
@@ -119,6 +127,10 @@ func (s *Store) ListSideStoriesContext(ctx context.Context, kind, locale string)
 		}
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
 
@@ -146,6 +158,10 @@ func (s *Store) ListSideStoriesContext(ctx context.Context, kind, locale string)
 		}
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
 
@@ -213,6 +229,10 @@ func (s *Store) SideStoryDetailContext(ctx context.Context, kind, storyID, local
 		detail.Episodes = append(detail.Episodes, episode)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
+		return SideStoryDetail{}, err
+	}
+	if err := rows.Close(); err != nil {
 		return SideStoryDetail{}, err
 	}
 	for position := range detail.Episodes {
@@ -257,6 +277,10 @@ func (s *Store) SideStoryProgressContext(ctx context.Context) (map[string]SideSt
 		}
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
 	rows, err = tx.QueryContext(ctx, `SELECT kind,COUNT(*),SUM(script_sha256<>''),SUM(script_sha256='' OR jp_refetch=1),
@@ -282,6 +306,10 @@ func (s *Store) SideStoryProgressContext(ctx context.Context) (map[string]SideSt
 		}
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
 	out := make(map[string]SideStoryKindProgress, len(totals))

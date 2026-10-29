@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 
 	"moesekai/server/internal/db"
@@ -23,12 +24,20 @@ var runtimeProfile = "development"
 const (
 	runtimeProfileNextProduction   = "next-production"
 	publishedAdminPasswordTemplate = "replace-with-12-or-more-characters"
+	defaultGoMemoryLimitBytes      = 1 << 30 // 1 GiB soft GC target when GOMEMLIMIT is unset
 )
+
+func applyDefaultMemoryLimit() {
+	if _, ok := os.LookupEnv("GOMEMLIMIT"); !ok {
+		debug.SetMemoryLimit(defaultGoMemoryLimitBytes)
+	}
+}
 
 func main() {
 	// Timestamped logs (UTC) on stdout so `docker logs` shows operational activity.
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	log.SetPrefix("")
+	applyDefaultMemoryLimit()
 
 	env := resolveEnvironment()
 	if env.verifyOnly {

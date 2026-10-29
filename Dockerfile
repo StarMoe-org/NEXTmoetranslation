@@ -51,8 +51,7 @@ LABEL org.opencontainers.image.title="NextTrans" \
       org.opencontainers.image.version=$VERSION \
       org.opencontainers.image.revision=$VCS_REF \
       org.opencontainers.image.source=$IMAGE_SOURCE \
-      io.nexttrans.release.mode="standalone" \
-      io.nexttrans.release.workflow=".github/workflows/release-next.yml"
+      io.nexttrans.release.mode="standalone"
 # The approved runtime base must already contain pinned Git, CA certificates,
 # and timezone data. Mutable package installation during release builds is
 # intentionally forbidden.
@@ -80,7 +79,8 @@ ENV DB_PATH=/data/moesekai.db \
     DATA_DIR=/data \
     WEB_DIR=/app/web \
     HOME=/tmp \
-    TZ=UTC
+    TZ=UTC \
+    GOMEMLIMIT=1GiB
 
 VOLUME ["/data"]
 EXPOSE 8080

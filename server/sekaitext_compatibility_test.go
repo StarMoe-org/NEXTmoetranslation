@@ -20,7 +20,6 @@ import (
 	"moesekai/server/internal/auth"
 	"moesekai/server/internal/backup"
 	"moesekai/server/internal/config"
-	"moesekai/server/internal/db"
 	"moesekai/server/internal/files"
 	"moesekai/server/internal/filesvc"
 	"moesekai/server/internal/model"
@@ -35,11 +34,7 @@ func TestSekaiTextCategorySaveToPublicFilesAndExistingBackups(t *testing.T) {
 	}
 	t.Setenv("MOESEKAI_BACKUP_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)))
 	root := t.TempDir()
-	database, err := db.Open(filepath.Join(root, "compatibility.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
+	database := openServerTestDB(t)
 	translations := store.New(database)
 	events := store.NewEventStore(database)
 	if _, err := translations.ImportCategory("cards", model.Category{

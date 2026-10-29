@@ -10,6 +10,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -267,7 +269,8 @@ func (m *Manager) BackupAllContext(parent context.Context) (results map[string]s
 		work := filepath.Join(m.workDir, "backup-all")
 		_ = os.RemoveAll(work)
 		defer os.RemoveAll(work)
-		translationsDir, contentDir, materializeErr := m.materializeBackupPayloadContext(ctx, filepath.Join(work, "materialized"))
+		materializedDir := filepath.Join(work, "materialized")
+		translationsDir, contentDir, materializeErr := m.materializeBackupPayloadContext(ctx, materializedDir)
 		if materializeErr != nil {
 			if validS3 {
 				setTargetError("s3", materializeErr)
@@ -278,12 +281,13 @@ func (m *Manager) BackupAllContext(parent context.Context) (results map[string]s
 				validGit = false
 			}
 		}
-		var artifact []byte
+		var artifactPath string
 		if validS3 || validGit {
-			artifact, err = encryptBackupPayloadContext(ctx, filepath.Join(work, "artifact"), backupPayload{
+			artifactPath, err = encryptBackupPayloadToFileContext(ctx, filepath.Join(work, "artifact"), backupPayload{
 				translationsDir: translationsDir,
 				contentDir:      contentDir,
 			}, encryptionKey)
+			_ = os.RemoveAll(materializedDir)
 			if err != nil {
 				if validS3 {
 					setTargetError("s3", err)
@@ -295,10 +299,9 @@ func (m *Manager) BackupAllContext(parent context.Context) (results map[string]s
 				}
 			}
 		}
-		defer clear(artifact)
 
 		if validS3 {
-			if targetErr := m.publishS3BackupArtifactContext(ctx, s3Cfg, artifact); targetErr != nil {
+			if targetErr := m.publishS3BackupArtifactFileContext(ctx, s3Cfg, artifactPath); targetErr != nil {
 				setTargetError("s3", targetErr)
 			} else {
 				log.Printf("[backup] s3 ok")
@@ -312,7 +315,7 @@ func (m *Manager) BackupAllContext(parent context.Context) (results map[string]s
 		if validGit && ctx.Err() == nil {
 			repoDir, targetErr := m.prepareGitBackupRepoContext(ctx, filepath.Join(work, "git"), gitRepoURL, gitBranch)
 			if targetErr == nil {
-				targetErr = m.publishGitBackupArtifactContext(ctx, repoDir, gitRepoURL, gitBranch, artifact)
+				targetErr = m.publishGitBackupArtifactFileContext(ctx, repoDir, gitRepoURL, gitBranch, artifactPath)
 			}
 			if targetErr != nil {
 				setTargetError("git", targetErr)
@@ -370,6 +373,8 @@ func (m *Manager) beginOperation(parent context.Context, operation string) (cont
 			m.status.LastFinished = nowRFC3339()
 			m.status.LastError = sanitizeStatusError(result)
 			m.mu.Unlock()
+			runtime.GC()
+			debug.FreeOSMemory()
 			m.wg.Done()
 		})
 	}

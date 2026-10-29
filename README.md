@@ -64,7 +64,7 @@ docker run -p 8080:8080 -v nexttrans-data:/data \
   nexttrans
 ```
 
-`JWT_SECRET` 至少 32 字节，生产 `MOESEKAI_MASTER_KEY` 必须是至少 32 字节的随机 secret 且跨重启/恢复/回滚保持稳定。`ADMIN_PASSWORD` 只在受控首次启动或管理员恢复时临时注入。env 变量只在**首次启动**作为种子写入，之后管理设置页是唯一真源。完整变量表见 `.env.example`；镜像构建、digest pin、签名与发布链路见 [`STANDALONE_RELEASE.md`](STANDALONE_RELEASE.md)，回滚见 [`ROLLBACK_RUNBOOK.md`](ROLLBACK_RUNBOOK.md)，主站与 operator 依赖的接口合同见 [`PRODUCTION_CONTRACT.md`](PRODUCTION_CONTRACT.md)。
+`JWT_SECRET` 至少 32 字节，生产 `MOESEKAI_MASTER_KEY` 必须是至少 32 字节的随机 secret 且跨重启/恢复/回滚保持稳定。`ADMIN_PASSWORD` 只在受控首次启动或管理员恢复时临时注入。env 变量只在**首次启动**作为种子写入，之后管理设置页是唯一真源。完整变量表见 `.env.example`；部署流程见 `.github/workflows/deploy.yml`，回滚见 [`ROLLBACK_RUNBOOK.md`](ROLLBACK_RUNBOOK.md)，主站与 operator 依赖的接口合同见 [`PRODUCTION_CONTRACT.md`](PRODUCTION_CONTRACT.md)。
 
 生产必须保持单实例并使用 `Recreate`（先停旧再起新），不能让两个 SQLite writer 或两个进程内 editor gate 同时对外服务。
 
@@ -92,7 +92,7 @@ go run ./cmd/lyrics-import-stage \
 cd server && go test ./... && go vet ./...
 cd offline && go test ./... && go vet ./...
 cd ../../web && npm ci && npm test && npm run typecheck && npm run lint && npm run build
-cd .. && ./scripts/verify-release.sh
+cd .. && python3 scripts/verify-public-lyrics-baseline.py
 ```
 
 ## 来源优先级真相

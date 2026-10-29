@@ -44,15 +44,14 @@ func MarshalIndentCompat(v any) ([]byte, error) {
 // matching the legacy event-story files which keep &, <, > literal. Byte-stable
 // output avoids needless CDN cache churn on regeneration.
 func marshalIndentNoEscape(v any) ([]byte, error) {
-	compact, err := marshalNoEscape(v)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
-	var out bytes.Buffer
-	if err := json.Indent(&out, compact, "", "  "); err != nil {
-		return nil, err
-	}
-	return out.Bytes(), nil
+	return bytes.Clone(bytes.TrimRight(buf.Bytes(), "\n")), nil
 }
 
 // marshalNoEscape produces compact JSON without HTML escaping. The encoder
@@ -64,7 +63,7 @@ func marshalNoEscape(v any) ([]byte, error) {
 	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+	return bytes.Clone(bytes.TrimRight(buf.Bytes(), "\n")), nil
 }
 
 // CategoryFlatJSON returns the flat-format bytes for a category (X.json).
@@ -160,6 +159,20 @@ func (g *Generator) EventStoryLocaleJSON(eventID int, locale string) ([]byte, er
 		detail.Episodes[episodeNo] = episode
 	}
 	return marshalIndentNoEscape(detail)
+}
+
+// ForEachSideStoryFileJSON streams every public card-story and area-talk file
+// of locale one file at a time without retaining the full locale map in memory.
+func (g *Generator) ForEachSideStoryFileJSON(
+	ctx context.Context, locale string, emit func(key string, body []byte) error,
+) error {
+	return g.store.ForEachSideStoryPublicFileContext(ctx, locale, func(key string, file store.SideStoryPublicFile) error {
+		body, err := sideStoryJSON(file)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		return emit(key, body)
+	})
 }
 
 // SideStoryFilesJSON returns every public card-story and area-talk file of

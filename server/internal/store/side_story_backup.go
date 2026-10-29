@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -70,6 +71,107 @@ type SideStoryContentExport struct {
 	Episodes      []SideStoryEpisodeBackupRecord      `json:"episodes"`
 	Lines         []SideStoryLineBackupRecord         `json:"lines"`
 	Localizations []SideStoryLocalizationBackupRecord `json:"localizations"`
+}
+
+// StreamSideStoryContentJSONContext streams the four side-story tables from a
+// single read-only transaction directly into indented JSON without holding
+// 700k+ records simultaneously in memory.
+func (s *Store) StreamSideStoryContentJSONContext(ctx context.Context, w io.Writer) (int, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	totalCount := 0
+	sections := []struct {
+		field string
+		query string
+		scan  func(*sql.Rows, *jsonArrayStreamWriter) error
+	}{
+		{
+			field: "stories",
+			query: `SELECT kind,story_id,title,character_id,area_id,area_category,action_set_id,released_at,updated_at
+				FROM side_stories ORDER BY kind,story_id`,
+			scan: func(rows *sql.Rows, arr *jsonArrayStreamWriter) error {
+				var record SideStoryBackupRecord
+				if err := rows.Scan(&record.Kind, &record.StoryID, &record.Title, &record.CharacterID, &record.AreaID,
+					&record.AreaCategory, &record.ActionSetID, &record.ReleasedAt, &record.UpdatedAt); err != nil {
+					return err
+				}
+				return arr.WriteItem(record)
+			},
+		},
+		{
+			field: "episodes",
+			query: `SELECT kind,story_id,episode_key,scenario_id,title_jp,position,jp_asset_path,cn_asset_path,en_asset_path,
+				script_sha256,jp_fetched_at,jp_refetch,cn_state,en_state,attempts,next_attempt_at,last_error,updated_at
+				FROM side_story_episodes ORDER BY kind,story_id,episode_key`,
+			scan: func(rows *sql.Rows, arr *jsonArrayStreamWriter) error {
+				var record SideStoryEpisodeBackupRecord
+				if err := rows.Scan(&record.Kind, &record.StoryID, &record.EpisodeKey, &record.ScenarioID, &record.TitleJP,
+					&record.Position, &record.JPAssetPath, &record.CNAssetPath, &record.ENAssetPath, &record.ScriptSHA256,
+					&record.JPFetchedAt, &record.JPRefetch, &record.CNState, &record.ENState, &record.Attempts,
+					&record.NextAttemptAt, &record.LastError, &record.UpdatedAt); err != nil {
+					return err
+				}
+				return arr.WriteItem(record)
+			},
+		},
+		{
+			field: "lines",
+			query: `SELECT kind,story_id,episode_key,jp_key,role,speaker,position
+				FROM side_story_lines ORDER BY kind,story_id,episode_key,jp_key`,
+			scan: func(rows *sql.Rows, arr *jsonArrayStreamWriter) error {
+				var record SideStoryLineBackupRecord
+				if err := rows.Scan(&record.Kind, &record.StoryID, &record.EpisodeKey, &record.JPKey, &record.Role,
+					&record.Speaker, &record.Position); err != nil {
+					return err
+				}
+				return arr.WriteItem(record)
+			},
+		},
+		{
+			field: "localizations",
+			query: `SELECT kind,story_id,episode_key,jp_key,locale,text,source,revision,updated_by,updated_at
+				FROM side_story_line_localizations ORDER BY kind,story_id,episode_key,jp_key,locale`,
+			scan: func(rows *sql.Rows, arr *jsonArrayStreamWriter) error {
+				var record SideStoryLocalizationBackupRecord
+				if err := rows.Scan(&record.Kind, &record.StoryID, &record.EpisodeKey, &record.JPKey, &record.Locale,
+					&record.Text, &record.Source, &record.Revision, &record.UpdatedBy, &record.UpdatedAt); err != nil {
+					return err
+				}
+				return arr.WriteItem(record)
+			},
+		},
+	}
+
+	if _, err := io.WriteString(w, "{\n"); err != nil {
+		return 0, err
+	}
+	for index, section := range sections {
+		prefix := "  \"" + section.field + "\": "
+		if index > 0 {
+			prefix = ",\n" + prefix
+		}
+		if _, err := io.WriteString(w, prefix); err != nil {
+			return 0, err
+		}
+		arr := newJSONArrayStreamWriter(w, "  ")
+		if err := scanSideStoryBackupRows(ctx, tx, section.query, func(rows *sql.Rows) error {
+			return section.scan(rows, arr)
+		}); err != nil {
+			return 0, err
+		}
+		if err := arr.Close(); err != nil {
+			return 0, err
+		}
+		totalCount += arr.count
+	}
+	if _, err := io.WriteString(w, "\n}"); err != nil {
+		return 0, err
+	}
+	return totalCount, nil
 }
 
 // ExportSideStoryContentContext reads the four side-story tables in one

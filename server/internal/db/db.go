@@ -8,9 +8,56 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+var (
+	freshOpenCount     atomic.Int32
+	emptyTemplateOnce  sync.Once
+	emptyTemplateBytes []byte
+)
+
+func seedFreshDatabaseFromTemplate(path string) bool {
+	if path == "" || path == ":memory:" || strings.HasPrefix(path, "file:") || strings.ContainsAny(path, "?#") {
+		return false
+	}
+	if freshOpenCount.Add(1) == 1 {
+		// Production opens a single database per process; avoid building or
+		// retaining the template unless multiple fresh databases are opened.
+		return false
+	}
+	emptyTemplateOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "moesekai-empty-db-*")
+		if err != nil {
+			return
+		}
+		defer os.RemoveAll(dir)
+		tplPath := filepath.Join(dir, "template.db")
+		d, err := openDatabase(tplPath, false)
+		if err != nil {
+			return
+		}
+		_, _ = d.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+		if err := d.Close(); err != nil {
+			return
+		}
+		if b, err := os.ReadFile(tplPath); err == nil && len(b) > 0 {
+			emptyTemplateBytes = b
+		}
+	})
+	if len(emptyTemplateBytes) == 0 {
+		return false
+	}
+	if err := os.WriteFile(path, emptyTemplateBytes, 0o600); err != nil {
+		return false
+	}
+	return true
+}
 
 // DB wraps a SQLite connection with the application schema applied.
 type DB struct {
@@ -21,6 +68,10 @@ type DB struct {
 // Open opens (or creates) the SQLite database at path and applies the schema.
 // modernc.org/sqlite is a pure-Go driver, so no CGO is required.
 func Open(path string) (*DB, error) {
+	return openDatabase(path, true)
+}
+
+func openDatabase(path string, allowFreshTemplate bool) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create sqlite directory: %w", err)
 	}
@@ -29,10 +80,13 @@ func Open(path string) (*DB, error) {
 	}
 	_, statErr := os.Stat(path)
 	preexisting := statErr == nil
+	seededFromTemplate := false
 	if preexisting {
 		if err := os.Chmod(path, 0o600); err != nil {
 			return nil, fmt.Errorf("secure sqlite database: %w", err)
 		}
+	} else if allowFreshTemplate && os.IsNotExist(statErr) {
+		seededFromTemplate = seedFreshDatabaseFromTemplate(path)
 	}
 	// WAL lets many readers run concurrently with a single writer, which is the
 	// whole point of using it here: background jobs (cn-sync, AI translate,
@@ -54,7 +108,8 @@ func Open(path string) (*DB, error) {
 	// writer at a time is enforced by SQLite itself + BEGIN IMMEDIATE, not by
 	// starving the pool.
 	sqlDB.SetMaxOpenConns(8)
-	sqlDB.SetMaxIdleConns(8)
+	sqlDB.SetMaxIdleConns(2)
+	sqlDB.SetConnMaxIdleTime(2 * time.Minute)
 	sqlDB.SetConnMaxLifetime(0)
 	if err := sqlDB.Ping(); err != nil {
 		sqlDB.Close()
@@ -65,6 +120,9 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("secure sqlite database: %w", err)
 	}
 	d := &DB{DB: sqlDB, path: path}
+	if seededFromTemplate {
+		return d, nil
+	}
 	pending, err := d.pendingMigrations()
 	if err != nil {
 		sqlDB.Close()

@@ -9,15 +9,43 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"moesekai/server/internal/model"
 )
 
-const EventScenarioParserVersion = 1
+const (
+	EventScenarioParserVersion     = 1
+	maxValidatedScenarioCacheItems = 4096
+)
+
+type scenarioValidationKey struct {
+	sha256     [32]byte
+	scenarioID string
+}
+
+var (
+	sha256HasherPool = sync.Pool{
+		New: func() any { return sha256.New() },
+	}
+	validatedScenarioMu    sync.RWMutex
+	validatedScenarioCache = make(map[scenarioValidationKey]struct{})
+)
+
+func sha256StringSum(value string) [32]byte {
+	hasher := sha256HasherPool.Get().(hash.Hash)
+	hasher.Reset()
+	_, _ = io.WriteString(hasher, value)
+	var sum [32]byte
+	_ = hasher.Sum(sum[:0])
+	sha256HasherPool.Put(hasher)
+	return sum
+}
 
 var (
 	ErrEventScenarioConflict = errors.New("event scenario identity conflict")
@@ -112,8 +140,16 @@ func ValidateEventScenarioRecord(record EventScenarioRecord) error {
 	if record.EventID <= 0 || strings.TrimSpace(record.EpisodeNo) == "" || strings.TrimSpace(record.ScenarioID) == "" {
 		return fmt.Errorf("%w: incomplete identity", ErrEventScenarioInvalid)
 	}
-	if hash := sha256.Sum256([]byte(record.CanonicalJSON)); hex.EncodeToString(hash[:]) != record.SHA256 {
+	hash := sha256StringSum(record.CanonicalJSON)
+	if hex.EncodeToString(hash[:]) != record.SHA256 {
 		return fmt.Errorf("%w: sha256 mismatch", ErrEventScenarioInvalid)
+	}
+	key := scenarioValidationKey{sha256: hash, scenarioID: record.ScenarioID}
+	validatedScenarioMu.RLock()
+	_, ok := validatedScenarioCache[key]
+	validatedScenarioMu.RUnlock()
+	if ok {
+		return nil
 	}
 	decoder := json.NewDecoder(strings.NewReader(record.CanonicalJSON))
 	var decoded any
@@ -130,6 +166,12 @@ func ValidateEventScenarioRecord(record EventScenarioRecord) error {
 	if canonical != record.CanonicalJSON || digest != record.SHA256 {
 		return fmt.Errorf("%w: non-canonical JSON", ErrEventScenarioInvalid)
 	}
+	validatedScenarioMu.Lock()
+	if len(validatedScenarioCache) >= maxValidatedScenarioCacheItems {
+		validatedScenarioCache = make(map[scenarioValidationKey]struct{})
+	}
+	validatedScenarioCache[key] = struct{}{}
+	validatedScenarioMu.Unlock()
 	return nil
 }
 
@@ -332,6 +374,7 @@ func currentEventCanonicalSegmentIDs(queryer eventSegmentQueryer, eventID int) (
 	for rows.Next() {
 		var record EventScenarioRecord
 		if err := rows.Scan(&record.EventID, &record.EpisodeNo, &record.ScenarioID, &record.CanonicalJSON, &record.SHA256); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		if err := ValidateEventScenarioRecord(record); err != nil {
@@ -347,11 +390,48 @@ func currentEventCanonicalSegmentIDs(queryer eventSegmentQueryer, eventID int) (
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
+	if len(records) == 0 {
+		return result, nil
+	}
+	type epScenarioKey struct {
+		episodeNo  string
+		scenarioID string
+	}
+	storedByEpisode := make(map[epScenarioKey]map[string]EventSegmentRecord, len(records))
+	segRows, err := queryer.Query(`SELECT segment_id, event_id, episode_no, scenario_id, kind, position, jp_key, source_text, source_hash
+		FROM event_story_segments WHERE event_id=?`, eventID)
+	if err != nil {
+		return nil, err
+	}
+	for segRows.Next() {
+		var segment EventSegmentRecord
+		if err := segRows.Scan(&segment.SegmentID, &segment.EventID, &segment.EpisodeNo, &segment.ScenarioID,
+			&segment.Kind, &segment.Position, &segment.JPKey, &segment.SourceText, &segment.SourceHash); err != nil {
+			segRows.Close()
+			return nil, err
+		}
+		key := epScenarioKey{episodeNo: segment.EpisodeNo, scenarioID: segment.ScenarioID}
+		byID := storedByEpisode[key]
+		if byID == nil {
+			byID = make(map[string]EventSegmentRecord)
+			storedByEpisode[key] = byID
+		}
+		byID[segment.SegmentID] = segment
+	}
+	if err := segRows.Err(); err != nil {
+		segRows.Close()
+		return nil, err
+	}
+	if err := segRows.Close(); err != nil {
+		return nil, err
+	}
 	for _, record := range records {
-		segments, covered, err := eventEpisodeCanonicalSegments(queryer, record)
+		definitions, err := eventScenarioSegmentDefinitions(record, "")
 		if err != nil {
 			return nil, err
 		}
+		stored := storedByEpisode[epScenarioKey{episodeNo: record.EpisodeNo, scenarioID: record.ScenarioID}]
+		segments, covered := verifyCanonicalSegmentsFromStored(definitions, stored)
 		if !covered {
 			return nil, ErrEventScenarioConflict
 		}
@@ -366,14 +446,15 @@ func currentEventCanonicalSegmentIDs(queryer eventSegmentQueryer, eventID int) (
 
 func eventScenarioSegmentDefinitions(record EventScenarioRecord, titleSource string) ([]EventSegmentRecord, error) {
 	var scenario parsedScenario
-	if err := json.Unmarshal([]byte(record.CanonicalJSON), &scenario); err != nil {
+	if err := json.NewDecoder(strings.NewReader(record.CanonicalJSON)).Decode(&scenario); err != nil {
 		return nil, fmt.Errorf("%w: parse segment definitions", ErrEventScenarioInvalid)
 	}
-	definitions := []EventSegmentRecord{{
+	definitions := make([]EventSegmentRecord, 0, 1+len(scenario.TalkData)*2)
+	definitions = append(definitions, EventSegmentRecord{
 		SegmentID: eventSegmentID(record.EventID, record.ScenarioID, record.EpisodeNo, "title", -1),
 		EventID:   record.EventID, EpisodeNo: record.EpisodeNo, ScenarioID: record.ScenarioID,
 		Kind: "title", Position: -1, SourceText: titleSource, SourceHash: hashText(titleSource),
-	}}
+	})
 	for position, talk := range scenario.TalkData {
 		for _, field := range []struct {
 			name string
@@ -402,6 +483,27 @@ func eventSegmentMatchesDefinition(segment, definition EventSegmentRecord) bool 
 	return segment.SourceText == definition.SourceText && segment.SourceHash == definition.SourceHash
 }
 
+func verifyCanonicalSegmentsFromStored(definitions []EventSegmentRecord, stored map[string]EventSegmentRecord) (map[string]EventSegmentRecord, bool) {
+	canonical := make(map[string]EventSegmentRecord, len(definitions))
+	for _, definition := range definitions {
+		segment, ok := stored[definition.SegmentID]
+		if !ok {
+			return canonical, false
+		}
+		// The raw scenario does not contain the episode title. Its canonical row
+		// is authoritative, but the stored text and hash must still agree.
+		if definition.Kind == "title" {
+			definition.SourceText = segment.SourceText
+			definition.SourceHash = hashText(segment.SourceText)
+		}
+		if !eventSegmentMatchesDefinition(segment, definition) {
+			return canonical, false
+		}
+		canonical[definition.SegmentID] = definition
+	}
+	return canonical, len(canonical) == len(definitions)
+}
+
 func eventEpisodeCanonicalSegments(queryer eventSegmentQueryer, record EventScenarioRecord) (map[string]EventSegmentRecord, bool, error) {
 	definitions, err := eventScenarioSegmentDefinitions(record, "")
 	if err != nil {
@@ -413,11 +515,12 @@ func eventEpisodeCanonicalSegments(queryer eventSegmentQueryer, record EventScen
 	if err != nil {
 		return nil, false, err
 	}
-	stored := map[string]EventSegmentRecord{}
+	stored := make(map[string]EventSegmentRecord, len(definitions))
 	for rows.Next() {
 		var segment EventSegmentRecord
 		if err := rows.Scan(&segment.SegmentID, &segment.EventID, &segment.EpisodeNo, &segment.ScenarioID,
 			&segment.Kind, &segment.Position, &segment.JPKey, &segment.SourceText, &segment.SourceHash); err != nil {
+			rows.Close()
 			return nil, false, err
 		}
 		stored[segment.SegmentID] = segment
@@ -429,24 +532,8 @@ func eventEpisodeCanonicalSegments(queryer eventSegmentQueryer, record EventScen
 	if err := rows.Close(); err != nil {
 		return nil, false, err
 	}
-	canonical := make(map[string]EventSegmentRecord, len(definitions))
-	for _, definition := range definitions {
-		segment, ok := stored[definition.SegmentID]
-		if !ok {
-			return canonical, false, nil
-		}
-		// The raw scenario does not contain the episode title. Its canonical row
-		// is authoritative, but the stored text and hash must still agree.
-		if definition.Kind == "title" {
-			definition.SourceText = segment.SourceText
-			definition.SourceHash = hashText(segment.SourceText)
-		}
-		if !eventSegmentMatchesDefinition(segment, definition) {
-			return canonical, false, nil
-		}
-		canonical[definition.SegmentID] = definition
-	}
-	return canonical, len(canonical) == len(definitions), nil
+	canonical, covered := verifyCanonicalSegmentsFromStored(definitions, stored)
+	return canonical, covered, nil
 }
 
 func eventEpisodeHasCanonicalSegments(queryer eventSegmentQueryer, record EventScenarioRecord) (bool, error) {

@@ -833,7 +833,7 @@ func TestPublishedLyricsFilesAndAtomicRebuild(t *testing.T) {
 		defer svc.mu.RUnlock()
 		snapshot := make(map[string]assetSnapshot, len(svc.assets))
 		for key, projected := range svc.assets {
-			snapshot[key] = assetSnapshot{body: append([]byte(nil), projected.body...), etag: projected.etag}
+			snapshot[key] = assetSnapshot{body: append([]byte(nil), projected.bytes()...), etag: projected.etag}
 		}
 		return snapshot
 	}
@@ -1080,15 +1080,16 @@ func TestPublishedLyricsFilesAndAtomicRebuild(t *testing.T) {
 	var emptyIndexETag string
 	for _, path := range indexPaths {
 		projected := unpublishedSnapshot[path]
+		projectedBody := projected.bytes()
 		var document model.PublicLyricsIndex
-		if err := json.Unmarshal(projected.body, &document); err != nil {
-			t.Fatalf("unpublished index %s is invalid JSON: %v\nbody=%s", path, err, projected.body)
+		if err := json.Unmarshal(projectedBody, &document); err != nil {
+			t.Fatalf("unpublished index %s is invalid JSON: %v\nbody=%s", path, err, projectedBody)
 		}
 		if document.Version != 1 || len(document.Songs) != 0 {
 			t.Fatalf("unpublished index %s = %+v", path, document)
 		}
 		body, bodyETag, indexStatus := readAsset(path)
-		if indexStatus != http.StatusOK || !bytes.Equal(body, projected.body) || bodyETag != projected.etag {
+		if indexStatus != http.StatusOK || !bytes.Equal(body, projectedBody) || bodyETag != projected.etag {
 			t.Fatalf("unpublished index %s status=%d etag=%q body=%s", path, indexStatus, bodyETag, body)
 		}
 		if path == canonicalIndexPath {

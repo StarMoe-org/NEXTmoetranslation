@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -89,10 +90,24 @@ func TestValidateDocumentsStructuralChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseAssets := make(map[string][]byte, len(assets))
-	for k, v := range assets {
-		name := strings.TrimPrefix(k, "translation/lyrics/")
-		baseAssets[name] = bytes.Clone(v)
+	fullIndex, err := store.DecodePublicLyricsV3Index(assets["translation/lyrics/index.json"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sampleSongs := fullIndex.Songs[:0]
+	for _, song := range fullIndex.Songs {
+		if song.MusicID == 307 || song.MusicID == 682 {
+			sampleSongs = append(sampleSongs, song)
+		}
+	}
+	fullIndex.Songs = sampleSongs
+	compactIndex, err := json.Marshal(fullIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseAssets := map[string][]byte{
+		"index.json":     compactIndex,
+		"music_307.json": bytes.Clone(assets["translation/lyrics/music_307.json"]),
 	}
 
 	cloneAssets := func(in map[string][]byte) map[string][]byte {

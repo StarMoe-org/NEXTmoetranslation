@@ -121,6 +121,7 @@ func (s *Store) ApplyEmbeddedLyricsEditorSeed(ctx context.Context, bundle embedd
 		availability[record.MusicID] = record
 	}
 
+	verifyCustomBundle := bundle.ArchiveSHA256 != embeddedlyricsseed.ExpectedArchiveSHA256
 	for _, item := range bundle.Manifest.Items {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -137,7 +138,7 @@ func (s *Store) ApplyEmbeddedLyricsEditorSeed(ctx context.Context, bundle embedd
 				if !ok {
 					return result, fmt.Errorf("embedded lyrics editor seed source-v3 item %d has no document", item.MusicID)
 				}
-				if err := insertEmbeddedSourceV3Tx(ctx, tx, record, artifacts[item.MusicID], contributions[item.MusicID]); err != nil {
+				if err := insertEmbeddedSourceV3Tx(ctx, tx, record, artifacts[item.MusicID], contributions[item.MusicID], verifyCustomBundle); err != nil {
 					return result, fmt.Errorf("insert embedded source-v3 lyrics %d: %w", item.MusicID, err)
 				}
 				result.SourceV3++
@@ -294,6 +295,7 @@ func lyricsOwnershipExistsTx(ctx context.Context, tx *sql.Tx, musicID int) (bool
 
 func insertEmbeddedSourceV3Tx(ctx context.Context, tx *sql.Tx, record embeddedlyricsseed.SourceDocumentRecord,
 	artifacts []embeddedlyricsseed.SourceArtifactRecord, contributions []embeddedlyricsseed.SourceContributionRecord,
+	verifyDecode bool,
 ) error {
 	result, err := tx.ExecContext(ctx, `INSERT INTO song_lyrics_source_documents
 		(music_id,schema_version,reason_code,document_json,document_sha256,manifest_batch_sha256,created_at)
@@ -328,8 +330,10 @@ func insertEmbeddedSourceV3Tx(ctx context.Context, tx *sql.Tx, record embeddedly
 			return err
 		}
 	}
-	if _, err := loadLyricsRenditionEditorBundle(tx, record.MusicID); err != nil {
-		return err
+	if verifyDecode {
+		if _, err := loadLyricsRenditionEditorBundle(tx, record.MusicID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -459,7 +463,7 @@ func validateEmbeddedLyricsEditorSeedReplayTx(ctx context.Context, tx *sql.Tx, b
 				if !ok {
 					return fmt.Errorf("embedded lyrics editor seed replay source-v3 item %d has no document", expected.MusicID)
 				}
-				if err := validateEmbeddedSourceV3ReplayTx(tx, record); err != nil {
+				if err := validateEmbeddedSourceV3ReplayTx(tx, record, bundle.ArchiveSHA256 != embeddedlyricsseed.ExpectedArchiveSHA256); err != nil {
 					return err
 				}
 			case "legacy":
@@ -491,7 +495,7 @@ func validateEmbeddedLyricsEditorSeedReplayTx(ctx context.Context, tx *sql.Tx, b
 	return nil
 }
 
-func validateEmbeddedSourceV3ReplayTx(tx *sql.Tx, record embeddedlyricsseed.SourceDocumentRecord) error {
+func validateEmbeddedSourceV3ReplayTx(tx *sql.Tx, record embeddedlyricsseed.SourceDocumentRecord, verifyDecode bool) error {
 	var documentSHA, manifestBatchSHA string
 	var schemaVersion int
 	if err := tx.QueryRow(`SELECT schema_version,document_sha256,manifest_batch_sha256
@@ -499,11 +503,13 @@ func validateEmbeddedSourceV3ReplayTx(tx *sql.Tx, record embeddedlyricsseed.Sour
 		&schemaVersion, &documentSHA, &manifestBatchSHA); err != nil {
 		return fmt.Errorf("embedded lyrics editor seed replay source-v3 item %d: %w", record.MusicID, err)
 	}
-	if schemaVersion != record.SchemaVersion || manifestBatchSHA != record.ManifestBatchSHA256 {
+	if schemaVersion != record.SchemaVersion || documentSHA != record.DocumentSHA256 || manifestBatchSHA != record.ManifestBatchSHA256 {
 		return fmt.Errorf("embedded lyrics editor seed replay source-v3 item %d changed", record.MusicID)
 	}
-	if _, err := loadLyricsRenditionEditorBundle(tx, record.MusicID); err != nil {
-		return fmt.Errorf("embedded lyrics editor seed replay source-v3 item %d: %w", record.MusicID, err)
+	if verifyDecode {
+		if _, err := loadLyricsRenditionEditorBundle(tx, record.MusicID); err != nil {
+			return fmt.Errorf("embedded lyrics editor seed replay source-v3 item %d: %w", record.MusicID, err)
+		}
 	}
 	return nil
 }

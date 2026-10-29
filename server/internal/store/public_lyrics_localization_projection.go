@@ -198,8 +198,9 @@ func (s *Store) projectionRenditionDocument(musicID, revision int) (LyricsRendit
 	if err != nil {
 		return LyricsRenditionDocument{}, err
 	}
+	const maxLocalizationProjectionCacheEntries = 1024
 	s.localizationProjectionMu.Lock()
-	if s.localizationProjectionCache == nil {
+	if s.localizationProjectionCache == nil || len(s.localizationProjectionCache) >= maxLocalizationProjectionCacheEntries {
 		s.localizationProjectionCache = make(map[int]LyricsRenditionDocument)
 	}
 	s.localizationProjectionCache[musicID] = document

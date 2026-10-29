@@ -447,6 +447,7 @@ func TestSekaipediaFixedListFailuresAreNotCached(t *testing.T) {
 		{
 			name: "transport error", wantHTTPStatus: http.StatusServiceUnavailable,
 			first: func(w http.ResponseWriter) {
+				w.Header().Set("Retry-After", "0")
 				http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			},
 		},

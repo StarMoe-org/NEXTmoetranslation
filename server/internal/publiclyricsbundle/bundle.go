@@ -5,7 +5,6 @@ package publiclyricsbundle
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
 	"embed"
 	"fmt"
@@ -31,37 +30,39 @@ const (
 var archiveFS embed.FS
 
 var (
-	loadOnce          sync.Once
-	loaded            map[string][]byte
-	loadedErr         error
-	metadataOnce      sync.Once
-	loadedMetadata    map[int]model.RuntimeLyricsMetadata
-	loadedMetadataErr error
-	detailRE          = regexp.MustCompile(`^music_([1-9][0-9]*)\.json$`)
+	validateOnce   sync.Once
+	validateErr    error
+	loadedMetadata map[int]model.RuntimeLyricsMetadata
+	detailRE       = regexp.MustCompile(`^music_([1-9][0-9]*)\.json$`)
 )
 
 // Load verifies and returns the immutable runtime assets under their files
-// service keys (translation/lyrics/index.json and music_<id>.json). The map is a
-// fresh shallow copy; callers must treat the byte slices as read-only.
+// service keys (translation/lyrics/index.json and music_<id>.json). After the
+// initial validation pass, Load unpacks directly from the compiled-in archive
+// so ~25 MiB of uncompressed JSON is not pinned permanently in package globals.
 func Load() (map[string][]byte, error) {
-	loadOnce.Do(load)
-	if loadedErr != nil {
-		return nil, loadedErr
+	var firstAssets map[string][]byte
+	validateOnce.Do(func() {
+		firstAssets, validateErr = unpackAndValidate(true)
+	})
+	if validateErr != nil {
+		return nil, validateErr
 	}
-	assets := make(map[string][]byte, len(loaded))
-	for key, body := range loaded {
-		assets[key] = body
+	if firstAssets != nil {
+		return firstAssets, nil
 	}
-	return assets, nil
+	return unpackAndValidate(false)
 }
 
 // CatalogRuntimeMetadata returns the immutable Public v3 index projection used
 // only to explain what the embedded runtime serves. These records do not
 // represent authenticated editor drafts or database publication state.
 func CatalogRuntimeMetadata() (map[int]model.RuntimeLyricsMetadata, error) {
-	metadataOnce.Do(loadCatalogRuntimeMetadata)
-	if loadedMetadataErr != nil {
-		return nil, loadedMetadataErr
+	validateOnce.Do(func() {
+		_, validateErr = unpackAndValidate(true)
+	})
+	if validateErr != nil {
+		return nil, validateErr
 	}
 	metadata := make(map[int]model.RuntimeLyricsMetadata, len(loadedMetadata))
 	for musicID, item := range loadedMetadata {
@@ -71,17 +72,7 @@ func CatalogRuntimeMetadata() (map[int]model.RuntimeLyricsMetadata, error) {
 	return metadata, nil
 }
 
-func loadCatalogRuntimeMetadata() {
-	assets, err := Load()
-	if err != nil {
-		loadedMetadataErr = err
-		return
-	}
-	index, err := store.DecodePublicLyricsV3Index(assets["translation/lyrics/index.json"])
-	if err != nil {
-		loadedMetadataErr = err
-		return
-	}
+func buildCatalogRuntimeMetadata(index store.PublicLyricsV3IndexDocument) map[int]model.RuntimeLyricsMetadata {
 	metadata := make(map[int]model.RuntimeLyricsMetadata, len(index.Songs))
 	for _, song := range index.Songs {
 		versions := append([]string(nil), song.AvailableVersions...)
@@ -98,25 +89,23 @@ func loadCatalogRuntimeMetadata() {
 			RootSHA256:        RootSHA256,
 		}
 	}
-	loadedMetadata = metadata
+	return metadata
 }
 
-func load() {
-	archiveBytes, err := archiveFS.ReadFile("public-v3.tar.gz")
+func unpackAndValidate(validate bool) (map[string][]byte, error) {
+	archiveFile, err := archiveFS.Open("public-v3.tar.gz")
 	if err != nil {
-		loadedErr = fmt.Errorf("read embedded public lyrics archive: %w", err)
-		return
+		return nil, fmt.Errorf("read embedded public lyrics archive: %w", err)
 	}
+	defer archiveFile.Close()
 
-	archiveReader := bytes.NewReader(archiveBytes)
-	compressed, err := gzip.NewReader(archiveReader)
+	compressed, err := gzip.NewReader(archiveFile)
 	if err != nil {
-		loadedErr = fmt.Errorf("open public lyrics archive: %w", err)
-		return
+		return nil, fmt.Errorf("open public lyrics archive: %w", err)
 	}
 	defer compressed.Close()
 
-	assets := make(map[string][]byte)
+	assets := make(map[string][]byte, 720)
 	reader := tar.NewReader(compressed)
 	for {
 		header, err := reader.Next()
@@ -124,46 +113,72 @@ func load() {
 			break
 		}
 		if err != nil {
-			loadedErr = fmt.Errorf("read public lyrics archive: %w", err)
-			return
+			return nil, fmt.Errorf("read public lyrics archive: %w", err)
 		}
 		if header.Typeflag != tar.TypeReg ||
 			path.Clean(header.Name) != header.Name ||
 			strings.Contains(header.Name, "/") ||
 			strings.Contains(header.Name, "..") ||
 			(header.Name != "index.json" && !detailRE.MatchString(header.Name)) {
-			loadedErr = fmt.Errorf("invalid public lyrics archive entry %q", header.Name)
-			return
+			return nil, fmt.Errorf("invalid public lyrics archive entry %q", header.Name)
 		}
 		if header.Size < 1 || header.Size > maxPublicLyricsAssetSize {
-			loadedErr = fmt.Errorf("invalid public lyrics asset size for %q", header.Name)
-			return
+			return nil, fmt.Errorf("invalid public lyrics asset size for %q", header.Name)
 		}
 		if _, exists := assets[header.Name]; exists {
-			loadedErr = fmt.Errorf("duplicate public lyrics asset %q", header.Name)
-			return
+			return nil, fmt.Errorf("duplicate public lyrics asset %q", header.Name)
 		}
 		body, err := io.ReadAll(io.LimitReader(reader, maxPublicLyricsAssetSize+1))
 		if err != nil || int64(len(body)) != header.Size {
-			loadedErr = fmt.Errorf("read public lyrics asset %q: size mismatch", header.Name)
-			return
+			return nil, fmt.Errorf("read public lyrics asset %q: size mismatch", header.Name)
 		}
 		if int64(len(body)) > maxPublicLyricsAssetSize {
-			loadedErr = fmt.Errorf("public lyrics asset %q exceeds size limit", header.Name)
-			return
+			return nil, fmt.Errorf("public lyrics asset %q exceeds size limit", header.Name)
 		}
 		assets[header.Name] = body
 	}
 
-	if err := validateDocuments(assets); err != nil {
-		loadedErr = err
-		return
+	if validate {
+		index, err := store.DecodePublicLyricsV3Index(assets["index.json"])
+		if err != nil {
+			return nil, fmt.Errorf("decode public lyrics index: %w", err)
+		}
+		if err := validateArchiveInventory(assets, index); err != nil {
+			return nil, err
+		}
+		loadedMetadata = buildCatalogRuntimeMetadata(index)
 	}
 
-	loaded = make(map[string][]byte, len(assets))
+	result := make(map[string][]byte, len(assets))
 	for name, body := range assets {
-		loaded["translation/lyrics/"+name] = body
+		result["translation/lyrics/"+name] = body
 	}
+	return result, nil
+}
+
+func validateArchiveInventory(assets map[string][]byte, index store.PublicLyricsV3IndexDocument) error {
+	expectedDetails := make(map[string]struct{}, len(index.Songs))
+	for _, song := range index.Songs {
+		if song.State == store.PublicLyricsStateComplete || song.State == store.PublicLyricsStateGameOnly {
+			name := "music_" + strconv.Itoa(song.MusicID) + ".json"
+			if _, ok := assets[name]; !ok {
+				return fmt.Errorf("missing public lyrics detail %q", name)
+			}
+			expectedDetails[name] = struct{}{}
+		}
+	}
+	for name := range assets {
+		if name == "index.json" {
+			continue
+		}
+		if _, ok := expectedDetails[name]; !ok {
+			return fmt.Errorf("unexpected public lyrics detail %q", name)
+		}
+	}
+	if len(assets) != len(expectedDetails)+1 {
+		return fmt.Errorf("public lyrics detail inventory differs: assets=%d expected=%d", len(assets)-1, len(expectedDetails))
+	}
+	return nil
 }
 
 func validateDocuments(assets map[string][]byte) error {

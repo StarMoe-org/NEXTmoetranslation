@@ -2,6 +2,7 @@ package embeddedlyricsseed
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -45,22 +46,25 @@ func TestDecodeClosedJSONArrayRejectsDuplicateAndUnknownFields(t *testing.T) {
 }
 
 func TestDecodeArchiveRejectsTrailingGzipData(t *testing.T) {
-	archive, err := archiveFS.ReadFile("editor-seed.tar.gz")
-	if err != nil {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write([]byte("canonical-payload")); err != nil {
 		t.Fatal(err)
 	}
-	archive = append(append([]byte(nil), archive...), 0)
-	if _, err := DecodeArchive(archive); err == nil || !strings.Contains(err.Error(), "trailing data") {
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCanonicalGzipNoTrailing(buf.Bytes()); err != nil {
+		t.Fatalf("clean gzip rejected: %v", err)
+	}
+	trailing := append(append([]byte(nil), buf.Bytes()...), 0)
+	if err := validateCanonicalGzipNoTrailing(trailing); err == nil || !strings.Contains(err.Error(), "trailing data") {
 		t.Fatalf("archive with trailing gzip data error=%v", err)
 	}
 }
 
 func TestValidateManifestIdentityRejectsUnexpectedFileCount(t *testing.T) {
-	archive, err := archiveFS.ReadFile("editor-seed.tar.gz")
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundle, err := DecodeArchive(archive)
+	bundle, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,11 +76,7 @@ func TestValidateManifestIdentityRejectsUnexpectedFileCount(t *testing.T) {
 }
 
 func TestValidateManifestIdentityRejectsOutOfOrderInventory(t *testing.T) {
-	archive, err := archiveFS.ReadFile("editor-seed.tar.gz")
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundle, err := DecodeArchive(archive)
+	bundle, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}

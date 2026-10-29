@@ -316,8 +316,85 @@ type LegacyEventRestore struct {
 	Episodes []OrderedEpisode
 }
 
+type jsonArrayStreamWriter struct {
+	w          io.Writer
+	elemPrefix string
+	closeToken string
+	count      int
+}
+
+func newJSONArrayStreamWriter(w io.Writer, baseIndent string) *jsonArrayStreamWriter {
+	elemPrefix := baseIndent + "  "
+	closeToken := "\n" + baseIndent + "]"
+	return &jsonArrayStreamWriter{
+		w:          w,
+		elemPrefix: elemPrefix,
+		closeToken: closeToken,
+	}
+}
+
+func (a *jsonArrayStreamWriter) WriteItem(item any) error {
+	encoded, err := json.MarshalIndent(item, a.elemPrefix, "  ")
+	if err != nil {
+		return err
+	}
+	if a.count == 0 {
+		if _, err := io.WriteString(a.w, "[\n"+a.elemPrefix); err != nil {
+			return err
+		}
+	} else {
+		if _, err := io.WriteString(a.w, ",\n"+a.elemPrefix); err != nil {
+			return err
+		}
+	}
+	if _, err := a.w.Write(encoded); err != nil {
+		return err
+	}
+	a.count++
+	return nil
+}
+
+func (a *jsonArrayStreamWriter) Close() error {
+	if a.count == 0 {
+		_, err := io.WriteString(a.w, "[]")
+		return err
+	}
+	_, err := io.WriteString(a.w, a.closeToken)
+	return err
+}
+
 func (s *Store) ExportEntryLocalizations() ([]EntryLocalizationRecord, error) {
 	return s.ExportEntryLocalizationsContext(context.Background())
+}
+
+func (s *Store) StreamEntryLocalizationsJSONContext(ctx context.Context, w io.Writer) (int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT category, field, jp_key, locale, text, source, updated_at, updated_by, revision
+		FROM entry_localizations ORDER BY category, field, jp_key, locale`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	arr := newJSONArrayStreamWriter(w, "")
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		var record EntryLocalizationRecord
+		if err := rows.Scan(&record.Category, &record.Field, &record.JPKey, &record.Locale, &record.Text,
+			&record.Source, &record.UpdatedAt, &record.UpdatedBy, &record.Revision); err != nil {
+			return 0, err
+		}
+		if err := arr.WriteItem(record); err != nil {
+			return 0, err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if err := arr.Close(); err != nil {
+		return 0, err
+	}
+	return arr.count, nil
 }
 
 func (s *Store) ExportEntryLocalizationsContext(ctx context.Context) ([]EntryLocalizationRecord, error) {
@@ -344,6 +421,241 @@ func (s *Store) ExportEntryLocalizationsContext(ctx context.Context) ([]EntryLoc
 
 func (s *Store) ExportEventContent() (EventContentExport, error) {
 	return s.ExportEventContentContext(context.Background())
+}
+
+func (s *Store) StreamEventContentJSONContext(ctx context.Context, w io.Writer) (int, int, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+
+	type episodeIdentity struct {
+		eventID   int
+		episodeNo string
+	}
+	canonicalSegmentIDs := map[episodeIdentity]map[string]bool{}
+
+	eventRows, err := tx.QueryContext(ctx, `SELECT DISTINCT scenario.event_id
+		FROM event_story_scenarios scenario
+		JOIN event_story_episodes episode
+		ON episode.event_id=scenario.event_id AND episode.episode_no=scenario.episode_no
+		AND episode.scenario_id=scenario.scenario_id
+		ORDER BY scenario.event_id`)
+	if err != nil {
+		return 0, 0, err
+	}
+	var scenarioEventIDs []int
+	for eventRows.Next() {
+		var eventID int
+		if err := eventRows.Scan(&eventID); err != nil {
+			eventRows.Close()
+			return 0, 0, err
+		}
+		scenarioEventIDs = append(scenarioEventIDs, eventID)
+	}
+	if err := eventRows.Err(); err != nil {
+		eventRows.Close()
+		return 0, 0, err
+	}
+	if err := eventRows.Close(); err != nil {
+		return 0, 0, err
+	}
+
+	scenarioCount := 0
+	for _, eventID := range scenarioEventIDs {
+		if err := ctx.Err(); err != nil {
+			return 0, 0, err
+		}
+		byEp, err := currentEventCanonicalSegmentIDs(tx, eventID)
+		if err != nil {
+			return 0, 0, fmt.Errorf("event %d scenarios: %w", eventID, err)
+		}
+		for epNo, ids := range byEp {
+			canonicalSegmentIDs[episodeIdentity{eventID: eventID, episodeNo: epNo}] = ids
+			scenarioCount++
+		}
+	}
+
+	if _, err := io.WriteString(w, "{\n  \"segments\": "); err != nil {
+		return 0, 0, err
+	}
+	segArr := newJSONArrayStreamWriter(w, "  ")
+	exportedSegmentIDs := map[string]bool{}
+	segRows, err := tx.QueryContext(ctx, `SELECT segment.segment_id, segment.event_id, segment.episode_no, segment.scenario_id,
+		segment.kind, segment.position, segment.jp_key, segment.source_text, segment.source_hash
+		FROM event_story_segments segment
+		JOIN event_story_episodes episode
+		ON episode.event_id=segment.event_id AND episode.episode_no=segment.episode_no
+		AND episode.scenario_id=segment.scenario_id
+		ORDER BY segment.event_id, segment.episode_no, segment.kind, segment.position`)
+	if err != nil {
+		return 0, 0, err
+	}
+	for segRows.Next() {
+		if err := ctx.Err(); err != nil {
+			segRows.Close()
+			return 0, 0, err
+		}
+		var record EventSegmentRecord
+		if err := segRows.Scan(&record.SegmentID, &record.EventID, &record.EpisodeNo, &record.ScenarioID,
+			&record.Kind, &record.Position, &record.JPKey, &record.SourceText, &record.SourceHash); err != nil {
+			segRows.Close()
+			return 0, 0, err
+		}
+		if canonicalIDs := canonicalSegmentIDs[episodeIdentity{eventID: record.EventID, episodeNo: record.EpisodeNo}]; canonicalIDs != nil && !canonicalIDs[record.SegmentID] {
+			continue
+		}
+		exportedSegmentIDs[record.SegmentID] = true
+		if err := segArr.WriteItem(record); err != nil {
+			segRows.Close()
+			return 0, 0, err
+		}
+	}
+	if err := segRows.Err(); err != nil {
+		segRows.Close()
+		return 0, 0, err
+	}
+	if err := segRows.Close(); err != nil {
+		return 0, 0, err
+	}
+	if err := segArr.Close(); err != nil {
+		return 0, 0, err
+	}
+	canonicalSegmentIDs = nil
+
+	if _, err := io.WriteString(w, ",\n  \"localizations\": "); err != nil {
+		return 0, 0, err
+	}
+	locArr := newJSONArrayStreamWriter(w, "  ")
+	locRows, err := tx.QueryContext(ctx, `SELECT localization.segment_id, localization.locale, localization.text,
+		localization.source, localization.updated_at, localization.updated_by, localization.revision
+		FROM event_story_segment_localizations localization
+		JOIN event_story_segments segment ON segment.segment_id=localization.segment_id
+		JOIN event_story_episodes episode
+		ON episode.event_id=segment.event_id AND episode.episode_no=segment.episode_no
+		AND episode.scenario_id=segment.scenario_id
+		ORDER BY localization.segment_id, localization.locale`)
+	if err != nil {
+		return 0, 0, err
+	}
+	for locRows.Next() {
+		if err := ctx.Err(); err != nil {
+			locRows.Close()
+			return 0, 0, err
+		}
+		var record EventLocalizationRecord
+		if err := locRows.Scan(&record.SegmentID, &record.Locale, &record.Text, &record.Source,
+			&record.UpdatedAt, &record.UpdatedBy, &record.Revision); err != nil {
+			locRows.Close()
+			return 0, 0, err
+		}
+		if !exportedSegmentIDs[record.SegmentID] {
+			continue
+		}
+		if err := locArr.WriteItem(record); err != nil {
+			locRows.Close()
+			return 0, 0, err
+		}
+	}
+	if err := locRows.Err(); err != nil {
+		locRows.Close()
+		return 0, 0, err
+	}
+	if err := locRows.Close(); err != nil {
+		return 0, 0, err
+	}
+	if err := locArr.Close(); err != nil {
+		return 0, 0, err
+	}
+	exportedSegmentIDs = nil
+
+	if _, err := io.WriteString(w, ",\n  \"localeMeta\": "); err != nil {
+		return 0, 0, err
+	}
+	metaArr := newJSONArrayStreamWriter(w, "  ")
+	metaRows, err := tx.QueryContext(ctx, `SELECT meta.event_id, meta.locale, meta.last_updated
+		FROM event_story_locale_meta meta
+		JOIN event_stories story ON story.event_id=meta.event_id
+		ORDER BY meta.event_id, meta.locale`)
+	if err != nil {
+		return 0, 0, err
+	}
+	for metaRows.Next() {
+		if err := ctx.Err(); err != nil {
+			metaRows.Close()
+			return 0, 0, err
+		}
+		var record EventLocaleMetaRecord
+		if err := metaRows.Scan(&record.EventID, &record.Locale, &record.LastUpdated); err != nil {
+			metaRows.Close()
+			return 0, 0, err
+		}
+		if err := metaArr.WriteItem(record); err != nil {
+			metaRows.Close()
+			return 0, 0, err
+		}
+	}
+	if err := metaRows.Err(); err != nil {
+		metaRows.Close()
+		return 0, 0, err
+	}
+	if err := metaRows.Close(); err != nil {
+		return 0, 0, err
+	}
+	if err := metaArr.Close(); err != nil {
+		return 0, 0, err
+	}
+
+	if scenarioCount > 0 {
+		if _, err := io.WriteString(w, ",\n  \"scenarios\": "); err != nil {
+			return 0, 0, err
+		}
+		scenArr := newJSONArrayStreamWriter(w, "  ")
+		scenRows, err := tx.QueryContext(ctx, `SELECT scenario.event_id, scenario.episode_no, scenario.scenario_id,
+			scenario.canonical_json, scenario.sha256
+			FROM event_story_scenarios scenario
+			JOIN event_story_episodes episode
+			ON episode.event_id=scenario.event_id AND episode.episode_no=scenario.episode_no
+			AND episode.scenario_id=scenario.scenario_id
+			ORDER BY scenario.event_id, scenario.episode_no`)
+		if err != nil {
+			return 0, 0, err
+		}
+		for scenRows.Next() {
+			if err := ctx.Err(); err != nil {
+				scenRows.Close()
+				return 0, 0, err
+			}
+			var record EventScenarioRecord
+			if err := scenRows.Scan(&record.EventID, &record.EpisodeNo, &record.ScenarioID, &record.CanonicalJSON,
+				&record.SHA256); err != nil {
+				scenRows.Close()
+				return 0, 0, err
+			}
+			if err := scenArr.WriteItem(record); err != nil {
+				scenRows.Close()
+				return 0, 0, err
+			}
+		}
+		if err := scenRows.Err(); err != nil {
+			scenRows.Close()
+			return 0, 0, err
+		}
+		if err := scenRows.Close(); err != nil {
+			return 0, 0, err
+		}
+		if err := scenArr.Close(); err != nil {
+			return 0, 0, err
+		}
+		scenarioCount = scenArr.count
+	}
+
+	if _, err := io.WriteString(w, "\n}"); err != nil {
+		return 0, 0, err
+	}
+	totalRecords := segArr.count + locArr.count + metaArr.count
+	return totalRecords, scenarioCount, nil
 }
 
 func (s *Store) ExportEventContentContext(ctx context.Context) (EventContentExport, error) {
