@@ -50,6 +50,7 @@ const UPSTREAM_KEYS = [
   ["upstream.fetch_concurrency", "并发下载数 (1-12)"],
   ["scheduler.enabled", "启用自动检测 (true/false)"],
   ["side_story_backfill.enabled", "卡牌剧情/区域对话后台回填 (true/false)"],
+  ["event_story_auto_ai.enabled", "新活动剧情自动 AI 翻译 (true/false)"],
 ] as const;
 
 const BACKUP_KEYS = [
@@ -75,7 +76,8 @@ const SETTING_HINTS: Record<string, React.ReactNode> = {
   "upstream.jp_scripts_fallback_url": <>只用于卡牌剧情；区域对话剧本不在该源上。</>,
   "upstream.jp_scripts_library_url": <>留空使用 <code>https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/library</code>。卡牌剧情和区域对话的最后一个 JP 源：前面的源 404 或返回的不是日文时读取，同样要通过日文判据。</>,
   "upstream.fetch_concurrency": <>留空默认 4；低内存实例建议 2-4。</>,
-  "scheduler.enabled": <>旧版 CN 自动同步：检测到上游版本变化后同步 CN 内容，并对新活动剧情自动调用 AI。修改后重启服务生效。</>,
+  "scheduler.enabled": <>旧版 CN 自动同步：检测到上游版本变化后同步 CN 内容；新活动剧情只在“新活动剧情自动 AI 翻译”为 true 时自动调用 AI。修改后重启服务生效。</>,
+  "event_story_auto_ai.enabled": <>未设置时为 false。为 true 时，CN 同步或重抓导入新活动剧情后立即自动调用 AI 翻译；为 false 时新剧情保持待翻译，剧情页的手动 AI 翻译不受影响。</>,
   "side_story_backfill.enabled": <>未设置时为 true（保存后只能填 true 或 false）。按间隔抓取卡牌剧情与区域对话剧本并导入官方 CN/EN 译文，不调用 AI，与“启用自动检测”无关；环境变量 SIDE_STORY_BACKFILL_ENABLED=false 时始终关闭。</>,
   "backup.git.repo_url": (
     <>

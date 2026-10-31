@@ -720,6 +720,7 @@ func TestRetryResponseUsesPersistedPendingSourceAfterPartialAI(t *testing.T) {
 	for key, value := range map[string]string{
 		config.KeyOpenAIAPIKey: "test", config.KeyOpenAIBaseURL: upstream.URL + "/llm",
 		config.KeyOpenAIModel: "test-model", config.KeyBatchSize: "20", config.KeyRateDelayMS: "0",
+		config.KeyEventStoryAutoAIOn: "true",
 	} {
 		if err := cfg.Set(key, value); err != nil {
 			t.Fatal(err)
@@ -733,6 +734,57 @@ func TestRetryResponseUsesPersistedPendingSourceAfterPartialAI(t *testing.T) {
 	detail, err := events.Detail(103)
 	if err != nil || detail.Meta.Source != "jp_pending" || detail.Episodes["1"].TalkData["いち"] != "译一" || detail.Episodes["1"].TalkData["に"] != "" {
 		t.Fatalf("partial AI detail=%+v err=%v", detail, err)
+	}
+}
+
+func TestNewEventStoriesAreNotAITranslatedUnlessEnabled(t *testing.T) {
+	tr, events, cfg := openTestTranslator(t)
+	var llmCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/jp-master/eventStories.json":
+			fmt.Fprint(w, `[{"eventId":103,"assetbundleName":"asset","eventStoryEpisodes":[{"episodeNo":1,"scenarioId":"scenario","title":""}]}]`)
+		case "/cn-master/eventStories.json", "/cn-master/events.json":
+			fmt.Fprint(w, `[]`)
+		case "/jp-assets/event_story/asset/scenario/scenario.json":
+			fmt.Fprint(w, `{"ScenarioId":"scenario","Snippets":[],"TalkData":[{"Body":"いち"}],"SpecialEffectData":[],"AppearCharacters":[]}`)
+		case "/llm/chat/completions":
+			llmCalls.Add(1)
+			http.Error(w, "unexpected", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	configureLocalSources(t, cfg, upstream.URL)
+	for key, value := range map[string]string{
+		config.KeyOpenAIAPIKey: "test", config.KeyOpenAIBaseURL: upstream.URL + "/llm", config.KeyOpenAIModel: "test-model",
+	} {
+		if err := cfg.Set(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := tr.RetryEventStorySync(103)
+	if err != nil || result["source"] != "jp_pending" || result["translated"] != nil || result["translateError"] != nil {
+		t.Fatalf("retry with automatic AI off result=%v err=%v", result, err)
+	}
+	stories := []map[string]any{{
+		"eventId": float64(104), "assetbundleName": "asset",
+		"eventStoryEpisodes": []any{map[string]any{"episodeNo": float64(1), "scenarioId": "scenario", "title": ""}},
+	}}
+	outcome, err := tr.fillEventStoriesJPPending(stories, 1, map[int]store.EventSyncState{}, 0, 1)
+	if err != nil || outcome.Processed != 1 || outcome.AITranslationSkipped != 1 || !strings.Contains(outcome.AITranslationNote, "已关闭") {
+		t.Fatalf("sync with automatic AI off outcome=%+v err=%v", outcome, err)
+	}
+	for _, eventID := range []int{103, 104} {
+		detail, err := events.Detail(eventID)
+		if err != nil || detail.Meta.Source != "jp_pending" || detail.Episodes["1"].TalkData["いち"] != "" {
+			t.Fatalf("event %d detail=%+v err=%v", eventID, detail, err)
+		}
+	}
+	if llmCalls.Load() != 0 {
+		t.Fatalf("automatic AI off still called the LLM %d times", llmCalls.Load())
 	}
 }
 

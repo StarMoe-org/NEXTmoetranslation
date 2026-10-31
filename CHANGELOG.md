@@ -1,5 +1,11 @@
 # 更新日志
 
+## 新活动剧情默认不再自动 AI 翻译（2026-10-31）
+
+- 以前 CN 同步（包括管理员手动「立即检查」上游）或重抓活动剧情（`POST /api/event-story/retry`）导入新活动的日文剧情后，会立即自动调用 AI 翻译。现在由新设置 `event_story_auto_ai.enabled` 控制，未设置即为关：新剧情保持 `jp_pending` 待翻译，不调用 LLM；CN 同步的结果记一条「自动 AI 翻译已关闭」，重抓的结果不带 `translated` 和 `translateError`（`TestNewEventStoriesAreNotAITranslatedUnlessEnabled`）。设为 true 恢复旧行为（`TestRetryResponseUsesPersistedPendingSourceAfterPartialAI`）。剧情页的手动 AI 翻译不受影响。
+- 管理设置的上游一栏列出了这个开关，「启用自动检测」的说明也改了（web 测试「the admin upstream settings list every env-seeded upstream key the server accepts」）。
+- 部署不需要迁移。
+
 ## 热修复：重建公开文件期间 `/readyz` 保持就绪（2026-10-31）
 
 - 服务迁到集群 de 后只有一个副本，网关按 `/readyz` 摘流量。旧版在公开文件重建排队（`pending`）或上次重建失败（`lastError`）时都返回 503，而每保存一条译文、每次上游同步都会排一次重建，重建要几分钟，整站就跟着 503 几分钟。2026-10-31 13:36 上游检查之后掉线约 5 分钟，14:01 上传词条时又掉线，上传到一半的请求也全部失败。

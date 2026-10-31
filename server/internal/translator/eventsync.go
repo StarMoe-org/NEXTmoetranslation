@@ -599,7 +599,10 @@ func positiveEventEpisodeNo(value any, maxInt int64) (int, bool) {
 func (t *Translator) fillEventStoriesJPPending(jpStories []map[string]any, startEventID int, states map[int]store.EventSyncState, progressCurrent, progressTotal int) (eventStorySyncOutcome, error) {
 	outcome := eventStorySyncOutcome{}
 	skipAI := false
-	if reason, unavailable := t.automaticLLMUnavailable(); unavailable {
+	if !t.automaticAIEnabled() {
+		skipAI = true
+		outcome.AITranslationNote = "自动 AI 翻译已关闭（event_story_auto_ai.enabled）"
+	} else if reason, unavailable := t.automaticLLMUnavailable(); unavailable {
 		skipAI = true
 		outcome.AITranslationNote = reason
 	}

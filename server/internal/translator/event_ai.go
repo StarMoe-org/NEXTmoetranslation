@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"moesekai/server/internal/config"
 	"moesekai/server/internal/model"
 	"moesekai/server/internal/store"
 )
@@ -20,6 +21,14 @@ type AITranslateAllResult struct {
 	TotalTranslated int    `json:"totalTranslated"`
 	TotalSkipped    int    `json:"totalSkipped"`
 	Errors          int    `json:"errors"`
+}
+
+// automaticAIEnabled reports whether new event stories are AI-translated as soon
+// as a CN sync or a refresh imports them. Off unless the
+// event_story_auto_ai.enabled setting is true; the manual translate action is
+// not affected.
+func (t *Translator) automaticAIEnabled() bool {
+	return t.cfg.GetBool(config.KeyEventStoryAutoAIOn, false)
 }
 
 // autoTranslateEventStory fills untranslated lines/titles of one event story via
@@ -340,12 +349,14 @@ func (t *Translator) RetryEventStorySyncContext(ctx context.Context, eventID int
 	result["source"] = "jp_pending"
 	result["episodes"] = len(episodes)
 
-	translated, autoErr := t.autoTranslateEventStory(eventID)
-	if translated > 0 {
-		result["translated"] = translated
-	}
-	if autoErr != nil {
-		result["translateError"] = autoErr.Error()
+	if t.automaticAIEnabled() {
+		translated, autoErr := t.autoTranslateEventStory(eventID)
+		if translated > 0 {
+			result["translated"] = translated
+		}
+		if autoErr != nil {
+			result["translateError"] = autoErr.Error()
+		}
 	}
 	detail, err := t.eventStore.Detail(eventID)
 	if err != nil {
