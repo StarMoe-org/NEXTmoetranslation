@@ -92,7 +92,7 @@ func (p *changingProjection) Status() filesvc.ProjectionStatus {
 	if p.calls == 1 {
 		return filesvc.ProjectionStatus{Generation: 1}
 	}
-	return filesvc.ProjectionStatus{Generation: 1, Pending: true, LastError: "projection_generation_failed"}
+	return filesvc.ProjectionStatus{}
 }
 
 func TestOperationalDetailsRequireAdminAndServerBoundsBodyRead(t *testing.T) {
@@ -215,7 +215,7 @@ func TestReadinessRequiresInitialProjectionButLivenessDoesNot(t *testing.T) {
 	}
 	ready = httptest.NewRecorder()
 	mux.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-	if ready.Code != http.StatusServiceUnavailable || ready.Body.String() != `{"status":"not_ready"}` {
+	if ready.Code != http.StatusOK || ready.Body.String() != `{"status":"ready"}` {
 		t.Fatalf("pending latest projection readiness status=%d body=%q", ready.Code, ready.Body.String())
 	}
 
@@ -225,7 +225,7 @@ func TestReadinessRequiresInitialProjectionButLivenessDoesNot(t *testing.T) {
 	}
 	ready = httptest.NewRecorder()
 	mux.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-	if ready.Code != http.StatusServiceUnavailable || ready.Body.String() != `{"status":"not_ready"}` {
+	if ready.Code != http.StatusOK || ready.Body.String() != `{"status":"ready"}` {
 		t.Fatalf("failed latest projection readiness status=%d body=%q", ready.Code, ready.Body.String())
 	}
 

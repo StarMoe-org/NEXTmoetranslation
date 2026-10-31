@@ -1,5 +1,11 @@
 # 更新日志
 
+## 热修复：重建公开文件期间 `/readyz` 保持就绪（2026-10-31）
+
+- 服务迁到集群 de 后只有一个副本，网关按 `/readyz` 摘流量。旧版在公开文件重建排队（`pending`）或上次重建失败（`lastError`）时都返回 503，而每保存一条译文、每次上游同步都会排一次重建，重建要几分钟，整站就跟着 503 几分钟。2026-10-31 13:36 上游检查之后掉线约 5 分钟，14:01 上传词条时又掉线，上传到一半的请求也全部失败。
+- 现在只要已经发布过一份公开文件（`generation > 0`），重建排队或失败都不影响就绪，期间照常提供上一份文件；数据库不通、正在关停、首份文件还没生成、搜索索引没就绪时仍返回 503（`TestReadinessRequiresInitialProjectionButLivenessDoesNot`、`TestReadinessRechecksVolatileStateImmediatelyBeforeSuccess`）。重建状态仍可在 `/api/projection/status` 查看。
+- 部署不需要迁移。
+
 ## 歌词文档：Full 和 Game 可以引用不同来源（2026-10-25）
 
 - 整首歌词文档 `PUT /api/editor/v1/lyrics/document` 以前只能写一个 `source.url`，整首歌都署名这一个修订。完整歌词和 Game Size 出自不同 wiki 的歌（例如 Palette：完整歌词只在 vocaloid.fandom，Game Size 在 Sekaipedia 和 projectsekai.fandom），只能二选一，站上不是缺完整版就是缺游戏版。

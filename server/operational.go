@@ -60,8 +60,11 @@ func registerOperationalRoutes(mux *http.ServeMux, deps operationalDeps) {
 			fmt.Fprint(w, `{"status":"not_ready"}`)
 			return
 		}
+		// Ready once a projection has been published. A pending or failed rebuild
+		// keeps serving the last published files, so it must not take the only
+		// replica out of the gateway: every saved edit queues a rebuild.
 		projectionStatus := deps.projection.Status()
-		if projectionStatus.Generation == 0 || projectionStatus.Pending || projectionStatus.LastError != "" {
+		if projectionStatus.Generation == 0 {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprint(w, `{"status":"not_ready"}`)
 			return
@@ -75,7 +78,6 @@ func registerOperationalRoutes(mux *http.ServeMux, deps operationalDeps) {
 		// Recheck every volatile readiness dependency immediately before 200.
 		projectionStatus = deps.projection.Status()
 		if (deps.draining != nil && deps.draining.IsDraining()) || projectionStatus.Generation == 0 ||
-			projectionStatus.Pending || projectionStatus.LastError != "" ||
 			(deps.search != nil && !deps.search.Status().Ready) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprint(w, `{"status":"not_ready"}`)
