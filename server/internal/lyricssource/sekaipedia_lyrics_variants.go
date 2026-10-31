@@ -71,10 +71,7 @@ func trimSekaipediaLeadingLyricStub(value string) (string, bool, error) {
 		if !fieldsOK || len(fields) == 0 || !strings.EqualFold(strings.TrimSpace(fields[0]), "Lyric stub") {
 			break
 		}
-		if len(fields) != 1 && (len(fields) != 2 ||
-			(!strings.EqualFold(strings.TrimSpace(fields[1]), "full") &&
-				!strings.EqualFold(strings.TrimSpace(fields[1]), "translation") &&
-				!strings.EqualFold(strings.TrimSpace(fields[1]), "lyrics"))) {
+		if !sekaipediaLyricStubMarkersKnown(fields[1:]) {
 			return "", false, ErrUnsupportedTable
 		}
 		matched = true
@@ -337,17 +334,27 @@ func unwrapSekaipediaNestedRendition(body, kind string) (string, error) {
 
 func stripSekaipediaLeadingLyricStubs(templates []sekaipediaTemplate) ([]sekaipediaTemplate, error) {
 	for len(templates) > 0 && strings.EqualFold(strings.TrimSpace(templates[0].name), "lyric stub") {
-		fields := templates[0].fields
-		validStub := len(fields) == 1 || len(fields) == 2 &&
-			(strings.EqualFold(strings.TrimSpace(fields[1]), "full") ||
-				strings.EqualFold(strings.TrimSpace(fields[1]), "translation") ||
-				strings.EqualFold(strings.TrimSpace(fields[1]), "lyrics"))
-		if !validStub {
+		if !sekaipediaLyricStubMarkersKnown(templates[0].fields[1:]) {
 			return nil, ErrUnsupportedTable
 		}
 		templates = templates[1:]
 	}
 	return templates, nil
+}
+
+// sekaipediaLyricStubMarkersKnown reports whether every marker of a {{Lyric stub}} is one the
+// parser knows to be metadata only. Sekaipedia combines them, e.g. {{lyric stub|translation|full}}
+// on Emerald (song 730), so each marker is checked on its own. Any other marker still rejects
+// the page.
+func sekaipediaLyricStubMarkersKnown(markers []string) bool {
+	for _, marker := range markers {
+		switch strings.ToLower(strings.TrimSpace(marker)) {
+		case "full", "translation", "lyrics":
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func parseSekaipediaLyricColumnVariant(

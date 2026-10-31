@@ -635,6 +635,7 @@ func TestSekaipediaLeadingLyricStubAcceptsFullMarker(t *testing.T) {
 	for _, source := range []string{
 		"{{Lyric stub|full}}\n{{Lyrics head|columns=japanese|japanese=Japanese lyrics}}\n{{Lyrics line|japanese=歌う}}\n{{Lyrics tail}}",
 		"{{Lyric stub|translation}}\n{{Lyrics head|columns=japanese|japanese=Japanese lyrics}}\n{{Lyrics line|japanese=歌う}}\n{{Lyrics tail}}",
+		"{{lyric stub|translation|full}}\n{{Lyrics head|columns=japanese|japanese=Japanese lyrics}}\n{{Lyrics line|japanese=歌う}}\n{{Lyrics tail}}",
 	} {
 		templates, err := parseSekaipediaTemplateSequence(source)
 		if err != nil {
@@ -644,6 +645,28 @@ func TestSekaipediaLeadingLyricStubAcceptsFullMarker(t *testing.T) {
 		if err != nil || len(stripped) != 3 || !strings.EqualFold(stripped[0].name, "Lyrics head") {
 			t.Fatalf("source=%q stripped=%+v err=%v", source, stripped, err)
 		}
+	}
+	unknown, err := parseSekaipediaTemplateSequence("{{Lyric stub|translation|unexpected}}\n{{Lyrics head|columns=japanese|japanese=Japanese lyrics}}\n{{Lyrics line|japanese=歌う}}\n{{Lyrics tail}}")
+	if err != nil {
+		t.Fatalf("parse templates: %v", err)
+	}
+	if _, err := stripSekaipediaLeadingLyricStubs(unknown); !errors.Is(err, ErrUnsupportedTable) {
+		t.Fatalf("stub with an unknown marker error=%v", err)
+	}
+}
+
+// Emerald (song 730) opens its tabbed lyrics with {{lyric stub|translation|full}}; the layout
+// parser must skip the combined stub and still reach both tabs.
+func TestSekaipediaTabberLayoutSkipsCombinedLyricStub(t *testing.T) {
+	body := "{{Lyrics head|columns=japanese|japanese=Japanese lyrics}}\n{{Lyrics line|japanese=歌う}}\n{{Lyrics tail}}"
+	section := "{{lyric stub|translation|full}}\n<tabber>\nGame Version =\n" + body + "\n|-|\nFull Version =\n" + body + "\n</tabber>"
+	tabs, _, err := parseSekaipediaLyricsLayout(section)
+	if err != nil || tabs["Game Version"] == "" || tabs["Full Version"] == "" {
+		t.Fatalf("tabs=%v err=%v", tabs, err)
+	}
+	unknown := strings.Replace(section, "translation|full", "translation|unexpected", 1)
+	if _, _, err := parseSekaipediaLyricsLayout(unknown); !errors.Is(err, ErrUnsupportedTable) {
+		t.Fatalf("stub with an unknown marker error=%v", err)
 	}
 }
 

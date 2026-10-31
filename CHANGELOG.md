@@ -1,5 +1,11 @@
 # 更新日志
 
+## Sekaipedia 歌词：认得带多个标记的 `{{lyric stub}}`（2026-10-31）
+
+- Sekaipedia 的 Emerald（730）在歌词开头写的是 `{{lyric stub|translation|full}}`，同时标了「缺译文」和「缺完整版」。解析器以前只接受不带参数或只带一个标记的 stub，于是整页报 `unsupported lyrics table`，Full 和 Game 两个标签一起读不出来。
+- 现在 stub 可以带多个标记，每个都是 `full`、`translation`、`lyrics` 之一就当作说明跳过；只要有一个不认识的标记，仍然整页拒收（`TestSekaipediaLeadingLyricStubAcceptsFullMarker`、`TestSekaipediaTabberLayoutSkipsCombinedLyricStub`）。Emerald 修好后读出 SEKAI 和 VIRTUAL SINGER 两个版本，各有 Full 34 句、Game 21 句。
+- 部署不需要迁移。
+
 ## 新活动剧情默认不再自动 AI 翻译（2026-10-31）
 
 - 以前 CN 同步（包括管理员手动「立即检查」上游）或重抓活动剧情（`POST /api/event-story/retry`）导入新活动的日文剧情后，会立即自动调用 AI 翻译。现在由新设置 `event_story_auto_ai.enabled` 控制，未设置即为关：新剧情保持 `jp_pending` 待翻译，不调用 LLM；CN 同步的结果记一条「自动 AI 翻译已关闭」，重抓的结果不带 `translated` 和 `translateError`（`TestNewEventStoriesAreNotAITranslatedUnlessEnabled`）。设为 true 恢复旧行为（`TestRetryResponseUsesPersistedPendingSourceAfterPartialAI`）。剧情页的手动 AI 翻译不受影响。
