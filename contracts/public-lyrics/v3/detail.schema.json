@@ -46,8 +46,7 @@
       "oneOf": [
         {
           "required": ["reading"],
-          "properties": { "text": { "pattern": "^[\\p{Han}々〻]+$" } },
-          "not": { "properties": { "text": { "pattern": "\\p{N}" } } }
+          "properties": { "text": { "pattern": "\\S" } }
         },
         {
           "not": { "required": ["reading"] },

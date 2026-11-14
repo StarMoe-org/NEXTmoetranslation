@@ -4,17 +4,12 @@ const AVAILABLE_FULL_GAME = Object.freeze(["full", "game"]);
 const LEGACY_RENDITION_KEY = "legacy-v2";
 const STABLE_RENDITION_KEY = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const MAX_RENDITION_CREDIT_BYTES = 2048;
-const RUBY_HAN_RE = /\p{Script=Han}/u;
-const RUBY_NUMBER_RE = /\p{Number}/u;
 const RUBY_KANA_RE = /\p{Script=Hiragana}|\p{Script=Katakana}/u;
 
-function rubyBaseRuneMayReceiveReading(value) {
-  return RUBY_HAN_RE.test(value) && value !== "〇" && !RUBY_NUMBER_RE.test(value);
-}
-
-function rubyReadingBaseIsHan(value) {
-  const runes = Array.from(value);
-  return runes.length > 0 && runes.every(rubyBaseRuneMayReceiveReading);
+// Any visible base may carry a reading: kanji, and the glosses lyrics write
+// over other text such as Voc. read ボク, 0 read はじまり or 心の底 read ハコ.
+function rubyReadingBaseIsVisible(value) {
+  return /\S/u.test(value);
 }
 
 function rubyReadingIsKana(value) {
@@ -259,8 +254,8 @@ function validateRenditionSide(side, path, expectedKind, errors) {
       } else {
         for (let rubyIndex = 0; rubyIndex < segment.ruby.length; rubyIndex++) {
           const span = segment.ruby[rubyIndex];
-          if (span.reading !== undefined && (!rubyReadingBaseIsHan(span.text) || !rubyReadingIsKana(span.reading))) {
-            errors.push(`${segmentPath}.ruby[${rubyIndex}] 仅允许纯非数字 Han 基底使用假名注音`);
+          if (span.reading !== undefined && (!rubyReadingBaseIsVisible(span.text) || !rubyReadingIsKana(span.reading))) {
+            errors.push(`${segmentPath}.ruby[${rubyIndex}] 仅允许在含可见字符的基底上使用假名注音`);
           }
         }
         if (segment.ruby.map((span) => span.text).join("") !== segment.text) {

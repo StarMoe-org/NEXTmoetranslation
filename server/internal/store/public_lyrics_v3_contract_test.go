@@ -79,9 +79,10 @@ func TestPublicLyricsV3ContractRejectsUnknownAndLossyShapes(t *testing.T) {
 	delete(firstRuby(missingHanReading)[0].(map[string]any), "reading")
 	validateRejected(detailSchema, missingHanReading, "detail schema accepted a Han span without a reading")
 
-	nonHanReading := readDetail("detail-legacy-one-rendition.fixture.json")
-	firstRuby(nonHanReading)[1].(map[string]any)["reading"] = "う"
-	validateRejected(detailSchema, nonHanReading, "detail schema accepted a reading on kana text")
+	blankBase := readDetail("detail-legacy-one-rendition.fixture.json")
+	firstRuby(blankBase)[1].(map[string]any)["text"] = " "
+	firstRuby(blankBase)[1].(map[string]any)["reading"] = "う"
+	validateRejected(detailSchema, blankBase, "detail schema accepted a reading over a blank base")
 
 	readingWithoutKana := readDetail("detail-legacy-one-rendition.fixture.json")
 	firstRuby(readingWithoutKana)[0].(map[string]any)["reading"] = "ー"
@@ -135,14 +136,13 @@ func TestPublicLyricsV3ContractTreatsIdeographicZeroAsNumericPlainText(t *testin
 	}
 	validatePublicLyricsV3JSON(t, detailSchema, plain)
 
+	// It needs no reading, but may carry a gloss like any other text.
 	segment["ruby"].([]any)[0].(map[string]any)["reading"] = "れい"
 	annotated, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := detailSchema.Validate(decodePublicLyricsV3JSONForSchema(t, annotated)); err == nil {
-		t.Fatal("detail schema accepted a ruby reading on numeric ideographic zero")
-	}
+	validatePublicLyricsV3JSON(t, detailSchema, annotated)
 }
 
 func compilePublicLyricsV3Schema(t *testing.T, name, root string) *jsonschema.Schema {

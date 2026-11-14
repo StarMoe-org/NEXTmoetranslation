@@ -162,3 +162,33 @@ func TestLyricsDocumentChangeSummariesShowTheStructureOfAddedAndRemovedLines(t *
 		t.Fatalf("removed=%+v\nadded=%+v", full.Removed, full.Added)
 	}
 }
+
+// Wikis gloss non-kanji text and whole phrases ({Voc.|ボク}, {0|はじまり},
+// {心の底|ハコ}); those rubies publish, serve as one span each, and export back
+// to the same markup with no warning and no change.
+func TestPublishLyricsDocumentGlossRubyOverNonKanjiRoundTrips(t *testing.T) {
+	s := setupLyricsDocumentStore(t)
+	request := lyricsDocumentTestRequest()
+	sekai := &request.Renditions[0]
+	sekai.Lines = append([]LyricsDocumentLine(nil), sekai.Lines...)
+	sekai.Lines[0].Japanese = "{Voc.|ボク}たちは{0|はじまり}に{還|かえ}る"
+	sekai.Lines[1].Japanese = "『{心の底|ハコ}』まだ{知り|し}たい"
+	result, detail := publishLyricsDocumentForTest(t, s, request, 0)
+	lines := detail.Renditions[0].Full.Lines
+	if want := []PublicLyricsV3RubySpan{{Text: "Voc.", Reading: "ボク"}, {Text: "たちは"}, {Text: "0", Reading: "はじまり"}, {Text: "に"}, {Text: "還", Reading: "かえ"}, {Text: "る"}}; lines[0].Japanese != "Voc.たちは0に還る" || !reflect.DeepEqual(lines[0].Segments[0].Ruby, want) {
+		t.Fatalf("line 0=%+v", lines[0])
+	}
+	if want := []PublicLyricsV3RubySpan{{Text: "『"}, {Text: "心の底", Reading: "ハコ"}, {Text: "』まだ"}, {Text: "知り", Reading: "し"}, {Text: "たい"}}; !reflect.DeepEqual(lines[1].Segments[0].Ruby, want) {
+		t.Fatalf("line 1=%+v", lines[1])
+	}
+	export, err := s.ExportLyricsDocument(context.Background(), lyricsDocumentTestMusicID, result.Document, 0)
+	if err != nil || len(export.Warnings) != 0 {
+		t.Fatalf("export warnings=%+v err=%v", export.Warnings, err)
+	}
+	if got := export.Document.Renditions[0].Lines; got[0].Japanese != sekai.Lines[0].Japanese || got[1].Japanese != sekai.Lines[1].Japanese {
+		t.Fatalf("exported ja=%q %q", got[0].Japanese, got[1].Japanese)
+	}
+	if changes := lyricsDocumentDryRunChanges(t, s, export.Document, result.Document); !reflect.DeepEqual(changes, LyricsDocumentChanges{Against: LyricsDocumentChangesAgainstServed}) {
+		t.Fatalf("unchanged export changes=%+v", changes)
+	}
+}

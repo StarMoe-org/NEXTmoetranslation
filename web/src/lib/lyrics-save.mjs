@@ -204,17 +204,12 @@ function optionalPositiveInteger(value, key, errors) {
   }
 }
 
-const RUBY_HAN_RE = /\p{Script=Han}/u;
-const RUBY_NUMBER_RE = /\p{Number}/u;
 const RUBY_KANA_RE = /\p{Script=Hiragana}|\p{Script=Katakana}/u;
 
-function rubyBaseRuneMayReceiveReading(value) {
-  return RUBY_HAN_RE.test(value) && value !== "〇" && !RUBY_NUMBER_RE.test(value);
-}
-
-function rubyReadingBaseIsHan(value) {
-  const runes = Array.from(value);
-  return runes.length > 0 && runes.every(rubyBaseRuneMayReceiveReading);
+// Any visible base may carry a reading: kanji, and the glosses lyrics write
+// over other text such as Voc. read ボク, 0 read はじまり or 心の底 read ハコ.
+function rubyReadingBaseIsVisible(value) {
+  return /\S/u.test(value);
 }
 
 function rubyReadingIsKana(value) {
@@ -250,8 +245,8 @@ function validateRuby(ruby, segmentText, path, errors, maximumSpans) {
     if (span.reading !== undefined && typeof span.reading !== "string") {
       errors.push(`${path}.ruby[${index}].reading must be a string when present`);
     } else if (typeof span.reading === "string" && span.reading !== "") {
-      if (!rubyReadingBaseIsHan(span.text)) {
-        errors.push(`${path}.ruby[${index}].reading base must contain only non-numeric Han text`);
+      if (!rubyReadingBaseIsVisible(span.text)) {
+        errors.push(`${path}.ruby[${index}].reading base must contain a visible character`);
       }
       if (!rubyReadingIsKana(span.reading)) {
         errors.push(`${path}.ruby[${index}].reading must contain kana only`);

@@ -841,8 +841,8 @@ func validatePublicV3Side(side *PublicLyricsV3Side, kind model.LyricsSourceRendi
 				if publicV3TextContainsHan(span.Text) && span.Reading == "" {
 					return fmt.Errorf("public v3 side line %d segment %d ruby %d is missing a Han reading", index+1, segmentIndex+1, rubyIndex+1)
 				}
-				if span.Reading != "" && !publicV3ReadingBaseSpan(span.Text) {
-					return fmt.Errorf("public v3 side line %d segment %d ruby %d reading base contains a non-Han character", index+1, segmentIndex+1, rubyIndex+1)
+				if span.Reading != "" && !publicV3RubyBaseText(span.Text) {
+					return fmt.Errorf("public v3 side line %d segment %d ruby %d reading base has no visible character", index+1, segmentIndex+1, rubyIndex+1)
 				}
 				if span.Reading != "" && !publicV3KanaReading(span.Reading) {
 					return fmt.Errorf("public v3 side line %d segment %d ruby %d reading is not kana", index+1, segmentIndex+1, rubyIndex+1)
@@ -893,6 +893,15 @@ func publicV3TextContainsHan(text string) bool {
 	return false
 }
 
+// publicV3RubyBaseText reports whether text may carry a reading. Besides kanji
+// ({合成|ごうせい}), lyrics gloss other text as a whole: {Voc.|ボク},
+// {0|はじまり}, {心の底|ハコ}; the main site draws any base as <ruby>.
+func publicV3RubyBaseText(text string) bool {
+	return strings.TrimSpace(text) != ""
+}
+
+// publicV3ReadingBaseSpan reports whether text is all kanji, the bases the
+// dictionary suggests readings for.
 func publicV3ReadingBaseSpan(text string) bool {
 	for _, current := range text {
 		if model.LyricsSourceRubyBaseRune(current) {

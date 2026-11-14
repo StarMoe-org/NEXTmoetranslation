@@ -319,26 +319,18 @@ test("strict legacy response validation keeps the 256-span ruby boundary", () =>
   assert.ok(result.details.includes("lines[0].segments[0].ruby must contain 1-256 spans"));
 });
 
-test("strict REM ruby validation enforces Han/kana rules and keeps U+3007 plain", () => {
-  const cases = [
-    (response) => {
-      const line = response.renditions[0].full.lines[0];
-      line.japanese = "〇";
-      line.segments = [{ text: "〇", performerIds: ["sekai-full"], ruby: [{ text: "〇", reading: "れい" }] }];
-    },
-    (response) => {
-      const line = response.renditions[0].full.lines[0];
-      line.japanese = "〇";
-      line.segments = [{ text: "〇", performerIds: ["sekai-full"], ruby: [{ text: "〇", reading: "zero" }] }];
-    },
-  ];
-  for (const mutate of cases) {
+test("strict REM ruby validation takes a kana gloss on U+3007, rejects other readings and keeps it plain", () => {
+  // A gloss may sit on any visible base (0 read はじまり); the reading must be kana.
+  for (const [reading, rubyProblems] of [["れい", 0], ["zero", 2]]) {
     const response = validRenditionDocument(2);
-    mutate(response);
+    const line = response.renditions[0].full.lines[0];
+    line.japanese = "〇";
+    line.segments = [{ text: "〇", performerIds: ["sekai-full"], ruby: [{ text: "〇", reading }] }];
     const result = validateSongLyricsMutationResponse(response, {
       operation: "save", musicId: 765, revision: 1, document: validRenditionDocument(1),
     });
     assert.equal(result.ok, false);
+    assert.equal(result.details.filter((detail) => detail.includes("ruby[0]")).length, rubyProblems, reading);
   }
 
   const plain = { ...validRenditionDocument(2, "published"), publishedRevision: 2 };

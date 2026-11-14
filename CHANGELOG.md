@@ -1,5 +1,12 @@
 # 更新日志
 
+## 歌词注音：非汉字和整个短语也能标读音（2026-11-14）
+
+- 歌词常在非汉字或整个短语上标唱法：初音ミクの激唱（388）在 Sekaipedia 上写 `{{ruby|Voc.|ボク}}`、`{{ruby|0|はじまり}}`、`{{ruby|心の底|ハコ}}`、`{{ruby|語り継がれる創造神|カミサマ}}`。以前注音标记、公开详情 v3/v4 的校验和 schema、控制台都只许汉字作基字，这些读音提交不上去，只能按字面逐字注（心→こころ、底→そこ），站上显示的不是实际唱法。
+- 现在任何含可见字符的文字都可以带假名读音：文档接口的 `{基字|读音}` 接受 `{Voc.|ボク}`、`{0|はじまり}`、`{心の底|ハコ}`、`{知り|し}たい`，发布后每个读音是一个注音段，导出原样写回，不报警告、不产生改动（`TestParseLyricsDocumentRuby`、`TestPublishLyricsDocumentGlossRubyOverNonKanjiRoundTrips`）。公开详情的解码器和 `contracts/public-lyrics/v3`、`v4` 的 schema 同样放宽（`TestPublicLyricsV3TreatsIdeographicZeroAsPlainNumericText`、`TestPublicLyricsV3ContractTreatsIdeographicZeroAsNumericPlainText`），控制台保存与版本校验也一样（web 测试「strict REM ruby validation takes a kana gloss on U+3007, rejects other readings and keeps it plain」）。
+- 仍然拒收：读音不是假名；基字是空白；基字和读音开头或结尾是同一个假名，即送假名写进了花括号，例如 `{短い|みじかい}` 要写成 `{短|みじか}い`。汉字照旧每个都要有注音，数字照旧不需要注音。词典补注音（`POST /api/editor/v1/lyrics/document/ruby`）照旧只给汉字补。
+- 主站（Moesekai）的歌词解析也按汉字检查基字，要先放宽并上线，再发布带这类读音的歌，否则主站会把整首歌词判为无效。部署不需要迁移。
+
 ## Sekaipedia 歌词：认得带多个标记的 `{{lyric stub}}`（2026-10-31）
 
 - Sekaipedia 的 Emerald（730）在歌词开头写的是 `{{lyric stub|translation|full}}`，同时标了「缺译文」和「缺完整版」。解析器以前只接受不带参数或只带一个标记的 stub，于是整页报 `unsupported lyrics table`，Full 和 Game 两个标签一起读不出来。

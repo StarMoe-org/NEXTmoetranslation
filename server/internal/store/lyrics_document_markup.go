@@ -163,8 +163,12 @@ func parseLyricsDocumentRubyAt(markup string, offset int) (string, []model.Lyric
 			case strings.Contains(reading, "|"):
 				problems = append(problems, fmt.Sprintf("ruby %s at character %d has more than one '|'", written, at))
 				continue
-			case !publicV3ReadingBaseSpan(base):
-				problems = append(problems, fmt.Sprintf("ruby base %q in %s at character %d must contain only kanji", base, written, at))
+			case !publicV3RubyBaseText(base):
+				problems = append(problems, fmt.Sprintf("ruby base %q in %s at character %d must have a visible character", base, written, at))
+				continue
+			case lyricsDocumentRubyOkurigana(base, reading) != "":
+				problems = append(problems, fmt.Sprintf("ruby %s at character %d repeats the kana 「%s」 of its base in the reading; write okurigana outside the braces, as in {短|みじか}い",
+					written, at, lyricsDocumentRubyOkurigana(base, reading)))
 				continue
 			case !lyricsDocumentKanaReading(reading):
 				problems = append(problems, fmt.Sprintf("ruby reading %q in %s at character %d must be kana matching ^[ぁ-ゖァ-ヺー・゙゚]+$ and start with kana", reading, written, at))
@@ -265,4 +269,29 @@ func lyricsDocumentKanaReading(value string) bool {
 		}
 	}
 	return value != "" && publicV3KanaReading(value)
+}
+
+// lyricsDocumentRubyOkurigana returns the kana a ruby repeats at the start or
+// end of both its base and its reading ({短い|みじかい} repeats い), or "".
+// Such kana are okurigana and belong outside the braces. A base may be any
+// text the source glosses as a whole ({心の底|ハコ}, {Voc.|ボク}, {知り|し}),
+// so this is the one shape the markup refuses beyond a blank base.
+func lyricsDocumentRubyOkurigana(base, reading string) string {
+	baseRunes, readingRunes := []rune(base), []rune(reading)
+	hiragana := func(current rune) rune {
+		if current >= 'ァ' && current <= 'ヶ' {
+			return current - 0x60
+		}
+		return current
+	}
+	kana := func(current rune) bool {
+		return current >= 'ぁ' && current <= 'ゖ' || current >= 'ァ' && current <= 'ヶ'
+	}
+	if last, readingLast := baseRunes[len(baseRunes)-1], readingRunes[len(readingRunes)-1]; kana(last) && hiragana(last) == hiragana(readingLast) {
+		return string(last)
+	}
+	if first := baseRunes[0]; kana(first) && hiragana(first) == hiragana(readingRunes[0]) {
+		return string(first)
+	}
+	return ""
 }

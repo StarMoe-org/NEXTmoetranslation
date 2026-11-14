@@ -121,7 +121,7 @@ curl -sS "$BASE/api/editor/v1/lyrics/document?musicId=<id>" -H "Authorization: B
 | `trailing_performers_dropped` | 这一行的尾随演唱者无法携带 | 提交后公开详情里这一行没有尾随演唱者 |
 | `unknown_performer` | 演唱者既不是游戏角色也不是已审计外部歌手，已从导出中去掉 | 提交后公开详情里这一行（或这一段）没有这个演唱者 |
 | `ruby_not_served` | v1 详情没有注音，含汉字的行 `PUT` 会报 `field: "ja"` 的 issue | 为每个汉字补上注音（4.5 配方 2）；可以先用 4.5.2 取词典读音，再逐个核对 |
-| `ruby_not_expressible` | 注音不是“汉字基字 + 假名读音”，注音标记表达不了，`PUT` 会拒收该行 | 修正该行注音 |
+| `ruby_not_expressible` | 注音写不成 `{基字|读音}`：读音不是假名，基字含 `{`、`}`、`|`，或者送假名写进了花括号（见 4.5 配方 2），`PUT` 会拒收该行 | 修正该行注音 |
 | `english_dropped` | `PUT` 不存英文行 | 提交后公开详情里这一行没有英文 |
 
 `PUT` 一定会拒收的导出：`warnings` 含 `source_missing`、`source_unsupported`、`ruby_not_served`、`ruby_not_expressible` 或 `credit_missing`，或 `document` 里没有任何一行 `zh`（issue `at least one line needs a zh translation to publish`）。这些问题要先在 `document` 里修好。
@@ -364,13 +364,14 @@ GET 返回 `404` 的歌，按下一节的基准文档从头写请求，`expected
 
   `…{"before":0,"after":0,"fields":["ruby"],"ja":{"before":"{試験|しけん}の{歌|うた}","after":"{試|し}{験|けん}の{歌|うた}"}}…`
 - 熟字训和当て字整词标注：`{今日|きょう}` 是一个注音盖住两个汉字，读音不能拆到单字上。`{今|いま}{日|ひ}` 是两个独立注音，读作「いま」+「ひ」，意思不同。两种写法都合法，可见文本都是「今日」，所以两者互换时 `changes` 只报 `ruby`（`…"fields":["ruby"],"ja":{"before":"{今日|きょう}も{合成|ごうせい}","after":"{今|いま}{日|ひ}も{合成|ごうせい}"}…`）。每个字各有读音时才逐字拆开，如 `{試|し}{験|けん}`。
-- 送假名写在花括号外：`{短|みじか}い`（`TestPublishLyricsDocumentGameModes` 用的就是 `{短|みじか}い{試験|しけん}`）。基字只能是汉字，`々` 也算汉字：`{時々|ときどき}` 合法。读音只能是假名，且以假名开头。
+- 送假名写在花括号外：`{短|みじか}い`（`TestPublishLyricsDocumentGameModes` 用的就是 `{短|みじか}い{試験|しけん}`）。基字通常是汉字，`々` 也算汉字：`{時々|ときどき}` 合法。来源给非汉字或整个短语标了读音时，基字照写：`{Voc.|ボク}`、`{0|はじまり}`、`{心の底|ハコ}`、`{知り|し}たい`（`TestParseLyricsDocumentRuby`、`TestPublishLyricsDocumentGlossRubyOverNonKanjiRoundTrips`）。基字和读音开头或结尾是同一个假名时，说明送假名写进了花括号，会被拒收。读音只能是假名，且以假名开头。
 - 每个汉字都必须在某个 `{…|…}` 里。整行都没有注音时（例如 `ruby_not_served` 的行），可以先用 4.5.2 取词典读音，核对后再写进去。
 
 下列写法会被拒收（箭头左边是 `ja`，右边是 `message`；示例都写在 `sekai` 的某一行），issue 形如 `{"rendition":"sekai","side":"full","line":0,"field":"ja","message":"…"}`：
 
-- `{短い|みじかい}{合成|ごうせい}` → `ruby base "短い" in {短い|みじかい} at character 0 must contain only kanji`
-- `{試験の|しけんの}{歌|うた}` → `ruby base "試験の" in {試験の|しけんの} at character 0 must contain only kanji`
+- `{短い|みじかい}{合成|ごうせい}` → `ruby {短い|みじかい} at character 0 repeats the kana 「い」 of its base in the reading; write okurigana outside the braces, as in {短|みじか}い`
+- `{試験の|しけんの}{歌|うた}` → `ruby {試験の|しけんの} at character 0 repeats the kana 「の」 of its base in the reading; write okurigana outside the braces, as in {短|みじか}い`
+- `ら{　|あ}` → `ruby base "\u3000" in {　|あ} at character 1 must have a visible character`
 - `{試|し}験の歌` → `kanji without a {kanji|reading}: 「験」 at character 5, 「歌」 at character 7`（`TestParseLyricsDocumentRuby`）
 - `{時|とき}々なぞる` → `kanji without a {kanji|reading}: 「々」 at character 6`
 - `{試験|shiken}の{歌|うた}` → `ruby reading "shiken" in {試験|shiken} at character 0 must be kana matching ^[ぁ-ゖァ-ヺー・゙゚]+$ and start with kana`

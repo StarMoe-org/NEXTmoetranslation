@@ -919,9 +919,10 @@ func (e *lyricsDocumentExporter) lines(key, side string, lines []PublicLyricsV3L
 					markup.WriteString(escapeLyricsDocumentMarkup(span.Text))
 					continue
 				}
-				if !publicV3ReadingBaseSpan(span.Text) || !lyricsDocumentKanaReading(span.Reading) {
+				if !publicV3RubyBaseText(span.Text) || strings.ContainsAny(span.Text, "{}|") || !lyricsDocumentKanaReading(span.Reading) ||
+					lyricsDocumentRubyOkurigana(span.Text, span.Reading) != "" {
 					e.warn(LyricsDocumentExportWarningRubyUnsupported, key, side, index, fmt.Sprintf(
-						"ruby %q over %q is not a kanji base with a kana reading, which the {kanji|reading} markup requires", span.Reading, span.Text))
+						"ruby %q over %q cannot be written as {base|reading} markup (a base without braces or '|', a kana reading, okurigana outside the braces)", span.Reading, span.Text))
 				}
 				markup.WriteString("{" + span.Text + "|" + span.Reading + "}")
 			}

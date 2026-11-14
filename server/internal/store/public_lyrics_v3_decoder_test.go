@@ -52,19 +52,9 @@ func TestPublicLyricsV3StrictDecodersRejectNestedTampering(t *testing.T) {
 			ruby := firstSegment(document)["ruby"].([]any)
 			delete(ruby[0].(map[string]any), "reading")
 		}),
-		"reading on kana": mutateDetail(func(document map[string]any) {
-			ruby := firstSegment(document)["ruby"].([]any)
-			ruby[1].(map[string]any)["reading"] = "う"
-		}),
 		"reading without kana": mutateDetail(func(document map[string]any) {
 			ruby := firstSegment(document)["ruby"].([]any)
 			ruby[0].(map[string]any)["reading"] = "ー"
-		}),
-		"mixed Han and kana base": mutateDetail(func(document map[string]any) {
-			segment := firstSegment(document)
-			ruby := segment["ruby"].([]any)
-			ruby[0].(map[string]any)["text"] = "歌う"
-			segment["ruby"] = ruby[:1]
 		}),
 		"wrong revision host": mutateDetail(func(document map[string]any) {
 			provenance := firstRendition(document)["provenance"].([]any)
@@ -195,13 +185,32 @@ func TestPublicLyricsV3TreatsIdeographicZeroAsPlainNumericText(t *testing.T) {
 		t.Fatalf("plain ideographic zero was rejected: %v", err)
 	}
 
-	segment["ruby"].([]any)[0].(map[string]any)["reading"] = "れい"
-	annotated, err := json.Marshal(document)
+	// Numeric text needs no reading but may carry a gloss, as 0 read
+	// はじまり does; so may kana, Latin text and whole phrases.
+	detailSchema := compilePublicLyricsV3Schema(t, "detail.schema.json", root)
+	for _, gloss := range []struct{ text, reading string }{
+		{"〇", "れい"}, {"0", "はじまり"}, {"Voc.", "ボク"}, {"キミ", "あなた"}, {"心の底", "ハコ"},
+	} {
+		line["japanese"] = gloss.text
+		segment["text"] = gloss.text
+		segment["ruby"] = []any{map[string]any{"text": gloss.text, "reading": gloss.reading}}
+		annotated, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := DecodePublicLyricsV3Detail(annotated); err != nil {
+			t.Fatalf("gloss %q over %q was rejected: %v", gloss.reading, gloss.text, err)
+		}
+		validatePublicLyricsV3JSON(t, detailSchema, annotated)
+	}
+	line["japanese"], segment["text"] = "　", "　"
+	segment["ruby"] = []any{map[string]any{"text": "　", "reading": "あ"}}
+	blank, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := DecodePublicLyricsV3Detail(annotated); err == nil {
-		t.Fatal("numeric ideographic zero received a ruby reading")
+	if _, err := DecodePublicLyricsV3Detail(blank); err == nil {
+		t.Fatal("a reading over a blank base was accepted")
 	}
 }
 

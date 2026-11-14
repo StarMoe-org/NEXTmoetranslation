@@ -113,14 +113,7 @@
           ],
           "properties": {
             "text": {
-              "pattern": "^[\\p{Han}々〻]+$"
-            }
-          },
-          "not": {
-            "properties": {
-              "text": {
-                "pattern": "\\p{N}"
-              }
+              "pattern": "\\S"
             }
           }
         },

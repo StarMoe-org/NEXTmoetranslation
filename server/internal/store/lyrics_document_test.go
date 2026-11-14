@@ -273,6 +273,12 @@ func TestParseLyricsDocumentRuby(t *testing.T) {
 			{Text: "ねえ"}, {Text: "試験", Reading: "しけん"}, {Text: "の"}, {Text: "歌", Reading: "ウタ"}, {Text: "ー"},
 		}},
 		{"{言|い}・{葉|は}", "言・葉", []model.LyricsSourceRubySpan{{Text: "言", Reading: "い"}, {Text: "・"}, {Text: "葉", Reading: "は"}}},
+		// Glosses over non-kanji or whole phrases, as the wikis write them.
+		{"{Voc.|ボク}たち", "Voc.たち", []model.LyricsSourceRubySpan{{Text: "Voc.", Reading: "ボク"}, {Text: "たち"}}},
+		{"ボクは{0|はじまり}に", "ボクは0に", []model.LyricsSourceRubySpan{{Text: "ボクは"}, {Text: "0", Reading: "はじまり"}, {Text: "に"}}},
+		{"『{心の底|ハコ}』", "『心の底』", []model.LyricsSourceRubySpan{{Text: "『"}, {Text: "心の底", Reading: "ハコ"}, {Text: "』"}}},
+		{"まだ{知り|し}たい", "まだ知りたい", []model.LyricsSourceRubySpan{{Text: "まだ"}, {Text: "知り", Reading: "し"}, {Text: "たい"}}},
+		{"{キミ|あなた}", "キミ", []model.LyricsSourceRubySpan{{Text: "キミ", Reading: "あなた"}}},
 	} {
 		text, spans, problems := parseLyricsDocumentRuby(test.markup)
 		if text != test.text || !reflect.DeepEqual(spans, test.spans) || len(problems) != 0 {
@@ -289,7 +295,12 @@ func TestParseLyricsDocumentRuby(t *testing.T) {
 		{"{合成|}", "ruby {合成|} at character 0 has an empty base or reading"},
 		{"ら{|ごうせい}", "ruby {|ごうせい} at character 1 has an empty base or reading"},
 		{"{合成|ごう|せい}", "ruby {合成|ごう|せい} at character 0 has more than one '|'"},
-		{"{あい|あい}", `ruby base "あい" in {あい|あい} at character 0 must contain only kanji`},
+		{"{あい|あい}", "ruby {あい|あい} at character 0 repeats the kana 「い」 of its base in the reading"},
+		{"{短い|みじかい}", "ruby {短い|みじかい} at character 0 repeats the kana 「い」 of its base in the reading; write okurigana outside the braces"},
+		{"{試験の|しけんの}", "repeats the kana 「の」"},
+		{"{お茶|おちゃ}", "repeats the kana 「お」"},
+		{"{私たち|ボクタチ}", "repeats the kana 「ち」"},
+		{"ら{　|あ}", `ruby base "\u3000" in {　|あ} at character 1 must have a visible character`},
 		{"らら{合成|gousei}", `ruby reading "gousei" in {合成|gousei} at character 2 must be kana`},
 		{"{合成|ーごう}", `ruby reading "ーごう" in {合成|ーごう} at character 0 must be kana`},
 		// Indices count characters of the ja markup the agent edits.
