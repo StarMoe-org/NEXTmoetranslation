@@ -48,10 +48,11 @@ const (
 	defaultCNScriptsURL         = "https://sekai-assets-bdf29c81.seiunx.net/cn-assets/startapp"
 	defaultENScriptsURL         = "https://storage.exmeaning.com/sekai-en-assets"
 
-	// The story library holds the JP scripts the ripper unpacked from the game,
-	// under the same paths. It is tried last for card and area scripts, when the
-	// mirrors miss a script or serve another server's text under its name.
-	defaultJPScriptsLibraryURL = "https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/library"
+	// The story library is StarMoe's JP publication of the game files: every card
+	// and area script, under the same paths. It is tried last for card and area
+	// scripts, when the mirrors miss a script or serve another server's text under
+	// its name.
+	defaultJPScriptsLibraryURL = "https://storage.pjsk.moe/jp"
 )
 
 type sourceFailure struct {

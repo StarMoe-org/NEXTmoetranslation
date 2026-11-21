@@ -134,7 +134,7 @@ mysekai 的 `tag` → `flavorText` 镜像是另一条独立规则：同名 jp ke
 | `upstream.en_masterdata_fallback_url` | `UPSTREAM_EN_MASTERDATA_FALLBACK_URL` | `https://raw.githubusercontent.com/Team-Haruki/haruki-sekai-en-master/main/master` |
 | `upstream.jp_scripts_url` | `UPSTREAM_JP_SCRIPTS_URL` | `https://storage.exmeaning.com/sekai-jp-assets` |
 | `upstream.jp_scripts_fallback_url` | `UPSTREAM_JP_SCRIPTS_FALLBACK_URL` | `https://assets.unipjsk.com/startapp`（只用于卡牌剧情） |
-| `upstream.jp_scripts_library_url` | `UPSTREAM_JP_SCRIPTS_LIBRARY_URL` | `https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/library`（剧情库，卡牌剧情和区域对话最后一个 JP 源） |
+| `upstream.jp_scripts_library_url` | `UPSTREAM_JP_SCRIPTS_LIBRARY_URL` | `https://storage.pjsk.moe/jp`（剧情库，即 StarMoe 发布的日服游戏文件，卡牌剧情和区域对话最后一个 JP 源） |
 | `upstream.cn_scripts_url` | `UPSTREAM_CN_SCRIPTS_URL` | `https://sekai-assets-bdf29c81.seiunx.net/cn-assets/startapp` |
 | `upstream.en_scripts_url` | `UPSTREAM_EN_SCRIPTS_URL` | `https://storage.exmeaning.com/sekai-en-assets` |
 

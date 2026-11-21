@@ -74,7 +74,7 @@ const SETTING_HINTS: Record<string, React.ReactNode> = {
   "upstream.version_fallback_url": <>可填写多个 URL，用逗号分隔；系统还会自动追加 GitHub Raw、Fastly、Gcore 和 jsDelivr 救援源。</>,
   "upstream.jp_assets_url": <>留空使用 <code>https://assets.unipjsk.com/ondemand</code>。旧 snowyassets 源持续返回 HTTP 525，不再作为默认源。</>,
   "upstream.jp_scripts_fallback_url": <>只用于卡牌剧情；区域对话剧本不在该源上。</>,
-  "upstream.jp_scripts_library_url": <>留空使用 <code>https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/library</code>。卡牌剧情和区域对话的最后一个 JP 源：前面的源 404 或返回的不是日文时读取，同样要通过日文判据。</>,
+  "upstream.jp_scripts_library_url": <>留空使用 <code>https://storage.pjsk.moe/jp</code>。卡牌剧情和区域对话的最后一个 JP 源：前面的源 404 或返回的不是日文时读取，同样要通过日文判据。</>,
   "upstream.fetch_concurrency": <>留空默认 4；低内存实例建议 2-4。</>,
   "scheduler.enabled": <>旧版 CN 自动同步：检测到上游版本变化后同步 CN 内容；新活动剧情只在“新活动剧情自动 AI 翻译”为 true 时自动调用 AI。修改后重启服务生效。</>,
   "event_story_auto_ai.enabled": <>未设置时为 false。为 true 时，CN 同步或重抓导入新活动剧情后立即自动调用 AI 翻译；为 false 时新剧情保持待翻译，剧情页的手动 AI 翻译不受影响。</>,
