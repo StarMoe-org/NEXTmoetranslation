@@ -1,5 +1,11 @@
 # 更新日志
 
+## JP 剧情库默认改为 StarMoe 发布的日服文件（2026-11-22）
+
+- `upstream.jp_scripts_library_url`（env `UPSTREAM_JP_SCRIPTS_LIBRARY_URL`）的默认值改为 `https://storage.pjsk.moe/jp`，即 StarMoe 发布的日服游戏文件，路径与资源站相同，包含全部卡牌剧情和区域对话脚本。读取顺序和日文判据不变（`TestSideStorySourcesDefaultToTheStartappMirrorsAndFollowOverrides`）。
+- 2026-11-22 核对过：区域对话 934、2716、2718、2722 在这个地址下都是日文，TalkData 分别为 13、12、8、9 行。
+- 这个设置只在首次启动时由 env 写入。已部署的实例要在管理设置的上游一栏把「JP 剧情库 URL」改为 `https://storage.pjsk.moe/jp`（或清空，使用默认值）。部署不需要迁移。
+
 ## 歌词注音：非汉字和整个短语也能标读音（2026-11-14）
 
 - 歌词常在非汉字或整个短语上标唱法：初音ミクの激唱（388）在 Sekaipedia 上写 `{{ruby|Voc.|ボク}}`、`{{ruby|0|はじまり}}`、`{{ruby|心の底|ハコ}}`、`{{ruby|語り継がれる創造神|カミサマ}}`。以前注音标记、公开详情 v3/v4 的校验和 schema、控制台都只许汉字作基字，这些读音提交不上去，只能按字面逐字注（心→こころ、底→そこ），站上显示的不是实际唱法。

@@ -32,7 +32,7 @@ func TestSideStorySourcesDefaultToTheStartappMirrorsAndFollowOverrides(t *testin
 	}
 	if defaultJPScriptsURL != "https://storage.exmeaning.com/sekai-jp-assets" ||
 		defaultJPScriptsFallbackURL != "https://assets.unipjsk.com/startapp" ||
-		defaultJPScriptsLibraryURL != "https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/library" ||
+		defaultJPScriptsLibraryURL != "https://storage.pjsk.moe/jp" ||
 		defaultCNScriptsURL != "https://sekai-assets-bdf29c81.seiunx.net/cn-assets/startapp" ||
 		defaultENScriptsURL != "https://storage.exmeaning.com/sekai-en-assets" ||
 		defaultENMasterdataURL != "https://metadata.pjsk.moe/en/master" ||

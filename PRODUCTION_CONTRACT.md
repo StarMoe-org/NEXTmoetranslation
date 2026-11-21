@@ -93,7 +93,7 @@ Seven upstream settings are seeded once from their environment variables like th
 | `upstream.en_masterdata_fallback_url` | `UPSTREAM_EN_MASTERDATA_FALLBACK_URL` | `https://raw.githubusercontent.com/Team-Haruki/haruki-sekai-en-master/main/master` |
 | `upstream.jp_scripts_url` | `UPSTREAM_JP_SCRIPTS_URL` | `https://storage.exmeaning.com/sekai-jp-assets` |
 | `upstream.jp_scripts_fallback_url` | `UPSTREAM_JP_SCRIPTS_FALLBACK_URL` | `https://assets.unipjsk.com/startapp`, used for card scripts only |
-| `upstream.jp_scripts_library_url` | `UPSTREAM_JP_SCRIPTS_LIBRARY_URL` | `https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/library`, the story library, the last JP base for card and area scripts |
+| `upstream.jp_scripts_library_url` | `UPSTREAM_JP_SCRIPTS_LIBRARY_URL` | `https://storage.pjsk.moe/jp`, the story library (StarMoe's JP publication of the game files), the last JP base for card and area scripts |
 | `upstream.cn_scripts_url` | `UPSTREAM_CN_SCRIPTS_URL` | `https://sekai-assets-bdf29c81.seiunx.net/cn-assets/startapp` |
 | `upstream.en_scripts_url` | `UPSTREAM_EN_SCRIPTS_URL` | `https://storage.exmeaning.com/sekai-en-assets` |
 

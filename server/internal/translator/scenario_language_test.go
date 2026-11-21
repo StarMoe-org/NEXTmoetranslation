@@ -217,7 +217,7 @@ func TestOfficialCNImportIgnoresACNScenarioInJapanese(t *testing.T) {
 
 // The mirrors served area talks 934 (Korean) and 2716/2718/2722 (Traditional
 // Chinese) under their JP names, and the JP fallback has no area talks; the
-// ripper's story library holds the game's JP files under the same paths.
+// story library holds the game's JP files under the same paths.
 func TestSideStoryJPScriptFallsBackToTheStoryLibrary(t *testing.T) {
 	upstream := newSideStoryUpstream(t)
 	tr, _, cfg := openTestTranslator(t)
